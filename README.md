@@ -111,39 +111,133 @@ flowchart LR
 
 ---
 
-## Архитектура (черновик)
+## Текущая архитектура
+
+Сейчас работают **два слоя**: (1) проверенный локальный пайплайн оцифровки и (2) каркас веб-сервиса `sanskrit_srv`, который ещё не оркестрирует пайплайн в проде.
+
+### 1. Локальный пайплайн (источник истины по обработке)
+
+Реализован в соседних каталогах (`infant_reader_ocr/`, аналогично `sabda_manjari_ocr/`):
+
+```text
+PDF-скан
+  → 01 extract pages (PNG)
+  → 02 OCR (Tesseract)
+  → 07 LLM verify (ProxyAPI vision)  ← черновик HTML
+  → 04 build HTML → 05 build PDF
+```
+
+**Оркестрация LLM сегодня** — скрипт `07_llm_verify.py` (не Celery):
+
+| Шаг | Что происходит |
+|-----|----------------|
+| Тип страницы | Хардкод Infant Reader: стр. **6–16** = alphabet, остальное = lesson |
+| Промпт | `ALPHABET_PROMPT` или `SYSTEM_PROMPT` |
+| Старт провайдера (`--provider auto`) | alphabet → **OpenAI**; lesson → **Gemini** |
+| Цепочка моделей | внутри семейства: primary → fallbacks (Flash / GPT) |
+| Валидация | `html_utils.is_garbage_html` (reasoning, truncation, мало Devanagari) |
+| Смена семейства | при провале — Gemini ↔ OpenAI |
+| Если LLM не выдал | при сборке HTML — OCR fallback + пометка |
+
+```mermaid
+flowchart TD
+  PNG[PNG + OCR hint] --> PT{Страница 6–16?}
+  PT -->|да| OA[OpenAI + alphabet prompt]
+  PT -->|нет| GM[Gemini + lesson prompt]
+  OA --> CH[Цепочка моделей провайдера]
+  GM --> CH
+  CH --> OK{HTML валиден?}
+  OK -->|да| SAVE[llm_verified.py]
+  OK -->|нет| SW[Другое семейство / следующая модель]
+  SW --> CH
+  SAVE --> HTML[04 HTML] --> PDF[05 PDF]
+```
+
+**Модели черновика (эмпирика Infant Reader):** детали в [`docs/llm_routing.md`](docs/llm_routing.md).
+
+| Тип | Primary | Fallback |
+|-----|---------|----------|
+| Уроки / проза | gemini-3.5-flash | gemini-2.5-flash → gpt-4o-mini |
+| Длинные таблицы / TOC | gemini-2.5-flash | gemini-3.5-flash |
+| Алфавитные сетки | gpt-4o-mini | gpt-4o |
+| Плотные conjuncts / титул | LLM только draft / seed | эксперт |
+
+Шлюз: **ProxyAPI.ru** (`/google` + `/openai/v1`), один ключ.
+
+### 2. Каркас сервиса `sanskrit_srv` (сейчас)
 
 ```
 sanskrit_srv/
-├── README.md                 ← этот файл
-├── docs/
-│   ├── schema.md             ← сущности БД
-│   └── api.md                ← REST эндпоинты MVP
-├── backend/                  ← FastAPI каркас
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── models.py         ← SQLAlchemy эскиз
-│   │   ├── schemas.py
-│   │   └── api/              ← stubs
-│   ├── workers/              ← Celery: extract / ocr / llm
-│   └── requirements.txt
-├── frontend/                 ← placeholder (Next.js / SvelteKit)
-│   └── README.md
-└── docker-compose.yml        ← postgres + redis + api + worker
+├── README.md
+├── docs/          ← план, схема, API, LLM routing, план для индолога
+├── backend/       ← FastAPI + SQLAlchemy эскиз + placeholder workers
+├── frontend/      ← placeholder
+└── docker-compose.yml   ← postgres + redis + api + worker (заготовка)
 ```
 
-**Связь с существующим кодом**
+| Уже есть | Ещё нет |
+|----------|---------|
+| Описание ролей и статусов страниц | Реальная очередь Celery вокруг пайплайна |
+| Эскиз БД / API | Auth UI, expert/scholar экраны |
+| Документ routing LLM | `page_type` в settings вместо хардкода номеров |
+| План для индолога | Production-деплой, MinIO, биллинг |
+
+Связь «пайплайн → сервис» (целевая):
 
 | Модуль сейчас | В сервисе |
 |---------------|-----------|
 | `01_extract_pages.py` | worker `extract_pages` |
-| `02_ocr.py` + crop | worker `ocr_page` |
-| `07_llm_verify.py` (`--provider auto`) | worker `llm_verify` |
+| `02_ocr.py` | worker `ocr_page` |
+| `07_llm_verify.py` (`auto`) | worker `llm_verify_page` |
 | `html_utils.py` | валидация ответов LLM |
-| `04_build_html.py` + CSS | export / preview |
-| `llm_verified.py` | таблица `page_versions` |
+| `04` / `05` build | export HTML/PDF |
+| `llm_verified.py` | `page_versions` |
 
-LLM: ProxyAPI.ru (Gemini + OpenAI vision), ключи как в scinikel `config.env`.
+---
+
+## Набросок обобщения
+
+Цель: та же логика Infant Reader, но **для любой рукописи/издания**, без хардкода «страницы 6–16».
+
+### Принципы
+
+1. **Страница — единица workflow** (статус, версии, assignee), книга — агрегат.
+2. **`page_type` вместо номеров PDF** — классификатор (эвристика / ручная метка / лёгкая модель): `title | alphabet | toc | lesson | prose | unknown`.
+3. **Routing LLM в `project.settings` (JSONB)** — матрица primary/fallback/prompt/max_tokens; не в коде.
+4. **Один шлюз ProxyAPI**, два семейства (Gemini / OpenAI); внутри — цепочки моделей; между — failover.
+5. **Валидация обязательна** перед записью версии; провал → следующая модель → expert queue.
+6. **Alphabet / grid всегда `expert_review`** даже при «успешном» HTML.
+7. **Учёный правит директивами**, не обязан трогать разметку; audit trail директив и diff.
+8. **Экспорт** переиспользует проверенный CSS/WeasyPrint; EN-комментарии — опциональный слой поверх утверждённого текста.
+
+### Целевая оркестрация (сервис)
+
+```mermaid
+flowchart LR
+  UP[Upload PDF] --> EX[extract]
+  EX --> OCR[ocr_page]
+  OCR --> CLS[classify page_type]
+  CLS --> LLM[llm_verify по routes]
+  LLM --> ER[expert_review]
+  ER --> SR[scholar + assistant]
+  SR --> PUB[published]
+  PUB --> OUT[HTML / PDF]
+```
+
+Черновик конфига routing — в [`docs/llm_routing.md`](docs/llm_routing.md) (блок YAML). Эскиз сущностей — [`docs/schema.md`](docs/schema.md). План без IT-жаргона — [`docs/plan-for-indologists.md`](docs/plan-for-indologists.md).
+
+### Что обобщать в первую очередь (порядок работ)
+
+| # | Шаг обобщения | Зачем |
+|---|----------------|-------|
+| 1 | Вынести routing + промпты в settings проекта | разные книги ≠ Infant Reader |
+| 2 | Обернуть 01/02/07 в Celery tasks | фон, ретраи, статусы страниц |
+| 3 | Версии HTML в БД вместо `llm_verified.py` | audit, rollback |
+| 4 | Expert UI (скан \| текст) | закрыть разрыв «скрипт → человек» |
+| 5 | Scholar directives + diff | филология без правки HTML |
+| 6 | Export + published | результат для архива / читателя |
+
+До этого каркас сервиса остаётся **документом + заготовкой**; рабочий контур обработки — локальные OCR/LLM-пайплайны.
 
 ---
 
