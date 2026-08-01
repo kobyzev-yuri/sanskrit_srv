@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Runtime / local storage
+storage/
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Docker volumes / data dumps
+pgdata/
+redisdata/
