@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sanskrit SRV</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260804d" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">Sanskrit <span>SRV</span></div>
+      <nav id="nav-authed" hidden>
+        <button type="button" class="nav-btn ghost" data-view="projects">Проекты</button>
+        <button type="button" class="nav-btn ghost" data-view="editor">Редактор</button>
+        <button type="button" class="nav-btn ghost" id="nav-admin" data-view="admin" hidden>Бэкофис</button>
+        <button type="button" class="ghost" id="logout-btn">Выход</button>
+      </nav>
+      <div class="user" id="top-user"></div>
+    </header>
+    <div id="llm-banner" class="llm-banner" hidden role="alert"></div>
+
+    <main>
+      <section id="view-login" class="view">
+        <div class="login-wrap">
+          <form class="card form-col" id="login-form">
+            <h1>Вход</h1>
+            <p>Загрузка скана, просмотр и правка HTML-черновика. Бэкофис — только admin.</p>
+            <label>Email <input id="login-email" type="email" required autocomplete="username" /></label>
+            <label>Пароль <input id="login-password" type="password" required autocomplete="current-password" /></label>
+            <button class="primary" type="submit">Войти</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="view-projects" class="view">
+        <div class="toolbar">
+          <h2 style="margin:0">Проекты</h2>
+          <div class="spacer"></div>
+        </div>
+
+        <div id="upload-card" class="admin-section" style="margin-bottom:1rem" hidden>
+          <h2>Загрузить PDF-скан</h2>
+          <form id="upload-form" class="form-col">
+            <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" placeholder="my-book" /></label>
+            <label>Название <input name="title" required placeholder="Название книги" /></label>
+            <label>Название (sa) <input name="title_sa" class="sa" placeholder="देवनागरी" /></label>
+            <p class="muted">По умолчанию — <strong>вся книга</strong>. Если больше 100 страниц, спросим подтверждение (долго и может дорого по LLM).</p>
+            <label>PDF <input name="file" type="file" accept="application/pdf" required /></label>
+            <button class="primary" id="btn-upload" type="submit">Загрузить PDF</button>
+            <p id="upload-status" class="muted" hidden></p>
+          </form>
+        </div>
+
+        <div id="large-book-modal" class="modal" hidden>
+          <div class="modal-card">
+            <h2>Большая книга</h2>
+            <p id="large-book-text" class="muted"></p>
+            <p>Перевести <strong>все страницы</strong>? Для скана это LLM по каждой странице (время и расход ProxyAPI).</p>
+            <div class="edit-actions" style="border:0;padding:0;background:transparent">
+              <button type="button" class="primary" id="btn-confirm-whole-book">Да, перевести всю книгу</button>
+              <button type="button" id="btn-cancel-whole-book">Пока не переводить</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="project-list" class="grid-projects"></div>
+      </section>
+
+      <section id="view-editor" class="view view-editor">
+        <div class="reader-shell">
+          <aside class="thumb-rail" aria-label="Навигация по страницам">
+            <div class="thumb-rail-head">
+              <strong>Страницы</strong>
+              <span class="muted" id="thumb-count">0</span>
+            </div>
+            <div id="thumb-list" class="thumb-list"></div>
+          </aside>
+
+          <div class="reader-main">
+            <div class="toolbar reader-toolbar">
+              <div class="reader-title">
+                <strong id="proj-title">—</strong>
+                <div class="muted" id="proj-meta"></div>
+              </div>
+              <div class="pdf-pager">
+                <button type="button" id="btn-prev" title="Предыдущая (←)">‹</button>
+                <label class="pager-jump">
+                  <input id="page-jump" type="number" min="1" inputmode="numeric" aria-label="Номер страницы" />
+                  <span class="muted">/</span>
+                  <span id="page-total">0</span>
+                </label>
+                <button type="button" id="btn-next" title="Следующая (→)">›</button>
+                <span class="status-pill" id="page-status">—</span>
+              </div>
+              <div class="reader-actions">
+                <button type="button" class="primary" id="btn-export-pdf">Скачать PDF</button>
+                <button type="button" id="btn-export-interleave" title="Скан и текст чередуются">PDF: скан‖текст</button>
+              </div>
+            </div>
+
+            <div class="toolbar extract-bar" id="pipeline-bar">
+              <span id="pipeline-info" class="muted">Конвейер: —</span>
+              <button type="button" id="btn-start-pipeline" hidden>Перевести всю книгу заново</button>
+            </div>
+            <div class="toolbar extract-bar" id="usage-bar" hidden>
+              <span id="usage-info" class="muted">Расход LLM: —</span>
+            </div>
+
+            <div class="editor-layout">
+              <section class="panel">
+                <header><span>Скан</span><span class="muted">как в PDF</span></header>
+                <div class="scan-pane">
+                  <img id="scan-img" alt="scan page" />
+                  <p id="scan-empty" class="scan-empty" hidden>Скан ещё не готов</p>
+                </div>
+              </section>
+              <section class="panel edit-pane">
+                <header>
+                  <div class="tabs">
+                    <button type="button" class="tab active" data-tab="preview">Превью</button>
+                    <button type="button" class="tab" data-tab="source">HTML</button>
+                  </div>
+                  <span class="muted sa">देवनागरी</span>
+                </header>
+                <div id="tab-preview" class="tab-panel active">
+                  <div id="html-preview" class="html-preview" aria-live="polite"></div>
+                </div>
+                <div id="tab-source" class="tab-panel">
+                  <textarea id="html-editor" spellcheck="false" placeholder="HTML черновик страницы…"></textarea>
+                </div>
+                <div id="accepted-box" class="directive-box" hidden>
+                  <p style="margin:0">Страница <strong>согласована</strong>. Чтобы править — отзовите согласие. PDF доступен всегда.</p>
+                  <div class="edit-actions" style="padding:0;border:0;background:transparent">
+                    <button type="button" id="btn-revoke">Отозвать согласие</button>
+                  </div>
+                </div>
+                <div id="edit-tools">
+                  <div class="directive-box">
+                    <label for="directive-input">Замечание / задание</label>
+                    <textarea id="directive-input" rows="3" placeholder="С чем не согласны — или: пересмотри страницу."></textarea>
+                    <div class="edit-actions" style="padding:0;border:0;background:transparent">
+                      <button class="primary" type="button" id="btn-revise">Отправить задание</button>
+                      <button type="button" id="btn-review-again">Пересмотри страницу</button>
+                      <span class="muted" id="revise-status"></span>
+                    </div>
+                  </div>
+                  <div class="edit-actions">
+                    <button type="button" id="btn-save">Сохранить правку</button>
+                    <button class="primary" type="button" id="btn-accept">Сохранить и согласовать</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <select id="page-select" hidden aria-hidden="true"></select>
+      </section>
+
+      <section id="view-admin" class="view">
+        <div class="admin-layout">
+          <div class="admin-section">
+            <h2>Пользователи</h2>
+            <table>
+              <thead><tr><th>Email</th><th>Имя</th><th>Роль</th><th>Активен</th></tr></thead>
+              <tbody id="users-table"></tbody>
+            </table>
+            <form id="user-form" class="form-col" style="margin-top:1rem">
+              <h3 style="margin:0">Новый пользователь</h3>
+              <label>Email <input name="email" type="email" required /></label>
+              <label>Имя <input name="display_name" required /></label>
+              <label>Пароль <input name="password" type="password" minlength="6" required /></label>
+              <label>Роль
+                <select name="role">
+                  <option value="expert">expert</option>
+                  <option value="scholar">scholar</option>
+                  <option value="reader">reader</option>
+                  <option value="admin">admin</option>
+                </select>
+              </label>
+              <button class="primary" type="submit">Создать</button>
+            </form>
+          </div>
+          <div class="admin-section">
+            <h2>Каталог LLM (ProxyAPI)</h2>
+            <p class="muted" id="llm-note"></p>
+            <ul id="llm-catalog"></ul>
+            <p class="muted">Ключ API на сервере в <code>.env</code> (scp), не в git. Матрица routing — в settings проекта.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="/assets/app.js?v=20260804d"></script>
+</body>
+</html>

@@ -1,27 +1,24 @@
+# Optional local stack. Production on freevpn uses systemd + SQLite
+# (see deploy/sanskrit-srv.service) because the VPS has ~1GB RAM.
 services:
-  db:
-    image: postgres:16-alpine
+  api:
+    image: python:3.12-slim
+    working_dir: /app/backend
+    command: >
+      bash -lc "pip install -q -r requirements.txt &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment:
-      POSTGRES_USER: sanskrit
-      POSTGRES_PASSWORD: sanskrit
-      POSTGRES_DB: sanskrit_srv
+      DATABASE_URL: sqlite:////data/sanskrit_srv.db
+      JWT_SECRET: dev-secret
+      STORAGE_ROOT: /data/storage
+      PYTHONPATH: /app/backend
+    env_file:
+      - .env
     ports:
-      - "5433:5432"
+      - "8000:8000"
     volumes:
-      - pgdata:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6380:6379"
-
-  # api / worker — подключатся на этапе реализации
-  # api:
-  #   build: ./backend
-  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-  #   env_file: .env.example
-  #   ports: ["8000:8000"]
-  #   depends_on: [db, redis]
+      - ./:/app
+      - srvdata:/data
 
 volumes:
-  pgdata:
+  srvdata:

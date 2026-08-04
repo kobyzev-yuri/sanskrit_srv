@@ -1,0 +1,19 @@
+[Unit]
+Description=Sanskrit SRV (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/sanskrit_srv/backend
+EnvironmentFile=/opt/sanskrit_srv/.env
+Environment=PYTHONPATH=/opt/sanskrit_srv/backend
+ExecStart=/opt/sanskrit_srv/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=3
+
+# Soft cap for 1GB VPS
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target

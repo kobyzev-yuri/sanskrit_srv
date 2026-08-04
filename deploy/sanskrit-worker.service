@@ -1,0 +1,17 @@
+[Unit]
+Description=Sanskrit SRV pipeline worker (extract + LLM drafts)
+After=network.target sanskrit-srv.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/sanskrit_srv/backend
+EnvironmentFile=/opt/sanskrit_srv/.env
+Environment=PYTHONPATH=/opt/sanskrit_srv/backend
+ExecStart=/opt/sanskrit_srv/.venv/bin/python -m app.worker
+Restart=always
+RestartSec=5
+MemoryMax=550M
+
+[Install]
+WantedBy=multi-user.target

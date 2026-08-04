@@ -7,6 +7,8 @@
 
 **План «на пальцах» для индолога (не IT):** [`docs/plan-for-indologists.md`](docs/plan-for-indologists.md)
 
+**Тулсет пайплайна (OCR / extract / LLM / export):** [`docs/toolkit.md`](docs/toolkit.md) · deps [`backend/requirements-workers.txt`](backend/requirements-workers.txt)
+
 ---
 
 ## Проблема

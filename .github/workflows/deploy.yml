@@ -1,0 +1,46 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "deploy/**"
+      - "requirements*.txt"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync runtime files to VPS
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          TARGET="${SSH_USER}@${SSH_HOST}"
+          ssh -o StrictHostKeyChecking=no "$TARGET" "mkdir -p /opt/sanskrit_srv"
+          # Runtime only — no docs/, no .env, no local storage
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude 'docs/' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            --exclude 'storage/' \
+            --exclude 'data/' \
+            --exclude '.venv/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '.github/' \
+            ./ "${TARGET}:/opt/sanskrit_srv/"
+          ssh "$TARGET" "bash /opt/sanskrit_srv/deploy/remote_deploy.sh"
