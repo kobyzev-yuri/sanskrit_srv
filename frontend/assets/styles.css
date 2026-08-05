@@ -302,7 +302,8 @@ textarea {
   display: grid;
   grid-template-rows: auto 1fr;
 }
-.panel header {
+/* Only the panel chrome bar — not <header> inside draft HTML preview */
+.panel > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -311,6 +312,12 @@ textarea {
   border-bottom: 1px solid var(--line);
   background: #faf6ee;
   font-size: 0.92rem;
+}
+.html-preview header {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  display: block;
 }
 .scan-pane {
   background: var(--scan-bg);
