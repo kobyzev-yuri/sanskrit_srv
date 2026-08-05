@@ -464,6 +464,26 @@ textarea {
 .html-preview td, .html-preview th {
   border: 1px solid var(--line);
   padding: 0.25rem 0.4rem;
+  background: transparent;
+}
+.html-preview table.toc {
+  table-layout: fixed;
+}
+.html-preview table.toc th,
+.html-preview table.toc td {
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  vertical-align: top;
+  word-break: break-word;
+}
+.html-preview table.toc th {
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.html-preview table.toc tr:hover td {
+  background: transparent;
 }
 .directive-box {
   display: grid;

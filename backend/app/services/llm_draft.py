@@ -37,7 +37,14 @@ LAYOUT (line-by-line, book-like — mandatory):
 - Indent first line of a couplet continuation -> class="indent". Verse stack -> class="shloka sa". Prose -> <p class="sa">.
 - Header line: separate blocks only — <p class="page-num">, <p class="running-head sa">, optional section tag. Place them in reading order as on the scan (often page number, then book title, then section in brackets).
 - Page number / imprint: <p class="page-num"> or <footer class="sa"> where the scan has them.
-- Tables stay <table>. TOC may be a table or paired columns — keep every numbered line from the scan.
+- Tables stay <table>. 
+- Two-column TOC / अनुक्रमणिका / विषयसूची (critical):
+  Use ONE <table class="toc sa"> for the WHOLE page body with exactly FOUR cells per data row:
+  <td>left title</td><td>left page</td><td>right title</td><td>right page</td>.
+  Pair row i of the left printed column with row i of the right printed column.
+  Section headings (e.g. विविध श्लोकाः) stay inside that same 4-column table (as a cell), never start a second 2-column table underneath — that collapses the layout to one column.
+  Empty <td></td> only when that side has no more lines. Include every numbered line through the end of BOTH columns.
+
 - Prefer class="compact" on <article> when the page is dense.
 
 FORBIDDEN (never invent browser layout hacks):
@@ -61,7 +68,7 @@ FIGURES:
 - Never crop the entire page as a figure.
 
 Return ONLY a raw HTML fragment (no markdown, no commentary).
-Allowed classes: page-style, type-sm, type-md, type-lg, lh-tight, lh-normal, lh-loose, narrow, indent, shloka, centered, compact, running-head, page-num, footer, scan-crop, page-figure, data-box, data-fig.
+Allowed classes: page-style, type-sm, type-md, type-lg, lh-tight, lh-normal, lh-loose, narrow, indent, shloka, centered, compact, running-head, page-num, footer, scan-crop, page-figure, toc, data-box, data-fig.
 """
 
 GARBAGE_ANYWHERE = re.compile(

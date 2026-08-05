@@ -26,8 +26,9 @@ log = logging.getLogger("sanskrit.pipeline")
 
 DEFAULT_REVIEW_DIRECTIVE = (
     "Пересмотри страницу полностью по скану. HTML только классами (page-style, narrow, shloka, "
-    "indent, centered, running-head, page-num) — без style=, flex и float. Текст построчно как в книге, "
-    "обе колонки до конца, без пустых строк-заглушек."
+    "indent, centered, running-head, page-num, toc) — без style=, flex и float. "
+    "Двухколоночное оглавление: одна таблица class=toc на всю страницу, ровно 4 ячейки в ряду "
+    "(лево|стр|право|стр), без второй узкой таблицы внизу. Текст построчно, обе колонки до конца."
 )
 
 
