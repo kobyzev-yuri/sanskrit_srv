@@ -24,7 +24,12 @@ from app.services.pdf_extract import (
 
 log = logging.getLogger("sanskrit.pipeline")
 
-DEFAULT_REVIEW_DIRECTIVE = "Пересмотри страницу полностью по скану и переделай HTML-черновик."
+DEFAULT_REVIEW_DIRECTIVE = (
+    "Пересмотри страницу полностью по скану. HTML только классами (page-style, narrow, shloka, "
+    "indent, centered, running-head, page-num) — без style=, flex и float. Текст построчно как в книге, "
+    "обе колонки до конца, без пустых строк-заглушек."
+)
+
 
 
 def enqueue_project_pipeline(

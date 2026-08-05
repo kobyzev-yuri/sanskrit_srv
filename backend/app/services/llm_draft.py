@@ -19,33 +19,41 @@ BASE_PROMPT = """You restore a Sanskrit scan page (manuscript or printed edition
 The IMAGE is ground truth for TEXT, LAYOUT, and TYPOGRAPHY. Match the book visual style as closely as HTML allows.
 
 First silently judge from the scan:
-1) text column width (narrow / medium / wide)
+1) text column width (narrow / medium / wide) and whether there are ONE or TWO vertical columns
 2) title alignment (center / left)
 3) line height / leading (tight dense print, normal, or loose/open)
 4) body size vs headings (small body + larger title, or even)
 5) ornaments / figures separate from the full-page plate
+6) for lists / TOC: first and last item number in EACH column
 
 Then encode that judgment in classes (do not write the judgment as visible text).
 
-LAYOUT:
-- Narrow column / short verse lines -> class="narrow" and/or class="shloka" (centered). Do NOT stretch full-width when the book is a narrow column.
-- Titles: match alignment. <h1 class="sa centered"> or <p class="running-head sa">. No fake left offset if the scan centers the title.
-- Paragraphs: first-line indent -> class="indent"; verse -> class="shloka sa"; prose -> <p class="sa">.
-- Vertical gaps: match the scan. Prefer class="compact" on wrapping <article> when the page is dense.
-- Page number / imprint: <p class="page-num"> or <footer class="sa"> in the same place as the scan.
-- Tables stay <table>.
+LAYOUT (line-by-line, book-like — mandatory):
+- Emit content as a vertical sequence of block tags matching the printed lines top→bottom (and left column then right column if two columns).
+- ONE printed line (or one half-verse line) → usually ONE <p> / <h1> / list row. Do not merge distant lines into one CSS row.
+- Narrow column / short verse -> class="narrow" and/or class="shloka". Do NOT stretch full-width when the book is a narrow column.
+- Two columns (TOC etc.): restore BOTH columns completely through the last numbered line. No empty placeholder rows.
+- Titles: <h1 class="sa centered"> or <p class="running-head sa">. Match center/left as on the scan.
+- Indent first line of a couplet continuation -> class="indent". Verse stack -> class="shloka sa". Prose -> <p class="sa">.
+- Header line: separate blocks only — <p class="page-num">, <p class="running-head sa">, optional section tag. Place them in reading order as on the scan (often page number, then book title, then section in brackets).
+- Page number / imprint: <p class="page-num"> or <footer class="sa"> where the scan has them.
+- Tables stay <table>. TOC may be a table or paired columns — keep every numbered line from the scan.
+- Prefer class="compact" on <article> when the page is dense.
 
-TYPOGRAPHY (leading + relative size / "font feel"):
-- Wrap the page in <article class="page-style TYPE LH" lang="sa"> where:
-  TYPE is one of: type-sm | type-md | type-lg  (body size relative to a typical printed mantra book)
-  LH is one of: lh-tight | lh-normal | lh-loose  (line height as on the scan)
+FORBIDDEN (never invent browser layout hacks):
+- No inline style="..." (no flex, float, clear, grid, width%, justify-content, etc.).
+- No <div style=...>, no display:flex / float:left / float:right headers.
+- Layout only via the allowed classes below.
+
+TYPOGRAPHY:
+- Wrap in <article class="page-style TYPE LH" lang="sa"> where TYPE is type-sm|type-md|type-lg and LH is lh-tight|lh-normal|lh-loose.
 - Headings may add type-lg; body follows the article default.
-- Short airy verse lines: class="shloka lh-loose"; dense stacks: class="shloka lh-tight".
-- We cannot load the exact metal type from the scan; approximate with size + leading classes and Noto Serif Devanagari.
+- Approximate metal type with size + leading classes and Noto Serif Devanagari (we cannot load the scan font).
 
 TEXT:
-- Capture ALL readable text. Preserve Devanagari. Use class="sa" lang="sa".
-- Do NOT invent text.
+- Capture ALL readable text through the last line of every column. Preserve Devanagari. class="sa" lang="sa".
+- Do NOT invent text. Do NOT leave blank rows where the scan still has numbers/text.
+- If a previous draft used flex/float or truncated a column, replace with clean class-based line-by-line HTML from the scan.
 
 FIGURES:
 - Ornaments/diagrams (not the full page): <figure class="scan-crop" data-box="x,y,w,h"></figure> with fractions 0-1.
@@ -53,7 +61,7 @@ FIGURES:
 - Never crop the entire page as a figure.
 
 Return ONLY a raw HTML fragment (no markdown, no commentary).
-Classes: page-style, type-sm, type-md, type-lg, lh-tight, lh-normal, lh-loose, narrow, indent, shloka, centered, compact, running-head, page-num, footer, scan-crop, data-box, data-fig.
+Allowed classes: page-style, type-sm, type-md, type-lg, lh-tight, lh-normal, lh-loose, narrow, indent, shloka, centered, compact, running-head, page-num, footer, scan-crop, page-figure, data-box, data-fig.
 """
 
 GARBAGE_ANYWHERE = re.compile(
@@ -120,11 +128,18 @@ def revise_from_scan(
             "Embedded figures available (use <img data-fig=\"N\" />): " + figs
         )
     if current_html and current_html.strip():
-        parts.append("Current draft HTML (may be incomplete/wrong):\n" + current_html.strip())
+        parts.append(
+            "Current draft HTML (may be incomplete/wrong — fix from the scan; "
+            "strip any style=/flex/float and rebuild line-by-line with classes only):\n"
+            + current_html.strip()
+        )
     if directive and directive.strip():
         parts.append("Editor directive (follow carefully):\n" + directive.strip())
     else:
-        parts.append("Produce a complete layout-faithful draft for the whole page.")
+        parts.append(
+            "Produce a complete layout-faithful draft for the whole page "
+            "(line-by-line classes only; no inline CSS)."
+        )
     user_text = "\n\n".join(parts)
 
     errors: list[str] = []
