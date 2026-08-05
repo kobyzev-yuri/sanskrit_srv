@@ -504,6 +504,32 @@ function renderPreview(html) {
   }
   // Draft HTML is trusted content from our pipeline / LLM, not arbitrary user HTML from the open web.
   box.innerHTML = src;
+  hydratePreviewFigures(box);
+}
+
+/** /api/.../figures/* require Bearer — plain <img src> gets 401 and shows only alt text. */
+async function hydratePreviewFigures(box) {
+  if (!box || !state.token) return;
+  const imgs = [...box.querySelectorAll('img[src*="/figures/"]')];
+  await Promise.all(
+    imgs.map(async (img) => {
+      const url = img.getAttribute("src");
+      if (!url || url.startsWith("blob:")) return;
+      try {
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${state.token}` },
+        });
+        if (!res.ok) {
+          img.alt = `illustration (${res.status})`;
+          return;
+        }
+        const blob = await res.blob();
+        img.src = URL.createObjectURL(blob);
+      } catch (_) {
+        /* leave broken img / alt */
+      }
+    })
+  );
 }
 
 function setDraftHtml(html) {
@@ -611,9 +637,11 @@ async function revokePage() {
   if (!state.page) return;
   try {
     state.page = await api(`/pages/${state.page.id}/revoke`, { method: "POST" });
-    $("#page-status").textContent = state.page.status;
+    updateEditMode();
+    $("#page-status").textContent =
+      state.page.status === "expert_review" ? "на правке" : state.page.status;
     toast("Согласие отозвано — можно править заданием");
-    await openProject(state.project.id);
+    if (state.project?.id) await openProject(state.project.id);
   } catch (e) {
     toast(e.message, true);
   }

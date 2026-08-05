@@ -83,6 +83,8 @@ textarea {
   font-size: 0.92rem;
   font-weight: 600;
 }
+/* .directive-box { display:grid } otherwise overrides the UA [hidden] rule */
+[hidden] { display: none !important; }
 .llm-banner[hidden] { display: none !important; }
 
 .view { display: none; padding: 1.25rem; }

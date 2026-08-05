@@ -99,30 +99,37 @@ def materialize_scan_crops(
 
     def repl(match: re.Match) -> str:
         nonlocal crop_i
-        attrs = (match.group(1) or "") + (match.group(3) or "")
-        box_m = BOX_ATTR_RE.search(attrs) or BOX_ATTR_RE.search(match.group(0))
+        tag = match.group(0)
+        box_m = BOX_ATTR_RE.search(tag)
         if not box_m:
-            return match.group(0)
+            return tag
         x, y, w, h = (float(box_m.group(i)) for i in range(1, 5))
+        # Reject near-full-page crops (LLM sometimes wraps the whole plate).
+        if w * h >= 0.85:
+            return tag
         # clamp fractions
         x, y = max(0.0, min(1.0, x)), max(0.0, min(1.0, y))
         w, h = max(0.02, min(1.0 - x, w)), max(0.02, min(1.0 - y, h))
         left, top = int(x * W), int(y * H)
         right, bottom = int((x + w) * W), int((y + h) * H)
         if right - left < 8 or bottom - top < 8:
-            return match.group(0)
+            return tag
         crop_i += 1
         path = dest / f"crop-{crop_i:02d}.png"
         im.crop((left, top, right, bottom)).save(path, format="PNG")
         url = f"/api/v1/pages/{page_id}/figures/crop-{crop_i:02d}.png"
         return f'<figure class="page-figure"><img src="{url}" alt="illustration" /></figure>'
 
-    # More permissive: any figure with scan-crop and data-box
+    # Any <figure> that mentions scan-crop (class order / extra attrs vary).
     loose = re.compile(
         r"<figure\b[^>]*\bscan-crop\b[^>]*>.*?</figure>",
         re.I | re.S,
     )
-    return loose.sub(repl, html)
+    try:
+        return loose.sub(repl, html)
+    except Exception:  # noqa: BLE001
+        # Never wipe a successful LLM draft because crop materialization failed.
+        return html
 
 
 def rewrite_embedded_fig_srcs(html: str, page_id: uuid.UUID) -> str:
