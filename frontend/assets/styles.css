@@ -149,13 +149,31 @@ textarea {
 }
 .thumb-rail-head {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.35rem;
   padding: 0.65rem 0.75rem;
   border-bottom: 1px solid #3d372f;
   font-size: 0.85rem;
 }
+.thumb-rail-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
 .thumb-rail-head .muted { color: #b5aa9a; }
+.thumb-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #cfc4b4;
+  font-size: 0.78rem;
+  cursor: pointer;
+  user-select: none;
+}
+.thumb-filter input {
+  accent-color: #e0c39a;
+  margin: 0;
+}
 .thumb-list {
   overflow: auto;
   padding: 0.55rem;
@@ -163,6 +181,13 @@ textarea {
   flex-direction: column;
   gap: 0.55rem;
   scrollbar-width: thin;
+}
+.thumb-list-empty {
+  color: #b5aa9a;
+  font-size: 0.8rem;
+  padding: 0.75rem 0.35rem;
+  text-align: center;
+  line-height: 1.35;
 }
 .thumb-item {
   border: 2px solid transparent;

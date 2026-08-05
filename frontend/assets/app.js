@@ -6,6 +6,8 @@ const state = {
   project: null,
   pages: [],
   page: null,
+  /** @type {"all"|"open"} */
+  thumbFilter: localStorage.getItem("ss_thumb_filter") === "open" ? "open" : "all",
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -370,10 +372,35 @@ function statusBadgeClass(status) {
   return "wait";
 }
 
+/** Pages visible in the thumb rail (and for ‹ › when filter is on). */
+function visiblePages() {
+  if (state.thumbFilter !== "open") return state.pages;
+  return state.pages.filter((p) => p.status !== "expert_done");
+}
+
 function renderThumbList() {
   const list = $("#thumb-list");
-  $("#thumb-count").textContent = String(state.pages.length);
-  list.innerHTML = state.pages
+  const shown = visiblePages();
+  const total = state.pages.length;
+  const countEl = $("#thumb-count");
+  if (state.thumbFilter === "open" && shown.length !== total) {
+    countEl.textContent = `${shown.length} / ${total}`;
+  } else {
+    countEl.textContent = String(total);
+  }
+  const filterCb = $("#thumb-filter-open");
+  if (filterCb) filterCb.checked = state.thumbFilter === "open";
+
+  if (!shown.length) {
+    list.innerHTML =
+      state.thumbFilter === "open" && total
+        ? `<p class="thumb-list-empty">Все страницы согласованы.<br>Снимите фильтр, чтобы видеть все.</p>`
+        : `<p class="thumb-list-empty">Нет страниц</p>`;
+    if (thumbObserver) thumbObserver.disconnect();
+    return;
+  }
+
+  list.innerHTML = shown
     .map(
       (p) => `
     <button type="button" class="thumb-item" data-id="${p.id}" data-no="${p.page_no}" title="Стр. ${p.page_no}">
@@ -410,6 +437,12 @@ function renderThumbList() {
   );
   list.querySelectorAll("img[data-scan-page]").forEach((img) => thumbObserver.observe(img));
   highlightThumb(state.page?.id);
+}
+
+function setThumbFilter(openOnly) {
+  state.thumbFilter = openOnly ? "open" : "all";
+  localStorage.setItem("ss_thumb_filter", state.thumbFilter);
+  renderThumbList();
 }
 
 async function loadThumb(pageId, imgEl) {
@@ -756,6 +789,7 @@ async function saveHtml() {
     toast("Сохранено");
     // refresh page list statuses
     state.pages = await api(`/projects/${state.project.id}/pages`);
+    renderThumbList();
   } catch (e) {
     toast(e.message, true);
   }
@@ -773,10 +807,16 @@ async function acceptPage() {
       });
       setDraftHtml(state.page.current_html || html);
     }
+    const acceptedId = state.page.id;
+    const openAfter = visiblePages().filter((p) => p.id !== acceptedId);
+    const nextOpen = openAfter.find((p) => p.page_no > state.page.page_no) || openAfter[0] || null;
     state.page = await api(`/pages/${state.page.id}/accept`, { method: "POST" });
     $("#page-status").textContent = state.page.status;
     toast("Страница сохранена и принята");
     await openProject(state.project.id);
+    if (state.thumbFilter === "open" && nextOpen) {
+      await loadPage(nextOpen.id);
+    }
   } catch (e) {
     toast(e.message, true);
   }
@@ -954,6 +994,11 @@ function wire() {
   $("#btn-start-pipeline").onclick = startPipeline;
   $("#btn-export-pdf").onclick = () => exportPdf("text");
   $("#btn-export-interleave").onclick = () => exportPdf("interleave");
+  const thumbFilter = $("#thumb-filter-open");
+  if (thumbFilter) {
+    thumbFilter.checked = state.thumbFilter === "open";
+    thumbFilter.onchange = () => setThumbFilter(thumbFilter.checked);
+  }
   $("#html-editor").addEventListener("input", () => renderPreview($("#html-editor").value));
   $$(".tab").forEach((t) => {
     t.onclick = () => switchTab(t.dataset.tab);
@@ -997,9 +1042,24 @@ function wire() {
 }
 
 function shiftPage(delta) {
-  if (!state.pages.length || !state.page) return;
-  const idx = state.pages.findIndex((p) => p.id === state.page.id);
-  const next = state.pages[idx + delta];
+  const pages = visiblePages();
+  if (!pages.length || !state.page) return;
+  let idx = pages.findIndex((p) => p.id === state.page.id);
+  if (idx < 0) {
+    // Current page hidden by filter — jump to nearest open page.
+    const allIdx = state.pages.findIndex((p) => p.id === state.page.id);
+    if (delta > 0) {
+      const next = pages.find((p) => state.pages.findIndex((x) => x.id === p.id) > allIdx);
+      if (next) loadPage(next.id);
+      else if (pages[0]) loadPage(pages[0].id);
+    } else {
+      const prev = [...pages].reverse().find((p) => state.pages.findIndex((x) => x.id === p.id) < allIdx);
+      if (prev) loadPage(prev.id);
+      else if (pages[pages.length - 1]) loadPage(pages[pages.length - 1].id);
+    }
+    return;
+  }
+  const next = pages[idx + delta];
   if (!next) return;
   loadPage(next.id);
 }

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260805f" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260805i" />
 </head>
 <body>
   <div class="app-shell">
@@ -74,8 +74,14 @@
         <div class="reader-shell">
           <aside class="thumb-rail" aria-label="Навигация по страницам">
             <div class="thumb-rail-head">
-              <strong>Страницы</strong>
-              <span class="muted" id="thumb-count">0</span>
+              <div class="thumb-rail-title">
+                <strong>Страницы</strong>
+                <span class="muted" id="thumb-count">0</span>
+              </div>
+              <label class="thumb-filter" title="Скрыть страницы со статусом «согласовано»">
+                <input type="checkbox" id="thumb-filter-open" />
+                только несогласованные
+              </label>
             </div>
             <div id="thumb-list" class="thumb-list"></div>
           </aside>
@@ -199,6 +205,6 @@
     </main>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260805h"></script>
+  <script src="/assets/app.js?v=20260805i"></script>
 </body>
 </html>
