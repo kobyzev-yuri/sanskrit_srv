@@ -17,6 +17,7 @@ from app.schemas import (
     PageReviseIn,
     PageVersionOut,
 )
+from app.services.directive_fix import apply_directive_replacements
 from app.services.layout_assets import extract_embedded_figures, finalize_page_html, figure_file
 from app.services.llm_draft import revise_from_scan
 from app.services.llm_status import LlmQuotaError
@@ -183,6 +184,40 @@ def _apply_llm_revision(
 ) -> Page:
     if not page.scan_path or not Path(page.scan_path).exists():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet — pipeline still running")
+
+    # Fast path: exact «получилось X исправь на Y» / «исправь X на Y» in current HTML.
+    base_html = page.current_html or ""
+    replaced_html, applied = apply_directive_replacements(base_html, directive)
+    if applied:
+        html = finalize_page_html(
+            replaced_html,
+            scan_path=Path(page.scan_path),
+            project_id=page.project_id,
+            page_no=page.page_no,
+            page_id=page.id,
+        )
+        page.current_html = html
+        page.status = PageStatus.expert_review
+        next_ver = (
+            db.scalar(select(func.max(PageVersion.version)).where(PageVersion.page_id == page.id)) or 0
+        ) + 1
+        note = "directive-replace | " + "; ".join(f"{a}→{b}" for a, b in applied)
+        if directive:
+            note = f"{note} | {directive[:400]}"
+        db.add(
+            PageVersion(
+                page_id=page.id,
+                version=next_ver,
+                html=html,
+                source=VersionSource.expert,
+                created_by=user.id,
+                note=note,
+            )
+        )
+        db.commit()
+        db.refresh(page)
+        return page
+
     project = db.get(Project, page.project_id)
     figs: list[dict] = []
     if project and project.source_pdf_path:
@@ -205,6 +240,9 @@ def _apply_llm_revision(
         ) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"LLM revise failed: {exc}") from exc
+
+    # Apply quoted replacements again in case the model missed a tiny fix.
+    html, _ = apply_directive_replacements(html, directive)
 
     html = finalize_page_html(
         html,

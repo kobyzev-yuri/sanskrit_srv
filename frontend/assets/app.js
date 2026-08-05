@@ -553,10 +553,20 @@ const SA_CHART = {
   ],
   matras: [
     ["ा", "ā"], ["ि", "i"], ["ी", "ī"], ["ु", "u"], ["ू", "ū"], ["ृ", "ṛ"], ["ॄ", "ṝ"],
-    ["ॢ", "ḷ"], ["े", "e"], ["ै", "ai"], ["ो", "o"], ["ौ", "au"], ["ं", "ṃ"], ["ः", "ḥ"], ["्", "virāma"],
+    ["ॢ", "ḷ"], ["े", "e"], ["ै", "ai"], ["ो", "o"], ["ौ", "au"],
+    ["ं", "ṃ anusvāra"], ["ँ", "̃ candrabindu"], ["ꣳ", "Vedic ṃ"], ["ः", "ḥ"], ["्", "virāma"],
   ],
-  consonants: [
-    ["Заднеязычные", [["क", "ka"], ["ख", "kha"], ["ग", "ga"], ["घ", "gha"], ["ङ", "ṅa"]]],
+  withAnusvara: [
+    ["कं", "kaṃ"], ["खं", "khaṃ"], ["गं", "gaṃ"], ["घं", "ghaṃ"], ["ङं", "ṅaṃ"],
+    ["चं", "caṃ"], ["जं", "jaṃ"], ["ञं", "ñaṃ"],
+    ["टं", "ṭaṃ"], ["डं", "ḍaṃ"], ["णं", "ṇaṃ"],
+    ["तं", "taṃ"], ["दं", "daṃ"], ["नं", "naṃ"],
+    ["पं", "paṃ"], ["बं", "baṃ"], ["मं", "maṃ"],
+    ["यं", "yaṃ"], ["रं", "raṃ"], ["लं", "laṃ"], ["वं", "vaṃ"],
+    ["शं", "śaṃ"], ["षं", "ṣaṃ"], ["सं", "saṃ"], ["हं", "haṃ"],
+    ["हꣳ", "haṃ Vedic"], ["गꣳ", "gaṃ Vedic"],
+  ],
+  consonants: [    ["Заднеязычные", [["क", "ka"], ["ख", "kha"], ["ग", "ga"], ["घ", "gha"], ["ङ", "ṅa"]]],
     ["Нёбные", [["च", "ca"], ["छ", "cha"], ["ज", "ja"], ["झ", "jha"], ["ञ", "ña"]]],
     ["Ретрофлексные", [["ट", "ṭa"], ["ठ", "ṭha"], ["ड", "ḍa"], ["ढ", "ḍha"], ["ण", "ṇa"]]],
     ["Зубные", [["त", "ta"], ["थ", "tha"], ["द", "da"], ["ध", "dha"], ["न", "na"]]],
@@ -594,6 +604,8 @@ const SA_CHART = {
     ["स्व", "sva", ""],
     ["ह्म", "hma", ""],
     ["ह्य", "hya", ""],
+    ["हं", "haṃ", "не हंग"],
+    ["हंस", "haṃsa", "лебедь; не हंगस"],
     ["ऽ", "avagraha", "не размножать ऽऽऽ"],
     ["ॐ", "oṃ", ""],
     ["।", "daṇḍa", ""],
@@ -625,7 +637,8 @@ function renderSaChart() {
   if (!box || box.dataset.ready === "1") return;
   let html = `<p class="muted sa-chart-hint">Клик по ячейке — копирует <strong>деванагари</strong> (для HTML и заданий). IAST — подсказка.</p>`;
   html += `<section><h3>Гласные (самостоятельные)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.vowels)}</div></section>`;
-  html += `<section><h3>Матрā (знаки гласных / вирама)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.matras)}</div></section>`;
+  html += `<section><h3>Матрā (знаки гласных / вирама / анусвара)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.matras)}</div></section>`;
+  html += `<section><h3>Согласная + анусвара (клик = копировать слог)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.withAnusvara)}</div></section>`;
   html += `<section><h3>Согласные (знак · IAST)</h3>`;
   for (const [group, pairs] of SA_CHART.consonants) {
     html += `<h4>${escapeHtml(group)}</h4><div class="sa-chip-row">${saPairButtons(pairs)}</div>`;
