@@ -613,13 +613,41 @@ const SA_CHART = {
   ],
 };
 
-async function copySaChar(ch, iast) {
+function copyTextFallback(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;left:-9999px;top:0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
   try {
-    await navigator.clipboard.writeText(ch);
-    toast(`Скопировано: ${ch}${iast ? ` (${iast})` : ""}`);
-  } catch (_) {
-    toast("Не удалось скопировать", true);
+    ok = document.execCommand("copy");
+  } finally {
+    ta.remove();
   }
+  return ok;
+}
+
+async function copySaChar(ch, iast) {
+  if (!ch) {
+    toast("Нечего копировать", true);
+    return;
+  }
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(ch);
+      ok = true;
+    }
+  } catch (_) {
+    ok = false;
+  }
+  if (!ok) ok = copyTextFallback(ch);
+  if (ok) toast(`Скопировано: ${ch}${iast ? ` (${iast})` : ""}`);
+  else toast("Не удалось скопировать", true);
 }
 
 function saPairButtons(pairs) {
