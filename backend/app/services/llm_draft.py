@@ -63,7 +63,8 @@ TEXT:
 - If a previous draft used flex/float or truncated a column, replace with clean class-based line-by-line HTML from the scan.
 
 DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
-- Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña) and NEVER as अज्ञान्… when the word is अङ्गान्… (e.g. अङ्गानां / अङ्गानाम्, not अज्ञानां).
+- Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña).
+- Classic false reading: scan अङ्गानागं / अङ्गानाम् (aṅgā… with ṅga) misread as अज्ञानां (ajñānāṃ). Keep ङ्ग and the full ending from the scan (गं / म् / नां as printed) — do not shorten or swap to ज्ञाना….
 - Soft/palatal ñ is ञ; retroflex ṇ is ण; dental n is न; velar ṅ is ङ. Do not swap them.
 - ज्ञ = ज् + ञ (jña). ङ्ग = ङ् + ग (ṅga). They look different; prefer the scan, not a familiar wrong word.
 - Final consonant: if the scan shows explicit म् / न् etc., keep the virama form; use anusvāra ं only when the scan has the dot.
