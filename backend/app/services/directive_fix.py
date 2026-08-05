@@ -22,6 +22,28 @@ _PAIR_PATTERNS = [
     re.compile(rf"({_DEV})\s*(?:→|->)\s*({_DEV})"),
 ]
 
+# «в WORD вместо OLD вставь NEW» → replace OLD with NEW inside WORD
+_INPLACE_WORD_FIRST = re.compile(
+    rf"в\s*[«\"']?({_DEV})[»\"']?\s*вместо\s*[«\"']?({_DEV})[»\"']?\s*"
+    rf"(?:вставь|поставь|замени(?:ть)?\s*на)\s*[«\"']?({_DEV})[»\"']?",
+    re.I,
+)
+# «вместо OLD вставь NEW в WORD»
+_INPLACE_WORD_LAST = re.compile(
+    rf"вместо\s*[«\"']?({_DEV})[»\"']?\s*(?:вставь|поставь|замени(?:ть)?\s*на)\s*"
+    rf"[«\"']?({_DEV})[»\"']?\s*(?:в|в\s+слове)\s*[«\"']?({_DEV})[»\"']?",
+    re.I,
+)
+
+
+def _add_pair(pairs: list[tuple[str, str]], seen: set[tuple[str, str]], wrong: str, right: str) -> None:
+    if not wrong or wrong == right:
+        return
+    key = (wrong, right)
+    if key not in seen:
+        seen.add(key)
+        pairs.append(key)
+
 
 def extract_replacements(directive: str) -> list[tuple[str, str]]:
     """Return (wrong, right) pairs mentioned in the directive."""
@@ -30,15 +52,21 @@ def extract_replacements(directive: str) -> list[tuple[str, str]]:
         return []
     pairs: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
+
     for pat in _PAIR_PATTERNS:
         for m in pat.finditer(text):
-            wrong, right = m.group(1), m.group(2)
-            if wrong == right:
-                continue
-            key = (wrong, right)
-            if key not in seen:
-                seen.add(key)
-                pairs.append(key)
+            _add_pair(pairs, seen, m.group(1), m.group(2))
+
+    for m in _INPLACE_WORD_FIRST.finditer(text):
+        word, old, new = m.group(1), m.group(2), m.group(3)
+        if old in word:
+            _add_pair(pairs, seen, word, word.replace(old, new))
+
+    for m in _INPLACE_WORD_LAST.finditer(text):
+        old, new, word = m.group(1), m.group(2), m.group(3)
+        if old in word:
+            _add_pair(pairs, seen, word, word.replace(old, new))
+
     return pairs
 
 

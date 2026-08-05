@@ -191,7 +191,14 @@ def revise_from_scan(
             "Previous draft was invalid (reasoning/garbage). Ignore it and produce fresh HTML from the scan."
         )
     if directive and directive.strip():
-        parts.append("Editor directive (follow carefully):\n" + directive.strip())
+        parts.append(
+            "Editor directive (follow carefully; apply every character change named):\n"
+            + directive.strip()
+            + "\n"
+            "If the directive says to replace one akṣara inside a word "
+            "(e.g. в इत्युपैष्यहं вместо ष вставь म → इत्युपैम्यहं), do exactly that "
+            "substitution in the HTML; keep the rest of the page."
+        )
     else:
         parts.append(
             "Produce a complete layout-faithful draft for the whole page "
