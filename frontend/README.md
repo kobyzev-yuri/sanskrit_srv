@@ -1,12 +1,5 @@
 # Frontend
 
-Статический UI, отдаётся FastAPI (`/`, `/assets/*`).
+Статический UI: FastAPI отдаёт `/` и `/assets/*`. Сборка Node не нужна.
 
-Экраны MVP:
-
-1. Login  
-2. Projects (+ upload PDF для admin)  
-3. Expert editor — скан ‖ HTML  
-4. Backoffice (admin) — пользователи + каталог LLM  
-
-Сборка Node не требуется.
+Экраны: вход · проекты (upload для admin) · редактор скан ‖ текст · бэкофис.

@@ -1,6 +1,5 @@
-# Worker toolkit for Sanskrit scan service
-# Shared processing stack: classify → OCR/extract → LLM draft → export
-# See docs/toolkit.md
+# Optional extras (OCR / WeasyPrint / Celery) — not required for alpha runtime.
+# Alpha uses: backend/requirements.txt + python -m app.worker (PyMuPDF + ProxyAPI).
 
 # --- PDF classify / native extract ---
 pdf-inspector>=0.2.6
