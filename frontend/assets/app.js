@@ -541,6 +541,114 @@ function switchTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
   if (name === "preview") renderPreview($("#html-editor").value);
+  if (name === "chart") renderSaChart();
+}
+
+/** Click Devanagari → copy to clipboard (for HTML / задания). */
+const SA_CHART = {
+  vowels: [
+    ["अ", "a"], ["आ", "ā"], ["इ", "i"], ["ई", "ī"], ["उ", "u"], ["ऊ", "ū"],
+    ["ऋ", "ṛ"], ["ॠ", "ṝ"], ["ऌ", "ḷ"], ["ए", "e"], ["ऐ", "ai"], ["ओ", "o"], ["औ", "au"],
+    ["अं", "aṃ"], ["अः", "aḥ"],
+  ],
+  matras: [
+    ["ा", "ā"], ["ि", "i"], ["ी", "ī"], ["ु", "u"], ["ू", "ū"], ["ृ", "ṛ"], ["ॄ", "ṝ"],
+    ["ॢ", "ḷ"], ["े", "e"], ["ै", "ai"], ["ो", "o"], ["ौ", "au"], ["ं", "ṃ"], ["ः", "ḥ"], ["्", "virāma"],
+  ],
+  consonants: [
+    ["Заднеязычные", [["क", "ka"], ["ख", "kha"], ["ग", "ga"], ["घ", "gha"], ["ङ", "ṅa"]]],
+    ["Нёбные", [["च", "ca"], ["छ", "cha"], ["ज", "ja"], ["झ", "jha"], ["ञ", "ña"]]],
+    ["Ретрофлексные", [["ट", "ṭa"], ["ठ", "ṭha"], ["ड", "ḍa"], ["ढ", "ḍha"], ["ण", "ṇa"]]],
+    ["Зубные", [["त", "ta"], ["थ", "tha"], ["द", "da"], ["ध", "dha"], ["न", "na"]]],
+    ["Губные", [["प", "pa"], ["फ", "pha"], ["ब", "ba"], ["भ", "bha"], ["म", "ma"]]],
+    ["Полугласные", [["य", "ya"], ["र", "ra"], ["ल", "la"], ["व", "va"]]],
+    ["Шипящие / h", [["श", "śa"], ["ष", "ṣa"], ["स", "sa"], ["ह", "ha"]]],
+  ],
+  ligatures: [
+    ["ङ्ग", "ṅga", "часто путают с ज्ञ"],
+    ["ज्ञ", "jña", "не ङ्ग"],
+    ["ङ्क", "ṅka", ""],
+    ["ङ्ख", "ṅkha", ""],
+    ["ङ्घ", "ṅgha", ""],
+    ["ञ्ज", "ñja", ""],
+    ["ञ्च", "ñca", ""],
+    ["ट्ट", "ṭṭa", ""],
+    ["द्ध", "ddha", ""],
+    ["त्त", "tta", ""],
+    ["त्र", "tra", ""],
+    ["त्व", "tva", ""],
+    ["द्य", "dya", ""],
+    ["द्व", "dva", ""],
+    ["न्न", "nna", ""],
+    ["प्र", "pra", ""],
+    ["ब्र", "bra", ""],
+    ["क्र", "kra", ""],
+    ["ग्र", "gra", ""],
+    ["श्र", "śra", ""],
+    ["क्ष", "kṣa", ""],
+    ["क्त", "kta", ""],
+    ["प्त", "pta", ""],
+    ["श्च", "śca", ""],
+    ["ष्ठ", "ṣṭha", ""],
+    ["स्त", "sta", ""],
+    ["स्व", "sva", ""],
+    ["ह्म", "hma", ""],
+    ["ह्य", "hya", ""],
+    ["ऽ", "avagraha", "не размножать ऽऽऽ"],
+    ["ॐ", "oṃ", ""],
+    ["।", "daṇḍa", ""],
+    ["॥", "double daṇḍa", ""],
+  ],
+};
+
+async function copySaChar(ch, iast) {
+  try {
+    await navigator.clipboard.writeText(ch);
+    toast(`Скопировано: ${ch}${iast ? ` (${iast})` : ""}`);
+  } catch (_) {
+    toast("Не удалось скопировать", true);
+  }
+}
+
+function saPairButtons(pairs) {
+  return pairs
+    .map(
+      ([sa, iast]) =>
+        `<button type="button" class="sa-chip" data-sa="${escapeHtml(sa)}" data-iast="${escapeHtml(iast)}" title="${escapeHtml(iast)}">` +
+        `<span class="sa">${escapeHtml(sa)}</span><span class="iast">${escapeHtml(iast)}</span></button>`
+    )
+    .join("");
+}
+
+function renderSaChart() {
+  const box = $("#sa-chart");
+  if (!box || box.dataset.ready === "1") return;
+  let html = `<p class="muted sa-chart-hint">Клик по ячейке — копирует <strong>деванагари</strong> (для HTML и заданий). IAST — подсказка.</p>`;
+  html += `<section><h3>Гласные (самостоятельные)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.vowels)}</div></section>`;
+  html += `<section><h3>Матрā (знаки гласных / вирама)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.matras)}</div></section>`;
+  html += `<section><h3>Согласные (знак · IAST)</h3>`;
+  for (const [group, pairs] of SA_CHART.consonants) {
+    html += `<h4>${escapeHtml(group)}</h4><div class="sa-chip-row">${saPairButtons(pairs)}</div>`;
+  }
+  html += `</section>`;
+  html += `<section><h3>Частые лигатуры / знаки</h3><div class="sa-chip-row">`;
+  html += SA_CHART.ligatures
+    .map(
+      ([sa, iast, note]) =>
+        `<button type="button" class="sa-chip" data-sa="${escapeHtml(sa)}" data-iast="${escapeHtml(iast)}" title="${escapeHtml(note || iast)}">` +
+        `<span class="sa">${escapeHtml(sa)}</span><span class="iast">${escapeHtml(iast)}</span>` +
+        (note ? `<span class="note">${escapeHtml(note)}</span>` : "") +
+        `</button>`
+    )
+    .join("");
+  html += `</div></section>`;
+  box.innerHTML = html;
+  box.onclick = (ev) => {
+    const btn = ev.target.closest(".sa-chip");
+    if (!btn) return;
+    copySaChar(btn.dataset.sa || "", btn.dataset.iast || "");
+  };
+  box.dataset.ready = "1";
 }
 
 async function loadPage(pageId) {

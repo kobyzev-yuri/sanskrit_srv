@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260805e" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260805f" />
 </head>
 <body>
   <div class="app-shell">
@@ -123,6 +123,7 @@
                   <div class="tabs">
                     <button type="button" class="tab active" data-tab="preview">Превью</button>
                     <button type="button" class="tab" data-tab="source">HTML</button>
+                    <button type="button" class="tab" data-tab="chart">Справочник</button>
                   </div>
                   <span class="muted sa">देवनागरी</span>
                 </header>
@@ -131,6 +132,9 @@
                 </div>
                 <div id="tab-source" class="tab-panel">
                   <textarea id="html-editor" spellcheck="false" placeholder="HTML черновик страницы…"></textarea>
+                </div>
+                <div id="tab-chart" class="tab-panel">
+                  <div id="sa-chart" class="sa-chart" aria-label="Справочник Devanagari для копирования"></div>
                 </div>
                 <div id="accepted-box" class="directive-box" hidden>
                   <p style="margin:0">Страница <strong>согласована</strong>. Чтобы править — отзовите согласие. PDF доступен всегда.</p>
@@ -195,6 +199,6 @@
     </main>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260805d"></script>
+  <script src="/assets/app.js?v=20260805f"></script>
 </body>
 </html>
