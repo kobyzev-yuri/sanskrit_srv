@@ -75,7 +75,8 @@ FIGURES:
 - Embedded figures if listed: <img data-fig="N" alt="..." />.
 - Never crop the entire page as a figure.
 
-Return ONLY a raw HTML fragment (no markdown, no commentary).
+Return ONLY a raw HTML fragment starting with <article …> (no markdown, no commentary, no English step-by-step).
+Do not narrate your judgment — encode it in classes and emit HTML immediately.
 Allowed classes: page-style, type-sm, type-md, type-lg, lh-tight, lh-normal, lh-loose, narrow, indent, shloka, centered, compact, running-head, page-num, footer, scan-crop, page-figure, toc, data-box, data-fig.
 """
 
@@ -142,18 +143,23 @@ def revise_from_scan(
         parts.append(
             "Embedded figures available (use <img data-fig=\"N\" />): " + figs
         )
-    if current_html and current_html.strip():
+    if current_html and looks_like_page_html(current_html):
         parts.append(
             "Current draft HTML (may be incomplete/wrong — fix from the scan; "
             "strip any style=/flex/float and rebuild line-by-line with classes only):\n"
             + current_html.strip()
+        )
+    elif current_html and current_html.strip():
+        parts.append(
+            "Previous draft was invalid (reasoning/garbage). Ignore it and produce fresh HTML from the scan."
         )
     if directive and directive.strip():
         parts.append("Editor directive (follow carefully):\n" + directive.strip())
     else:
         parts.append(
             "Produce a complete layout-faithful draft for the whole page "
-            "(line-by-line classes only; no inline CSS)."
+            "(line-by-line classes only; no inline CSS). "
+            "Output ONLY the HTML fragment — no English commentary, no step lists."
         )
     user_text = "\n\n".join(parts)
 
