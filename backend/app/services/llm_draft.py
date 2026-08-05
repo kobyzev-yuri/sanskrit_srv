@@ -81,9 +81,13 @@ Allowed classes: page-style, type-sm, type-md, type-lg, lh-tight, lh-normal, lh-
 """
 
 GARBAGE_ANYWHERE = re.compile(
-    r"Let's look at the image|Wait, the|No markdown|```html|thinking",
+    r"Let's look at the image|Wait, the|No markdown|```html|"
+    r"\bthinking\b|The user wants me to|I need to follow these steps|"
+    r"Judge the scan|Address specific constraints|silently judge|"
+    r"Conflict with the horizontal header|strict interpretation",
     re.I,
 )
+AVAGRAHA_RUN = re.compile(r"ऽ{4,}")
 
 
 def image_to_jpeg_b64(path: Path, max_px: int = 1600) -> str:
@@ -100,15 +104,47 @@ def extract_html_only(text: str) -> str:
     text = text.strip()
     text = re.sub(r"^```(?:html)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
+    low = text.lower()
+    start = low.find("<article")
+    if start < 0:
+        start = low.find("<div")
+    if start < 0:
+        start = low.find("<p")
+    if start > 0:
+        text = text[start:]
+    end = max(text.rfind("</article>"), text.rfind("</div>"))
+    if end > 0:
+        close = text.find(">", end)
+        if close > 0:
+            text = text[: close + 1]
     return text.strip()
+
+
+def looks_like_page_html(html: str) -> bool:
+    h = (html or "").strip()
+    if not h or h.count("<") < 2:
+        return False
+    if GARBAGE_ANYWHERE.search(h):
+        return False
+    if AVAGRAHA_RUN.search(h):
+        return False
+    low = h.lower()
+    return "<article" in low or ("<p" in low and "class=" in low)
 
 
 def validate_html(html: str) -> str:
     cleaned = extract_html_only(html)
     if GARBAGE_ANYWHERE.search(cleaned):
         raise ValueError("response looks like reasoning, not HTML")
+    if AVAGRAHA_RUN.search(cleaned):
+        raise ValueError("response has broken avagraha run")
     if cleaned.count("<") < 2:
         raise ValueError("response has too few HTML tags")
+    if "<article" not in cleaned.lower() and cleaned.count("<p") < 2:
+        raise ValueError("response is not a page HTML fragment")
+    dev = sum(1 for c in cleaned if "\u0900" <= c <= "\u097f")
+    if dev < 8 and "page-style" not in cleaned:
+        raise ValueError("response lacks Devanagari page content")
     return cleaned
 
 
