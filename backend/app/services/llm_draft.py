@@ -74,15 +74,14 @@ TEXT:
 
 FIDELITY OVER MEMORY (critical — this is diplomatic transcription, not editing):
 - Encode ONLY what is printed on THIS scan. Do NOT substitute a "standard", "correct", dictionary, GRETIL, or remembered mantra spelling.
-- Familiar hymns are the highest risk: you will "know" गणपतिं हवामहे / ॐ गणानां त्वा… — if the plate prints गणपतिगुंँ / गुंँ / ँ / ꣳ / ऋतग्म् / etc., keep the plate, even when it looks non-Classical.
-- Same rule for rare or "wrong-looking" words (ऋतग्म-, odd sandhi, old orthography): leave them; do not silently normalize.
+- Familiar hymns are the highest risk: you will "know" गणपतिं हवामहे / ॐ गणानां त्वा… — if the plate prints गणपतिग्ं / ऋतग्ं / ग्ं / etc., keep the plate, even when it looks non-Classical.
+- Same rule for rare or "wrong-looking" words (ऋतग्ं-, odd sandhi, old orthography): leave them; do not silently normalize.
 - Never insert an extra akṣara to "repair" sandhi or word division. Classic false add: plate मीश्वरस्सर्व- / मीश्वर-स्सर्व- misread as मीश्वर-रस्सर्व- (spurious र before स्). Hyphens only where the plate has them; no invented र / रा / य / व for sandhi.
-- Never "fix" nasalization to the textbook form you recall. Scan गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed.
-- Hard ban: do NOT rewrite गणपतिगुंँ → गणपतिं (or any …गुंँ / …गँ → …ं). If unsure between ं and गुंँ/ँ/ꣳ, prefer the longer / more marked form visible on the plate, never the dictionary anusvāra.
+- Never "fix" nasalization to the textbook form you recall. Scan ग्ं / गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed.
+- Hard ban: do NOT rewrite …ग्ं → classical …ं on the previous syllable (wrong: गणपतिग्ं → गणपतिं, ऋतग्ं → ऋतं). Prefer the marked gum form on the plate, never the dictionary anusvāra.
 - Gold examples from mantra plates (keep nasals exactly; omit ॑/॒ in output per tone policy below):
-  - plate …गणपतिगुंँ… / …पतिगुं… → HTML …गणपतिगुंँ… (or …गुं… if no ँ on the plate) — NOT गणपतिं
-  - plate …ऋतग्ं… (ग + ् + ं, half-ga with anusvāra — another Vedic "gum" spelling) → HTML …ऋतग्ं… — NOT ऋतं / ऋतगुंँ / ऋतꣳ / ऋतम्
-  - Do not unify different gum spellings: गुंँ and ग्ं are not interchangeable; copy whichever the plate has.
+  - plate …गणपतिग्ं… (ग + ् + ं) → HTML …गणपतिग्ं… — NOT गणपतिं / गणपतिगुंँ
+  - plate …ऋतग्ं… (same half-ga + anusvāra gum) → HTML …ऋतग्ं… — NOT ऋतं / ऋतगुंँ / ऋतꣳ / ऋतम्
 
 DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña).
@@ -91,7 +90,7 @@ DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - ज्ञ = ज् + ञ (jña). ङ्ग = ङ् + ग (ṅga). They look different; prefer the scan, not a familiar wrong word.
 - Final consonant / nasal: if the scan shows explicit म् / न् etc., keep the virama form; use anusvāra ं (or Vedic ꣳ) only when the scan has that mark.
 - Do not invent an extra ग after anusvāra: wrong एकहंगसः vs correct एकहंसः / एकहꣳसः (haṃsaḥ — anusvāra on ह, then स, no ङ्ग).
-- Vedic nasal "gum" / candrabindu: scan गणपतिगुंँ हवामहे must stay गणपतिगुंँ — NEVER rewrite as गणपतिं हवामहे (dictionary anusvāra). Keep ँ / गुंँ / ꣳ as printed.
+- Vedic nasal "gum" as half-ga + anusvāra: scan गणपतिग्ं / ऋतग्ं must stay …ग्ं — NEVER rewrite as गणपतिं / ऋतं (dictionary anusvāra). Do not "improve" ग्ं into गुंँ / ँ / ꣳ unless that is what the plate shows.
 - Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
 
 VEDIC SVARA / TONE MARKS — OMIT ENTIRELY:
@@ -250,7 +249,7 @@ def revise_from_scan(
             "Current draft HTML (may be incomplete/wrong — fix from the scan; "
             "strip any style=/flex/float and rebuild line-by-line with classes only). "
             "Distrust dictionary spellings in this draft: re-read nasals from the scan "
-            "(keep गुंँ if printed, do not keep गणपतिं from memory). "
+            "(keep गणपतिग्ं / ऋतग्ं if printed, do not keep गणपतिं / ऋतं from memory). "
             "Strip any ॑/॒ — tones are not used in drafts:\n"
             + current_html.strip()
         )
