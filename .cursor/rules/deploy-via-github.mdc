@@ -1,0 +1,13 @@
+---
+description: Ship sanskrit_srv via git push to GitHub; deploy runs on VPS through Actions
+alwaysApply: true
+---
+
+# Deploy path
+
+Prefer **commit → `git push origin main` → GitHub Actions → VPS**, not ad-hoc `scp`/`rsync`/`ssh` edits on the server.
+
+- Repo: `sanskrit_srv` (`origin` → GitHub). Workflow: `.github/workflows/deploy.yml` (push to `main` under `backend/**`, `frontend/**`, `deploy/**`, or `workflow_dispatch`).
+- After finishing a shippable change set: commit (when the user wants it shipped), push `main`, then check Actions until Deploy succeeds.
+- Do not patch `/opt/sanskrit_srv` over SSH unless Actions is broken or the user explicitly asks for a hot-fix; if you must, say so and still sync the same change into git.
+- Never commit `.env`, `storage/`, or `data/`.

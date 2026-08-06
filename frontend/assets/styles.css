@@ -310,7 +310,7 @@ textarea {
   color: #f3ebe0;
   margin-left: 0.15rem;
 }
-.reader-actions { display: flex; gap: 0.4rem; }
+.reader-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
 .editor-layout {
   display: grid;
@@ -416,8 +416,8 @@ textarea {
 .html-preview .type-sm { font-size: 0.95rem; }
 .html-preview .type-md { font-size: 1.08rem; }
 .html-preview .type-lg { font-size: 1.22rem; }
-.html-preview .lh-tight { line-height: 1.35; }
-.html-preview .lh-normal { line-height: 1.55; }
+.html-preview .lh-tight { line-height: 1.4; }
+.html-preview .lh-normal { line-height: 1.6; }
 .html-preview .lh-loose { line-height: 1.85; }
 .html-preview .compact p { margin: 0.35rem 0; }
 .html-preview .indent { text-indent: 1.5em; }

@@ -589,6 +589,20 @@ const SA_CHART = {
     ["ॢ", "ḷ"], ["े", "e"], ["ै", "ai"], ["ो", "o"], ["ौ", "au"],
     ["ं", "ṃ anusvāra"], ["ँ", "̃ candrabindu"], ["ꣳ", "Vedic ṃ"], ["ः", "ḥ"], ["्", "virāma"],
   ],
+  /** Vedic tone marks — append after the marked syllable (य + ॒ → य॒). */
+  svara: [
+    ["॑", "U+0951 выше (svarita/udātta)"],
+    ["॒", "U+0952 ниже (anudātta)"],
+    ["य॑", "ya + ॑"],
+    ["य॒", "ya + ॒"],
+    ["त॑", "ta + ॑"],
+    ["त॒", "ta + ॒"],
+    ["वि॒", "vi + ॒"],
+    ["रे॑", "re + ॑"],
+    ["ण्यं॒", "ṇyaṃ + ॒"],
+    ["गो॑", "go + ॑"],
+    ["य॒ज्ञेन॑", "пример yajñena"],
+  ],
   withAnusvara: [
     ["कं", "kaṃ"], ["खं", "khaṃ"], ["गं", "gaṃ"], ["घं", "ghaṃ"], ["ङं", "ṅaṃ"],
     ["चं", "caṃ"], ["जं", "jaṃ"], ["ञं", "ñaṃ"],
@@ -699,6 +713,9 @@ function renderSaChart() {
   let html = `<p class="muted sa-chart-hint">Клик по ячейке — копирует <strong>деванагари</strong> (для HTML и заданий). IAST — подсказка.</p>`;
   html += `<section><h3>Гласные (самостоятельные)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.vowels)}</div></section>`;
   html += `<section><h3>Матрā (знаки гласных / вирама / анусвара)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.matras)}</div></section>`;
+  html += `<section><h3>Ведийские тоны (svara)</h3>`;
+  html += `<p class="muted sa-chart-hint">Вставлять <strong>после</strong> слога. ॑ — чёрточка сверху, ॒ — снизу. Не путать с подчёркиванием слова.</p>`;
+  html += `<div class="sa-chip-row">${saPairButtons(SA_CHART.svara)}</div></section>`;
   html += `<section><h3>Согласная + анусвара (клик = копировать слог)</h3><div class="sa-chip-row">${saPairButtons(SA_CHART.withAnusvara)}</div></section>`;
   html += `<section><h3>Согласные (знак · IAST)</h3>`;
   for (const [group, pairs] of SA_CHART.consonants) {
@@ -911,32 +928,61 @@ async function startPipeline() {
   }
 }
 
-async function exportPdf(mode = "text") {
+async function exportDocument(fmt = "pdf", mode = "text", { rebuild = false } = {}) {
   if (!state.project) return;
+  const ext = fmt === "docx" ? "docx" : "pdf";
+  const kind = fmt === "docx" ? "DOCX" : "PDF";
   try {
-    toast(mode === "interleave" ? "Собираем PDF (скан‖текст)…" : "Собираем PDF…");
-    const q = mode === "interleave" ? "?mode=interleave" : "";
-    const res = await fetch(`${API}/projects/${state.project.id}/export.pdf${q}`, {
-      headers: { Authorization: `Bearer ${state.token}` },
-    });
+    const label =
+      mode === "interleave" ? `${kind} (скан‖текст)` : kind;
+    toast(
+      rebuild
+        ? `Собираем ${label} (может занять 1–2 мин)…`
+        : `Скачиваем ${label}…`
+    );
+    const params = new URLSearchParams();
+    if (mode === "interleave") params.set("mode", "interleave");
+    if (rebuild) params.set("rebuild", "1");
+    const q = params.toString() ? `?${params}` : "";
+    const res = await fetch(
+      `${API}/projects/${state.project.id}/export.${ext}${q}`,
+      { headers: { Authorization: `Bearer ${state.token}` } }
+    );
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      throw new Error(j.detail || res.statusText);
+      const detail = j.detail;
+      throw new Error(
+        typeof detail === "string" ? detail : detail?.message || res.statusText
+      );
     }
     const blob = await res.blob();
+    if (!blob.size) throw new Error(`Пустой ${kind} — пересоберите (Shift+клик)`);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download =
       mode === "interleave"
-        ? `${state.project.slug}-interleave.pdf`
-        : `${state.project.slug}.pdf`;
+        ? `${state.project.slug}-interleave.${ext}`
+        : `${state.project.slug}.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
-    toast("PDF скачан");
+    toast(rebuild ? `${kind} собран и скачан` : `${kind} скачан`);
   } catch (e) {
-    toast(e.message, true);
+    const raw = String(e.message || e);
+    const msg =
+      raw === "Failed to fetch"
+        ? "Связь оборвалась при сборке/скачивании. Подождите и нажмите снова (готовый файл скачается быстро). Пересборка: Shift+клик."
+        : raw;
+    toast(msg, true);
   }
+}
+
+async function exportPdf(mode = "text", opts = {}) {
+  return exportDocument("pdf", mode, opts);
+}
+
+async function exportDocx(mode = "text", opts = {}) {
+  return exportDocument("docx", mode, opts);
 }
 
 async function loadAdmin() {
@@ -992,8 +1038,17 @@ function wire() {
   $("#btn-revise").onclick = revisePage;
   $("#btn-review-again").onclick = reviewAgain;
   $("#btn-start-pipeline").onclick = startPipeline;
-  $("#btn-export-pdf").onclick = () => exportPdf("text");
-  $("#btn-export-interleave").onclick = () => exportPdf("interleave");
+  $("#btn-export-pdf").onclick = (e) => exportPdf("text", { rebuild: e.shiftKey });
+  $("#btn-export-interleave").onclick = (e) =>
+    exportPdf("interleave", { rebuild: e.shiftKey });
+  $("#btn-export-interleave").title =
+    "Скан и текст чередуются. Shift+клик — пересобрать заново.";
+  $("#btn-export-docx").onclick = (e) => exportDocx("text", { rebuild: e.shiftKey });
+  $("#btn-export-docx-interleave").onclick = (e) =>
+    exportDocx("interleave", { rebuild: e.shiftKey });
+  $("#btn-export-docx-interleave").title =
+    "DOCX: скан и текст чередуются. Shift+клик — пересобрать заново.";
+  $("#btn-export-docx").title = "DOCX из HTML. Shift+клик — пересобрать заново.";
   const thumbFilter = $("#thumb-filter-open");
   if (thumbFilter) {
     thumbFilter.checked = state.thumbFilter === "open";

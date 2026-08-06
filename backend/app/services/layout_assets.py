@@ -155,6 +155,9 @@ def finalize_page_html(
     page_no: int,
     page_id: uuid.UUID,
 ) -> str:
+    from app.services.llm_draft import normalize_vedic_marks
+
+    html = normalize_vedic_marks(html or "")
     html = rewrite_embedded_fig_srcs(html, page_id)
     if scan_path and Path(scan_path).exists():
         html = materialize_scan_crops(html, Path(scan_path), project_id, page_no, page_id)

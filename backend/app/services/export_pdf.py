@@ -1,11 +1,14 @@
 """Build a downloadable PDF from project page HTML (PyMuPDF Story).
 
-Visual language: Shaivite — vibhuti ash, rudraksha brown, tripundra rules, ॐ.
 Modes: text (HTML only) | interleave (scan page then HTML for each source page).
+
+Scans are embedded via insert_image (Story file:// imgs break). Devanagari fonts
+come from an Archive over the system Noto tree. No page chrome / tripundra overlays.
 """
 from __future__ import annotations
 
 import re
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -13,73 +16,77 @@ import fitz
 
 from app.services.storage import ensure_dirs
 
-# Cream parchment · book measure · typography classes from LLM
+# Compact book measure: dense Devanagari scans need ~8pt on a page
+# slightly taller than A5 so one source page → one PDF page.
 CSS = """
 body {
   font-family: "Noto Serif Devanagari", "Noto Sans Devanagari", "FreeSerif", serif;
-  font-size: 10pt;
-  line-height: 1.5;
+  font-size: 8pt;
+  /* ≥1.4 so anudātta (॒) below does not collide with the next line */
+  line-height: 1.42;
   color: #1a1814;
   background-color: #f7f2e8;
 }
-.cover { text-align: center; margin: 0.6em 0 0.2em; }
-.cover-mantra {
-  font-family: "Noto Serif Devanagari", "Noto Sans Devanagari", serif;
-  font-size: 13pt; color: #3d2914; margin: 0.4em 0 0.35em;
-}
-.cover-title { font-size: 17pt; font-weight: 700; color: #1a1814; margin: 0.5em 0 0.2em; line-height: 1.25; }
+p { margin: 0.18em 0; }
+.cover { text-align: center; margin: 1em 0 0.3em; }
+.cover-title { font-size: 13pt; font-weight: 700; color: #1a1814; margin: 0.4em 0 0.15em; line-height: 1.25; }
 .cover-title-sa {
   font-family: "Noto Serif Devanagari", "Noto Sans Devanagari", serif;
-  font-size: 13pt; color: #5c3d2e; margin: 0.1em 0 0.55em;
+  font-size: 10.5pt; color: #5c3d2e; margin: 0.1em 0 0.45em;
 }
-.cover-mark {
-  font-family: "Noto Serif Devanagari", "Noto Sans Devanagari", serif;
-  font-size: 10pt; color: #6b6560; margin: 0.4em 0;
-}
-.cover-brand { font-size: 8.5pt; color: #6b6560; margin-top: 0.9em; }
-.tri-line {
-  margin: 0.12em auto; width: 38%; height: 0; border: none; border-top: 1.15pt solid #5a5550;
-}
-.tri-line.mid { border-top-color: #8b3a2a; border-top-width: 1.6pt; width: 34%; margin: 0.18em auto; }
-.page, .page-style { margin: 0 auto; max-width: 92%; }
-.narrow { max-width: 78%; margin-left: auto; margin-right: auto; }
-.type-sm { font-size: 9pt; }
-.type-md { font-size: 10pt; }
-.type-lg { font-size: 11.5pt; }
-.lh-tight { line-height: 1.32; }
-.lh-normal { line-height: 1.5; }
-.lh-loose { line-height: 1.78; }
-.compact p { margin: 0.25em 0; }
-.indent { text-indent: 1.4em; }
+.cover-brand { font-size: 7.5pt; color: #6b6560; margin-top: 1em; }
+.page, .page-style { margin: 0 auto; max-width: 96%; }
+.narrow { max-width: 84%; margin-left: auto; margin-right: auto; }
+.type-sm { font-size: 7pt; }
+.type-md { font-size: 8pt; }
+.type-lg { font-size: 9pt; }
+.lh-tight { line-height: 1.28; }
+.lh-normal { line-height: 1.42; }
+.lh-loose { line-height: 1.62; }
+.compact p { margin: 0.1em 0; }
+.indent { text-indent: 1.2em; }
 h1 {
-  text-align: center; font-size: 12.5pt; margin: 0.15em 0 0.55em; color: #3d2914; line-height: 1.35;
+  text-align: center; font-size: 10.5pt; margin: 0.1em 0 0.35em; color: #3d2914; line-height: 1.3;
 }
 h1.sa, .sa, span.sa, p.sa, footer.sa {
   font-family: "Noto Serif Devanagari", "Noto Sans Devanagari", serif;
 }
 .shloka, p.shloka {
-  text-align: center; margin: 0.4em auto; max-width: 85%; line-height: inherit; color: #1a1814;
+  text-align: center; margin: 0.28em auto; max-width: 88%; line-height: inherit; color: #1a1814;
 }
-.running-head { text-align: center; font-size: 9pt; color: #6b6560; margin: 0 0 0.5em; }
+.running-head { text-align: center; font-size: 7.5pt; color: #6b6560; margin: 0 0 0.35em; }
 .centered { text-align: center; }
-.page-num { text-align: center; font-size: 9pt; color: #6b6560; margin-top: 0.8em; }
+.page-num { text-align: center; font-size: 7.5pt; color: #6b6560; margin-top: 0.5em; }
 .page-break { page-break-before: always; }
 footer, .footer {
-  text-align: center; margin-top: 0.8em; font-size: 9pt; color: #6b6560;
+  text-align: center; margin-top: 0.5em; font-size: 7.5pt; color: #6b6560;
 }
-figure.page-figure { text-align: center; margin: 0.6em 0; }
-figure.page-figure img { max-width: 90%; }
-table { width: 100%; border-collapse: collapse; margin: 0.45em 0; }
-td, th { border: 0.6pt solid #c4b8a8; padding: 0.12em 0.28em; }
+img { max-width: 88%; max-height: 280pt; }
+figure.page-figure { text-align: center; margin: 0.3em 0; }
+figure.page-figure img { max-width: 85%; max-height: 260pt; }
+table { width: 100%; border-collapse: collapse; margin: 0.3em 0; font-size: inherit; }
+td, th { border: 0.5pt solid #c4b8a8; padding: 0.08em 0.2em; }
 th { background: #efe6d8; color: #3d2914; }
-.scan-plate { text-align: center; margin: 0; }
-.scan-plate img { max-width: 100%; }
 """
+
+# Fallback when no scan aspect is available (Indian crown-ish; taller than A5).
+_PAGE_W = 412.0
+_PAGE_H = 612.0
+_MARGIN = 14  # Story content inset on each side
 
 _API_IMG_RE = re.compile(
     r'src=["\']/api/v1/pages/([0-9a-fA-F-]{36})/figures/([^"\']+)["\']',
     re.I,
 )
+
+_FONT_DIRS = (
+    "/usr/share/fonts/truetype/noto",
+    "/usr/share/fonts/noto",
+)
+
+# Cap scan plate long side so 600+ page interleave fits small VPS RAM/disk.
+_SCAN_MAX_PX = 1400
+_SCAN_JPEG_Q = 78
 
 
 def build_project_pdf(
@@ -100,158 +107,181 @@ def build_project_pdf(
     if mode not in ("text", "interleave"):
         mode = "text"
 
-    cover = _cover_html(title, title_sa)
-    parts = [cover]
-    body_n = 0
-    for page_no, html, scan_path in pages:
-        frag = (html or "").strip()
-        if not frag and mode == "text":
-            continue
-        if mode == "interleave" and scan_path and Path(scan_path).is_file():
-            parts.append(
-                "<div class='page-break'></div>"
-                f"<section class='scan-plate' data-page='{page_no}'>"
-                f"<img src='{_file_uri(Path(scan_path))}' />"
-                "</section>"
-            )
-            body_n += 1
-        if frag:
-            frag = _rewrite_img_srcs_for_pdf(frag, project_id, page_no)
-            parts.append(
-                f"<div class='page-break'></div>"
-                f"<section class='page' data-page='{page_no}'>{frag}</section>"
-            )
-            body_n += 1
-    if body_n == 0:
-        parts.append(
-            "<div class='page-break'></div>"
-            "<p class='centered'>(нет страниц с текстом для выгрузки)</p>"
-        )
-
-    doc_html = (
-        "<html><head><meta charset='utf-8'></head>"
-        f"<body>{''.join(parts)}</body></html>"
-    )
     out_dir = ensure_dirs() / "exports" / str(project_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = "-interleave" if mode == "interleave" else ""
     out_path = out_dir / f"{slug}{suffix}.pdf"
 
-    mediabox = fitz.paper_rect("a5")
-    where = mediabox + (30, 34, -30, -32)
-    story = fitz.Story(html=doc_html, user_css=CSS)
-    writer = fitz.DocumentWriter(out_path.as_posix())
-    more = True
-    while more:
-        device = writer.begin_page(mediabox)
-        more, _ = story.place(where)
-        story.draw(device)
-        writer.end_page()
-    writer.close()
+    mediabox = _mediabox_for_pages(pages)
+    doc = fitz.open()
+    body_n = 0
 
-    _decorate_shaiva_pages(out_path)
+    cover_doc = _html_to_doc(_cover_html(title, title_sa), mediabox)
+    doc.insert_pdf(cover_doc)
+    cover_doc.close()
+
+    for page_no, html, scan_path in pages:
+        frag = (html or "").strip()
+        if not frag and mode == "text":
+            continue
+
+        if mode == "interleave" and scan_path and Path(scan_path).is_file():
+            _append_scan_page(doc, mediabox, Path(scan_path))
+            body_n += 1
+
+        if frag:
+            frag, arch_extra = _rewrite_img_srcs_for_pdf(frag, project_id, page_no)
+            text_html = f"<section class='page' data-page='{page_no}'>{frag}</section>"
+            text_doc = _html_to_doc(text_html, mediabox, extra_archive=arch_extra)
+            doc.insert_pdf(text_doc)
+            text_doc.close()
+            body_n += 1
+
+    if body_n == 0:
+        empty = _html_to_doc("<p class='centered'>(нет страниц с текстом для выгрузки)</p>", mediabox)
+        doc.insert_pdf(empty)
+        empty.close()
+
+    tmp_out = out_path.with_suffix(f".{uuid.uuid4().hex}.tmp.pdf")
+    doc.save(tmp_out.as_posix(), garbage=3, deflate=True)
+    doc.close()
+    tmp_out.replace(out_path)
     return out_path
 
 
-def _file_uri(path: Path) -> str:
-    return path.resolve().as_uri()
+def _mediabox_for_pages(pages: list[tuple[int, str, str | None]]) -> fitz.Rect:
+    """Pick page size from the first scan's aspect (width≈source book).
+
+    A5 (420×595) is shorter than many Indian scans (~411×612), which forced
+    dense pages to spill onto a second PDF sheet.
+    """
+    for _, _, scan_path in pages:
+        if not scan_path:
+            continue
+        path = Path(scan_path)
+        if not path.is_file():
+            continue
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                w, h = img.size
+            if w > 0 and h > 0:
+                width = _PAGE_W
+                height = width * (h / w)
+                height = max(560.0, min(height, 700.0))
+                return fitz.Rect(0, 0, width, height)
+        except Exception:  # noqa: BLE001
+            continue
+    return fitz.Rect(0, 0, _PAGE_W, _PAGE_H)
 
 
-def _rewrite_img_srcs_for_pdf(html: str, project_id: uuid.UUID, page_no: int) -> str:
-    """Map /api/.../figures/name to file:// under storage."""
+def _font_archive(extra: fitz.Archive | None = None) -> fitz.Archive:
+    roots = [d for d in _FONT_DIRS if Path(d).is_dir()]
+    arch = fitz.Archive(*roots) if roots else fitz.Archive()
+    if extra is not None:
+        arch.add(extra)
+    return arch
+
+
+def _html_to_doc(
+    body_html: str,
+    mediabox: fitz.Rect,
+    *,
+    extra_archive: fitz.Archive | None = None,
+) -> fitz.Document:
+    """Render a body fragment to an in-memory PDF Document via Story."""
+    doc_html = (
+        "<html><head><meta charset='utf-8'></head>"
+        f"<body>{body_html}</body></html>"
+    )
+    m = _MARGIN
+    where = mediabox + (m, m, -m, -m)
+    story = fitz.Story(html=doc_html, user_css=CSS, archive=_font_archive(extra_archive))
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        writer = fitz.DocumentWriter(tmp_path.as_posix())
+        more = True
+        while more:
+            device = writer.begin_page(mediabox)
+            more, _ = story.place(where)
+            story.draw(device)
+            writer.end_page()
+        writer.close()
+        doc = fitz.open(tmp_path.as_posix())
+        mem = fitz.open()
+        mem.insert_pdf(doc)
+        doc.close()
+        return mem
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _append_scan_page(doc: fitz.Document, mediabox: fitz.Rect, scan_path: Path) -> None:
+    """Append one page with the scan image (JPEG-compressed, downscaled)."""
+    page = doc.new_page(width=mediabox.width, height=mediabox.height)
+    rect = page.rect  # full-bleed — no chrome margins
+    stream = _scan_jpeg_bytes(scan_path)
+    if stream:
+        page.insert_image(rect, stream=stream, keep_proportion=True)
+    else:
+        page.insert_image(rect, filename=scan_path.as_posix(), keep_proportion=True)
+
+
+def _scan_jpeg_bytes(scan_path: Path) -> bytes | None:
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(scan_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((_SCAN_MAX_PX, _SCAN_MAX_PX), Image.Resampling.LANCZOS)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=_SCAN_JPEG_Q, optimize=True)
+            return buf.getvalue()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _rewrite_img_srcs_for_pdf(
+    html: str, project_id: uuid.UUID, page_no: int
+) -> tuple[str, fitz.Archive | None]:
+    """Map /api/.../figures/name to archive aliases; return (html, archive|None)."""
     from app.services.layout_assets import figure_file
 
+    arch = fitz.Archive()
+    added = 0
+
     def repl(m: re.Match) -> str:
+        nonlocal added
         name = m.group(2)
         path = figure_file(project_id, page_no, name)
-        if path is None:
+        if path is None or not path.is_file():
             return m.group(0)
-        return f'src="{_file_uri(path)}"'
+        alias = f"fig-{page_no:04d}-{Path(name).name}"
+        try:
+            arch.add(path.as_posix(), alias)
+            added += 1
+        except Exception:  # noqa: BLE001
+            return m.group(0)
+        return f'src="{alias}"'
 
-    return _API_IMG_RE.sub(repl, html)
+    new_html = _API_IMG_RE.sub(repl, html)
+    return new_html, (arch if added else None)
 
 
 def _cover_html(title: str, title_sa: str | None) -> str:
     sa = (title_sa or "").strip()
     sa_block = f"<p class='cover-title-sa sa'>{_esc(sa)}</p>" if sa else ""
-    tri = (
-        '<hr class="tri-line" />'
-        '<hr class="tri-line mid" />'
-        '<hr class="tri-line" />'
-    )
     return f"""
 <section class="cover">
-  <p class="cover-mantra sa">ॐ नमः शिवाय</p>
-  {tri}
-  <p class="cover-mark sa">॥ शिवार्पणम् ॥</p>
   <h1 class="cover-title">{_esc(title)}</h1>
   {sa_block}
-  {tri}
-  <p class="cover-brand">Sanskrit SRV · शिवभक्त-ग्रन्थ</p>
+  <p class="cover-brand">Sanskrit SRV</p>
 </section>
 """
-
-
-def _deva_font() -> str | None:
-    candidates = [
-        "/usr/share/fonts/truetype/noto/NotoSerifDevanagari-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSerifDevanagari-Regular.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for p in candidates:
-        if Path(p).is_file():
-            return p
-    return None
-
-
-def _decorate_shaiva_pages(path: Path) -> None:
-    """Tripundra header + Om footer on every page (drawn in PDF space)."""
-    doc = fitz.open(path.as_posix())
-    ash = (0.35, 0.33, 0.31)
-    kumkum = (0.55, 0.22, 0.16)
-    ink = (0.28, 0.22, 0.16)
-    fontfile = _deva_font()
-    tmp = path.with_suffix(".shaiva.pdf")
-    for i, page in enumerate(doc):
-        r = page.rect
-        band = fitz.Rect(r.x0, r.y0, r.x1, 28)
-        page.draw_rect(band, color=None, fill=(0.97, 0.95, 0.91), overlay=True)
-        band_b = fitz.Rect(r.x0, r.y1 - 26, r.x1, r.y1)
-        page.draw_rect(band_b, color=None, fill=(0.97, 0.95, 0.91), overlay=True)
-
-        if i > 0:
-            y0 = 12.0
-            x0, x1 = r.x0 + 52, r.x1 - 52
-            page.draw_line(fitz.Point(x0, y0), fitz.Point(x1, y0), color=ash, width=0.7)
-            page.draw_line(fitz.Point(x0, y0 + 4), fitz.Point(x1, y0 + 4), color=kumkum, width=1.1)
-            page.draw_line(fitz.Point(x0, y0 + 8), fitz.Point(x1, y0 + 8), color=ash, width=0.7)
-
-        footer_y = r.y1 - 16
-        if fontfile:
-            page.insert_font(fontname="deva", fontfile=fontfile)
-            tw = (
-                fitz.get_text_length("ॐ", fontfile=fontfile, fontsize=9)
-                if hasattr(fitz, "get_text_length")
-                else 10
-            )
-            page.insert_text(
-                fitz.Point(r.width / 2 - tw / 2, footer_y),
-                "ॐ",
-                fontsize=9,
-                fontname="deva",
-                color=ink,
-            )
-        page.insert_text(
-            fitz.Point(r.x1 - 36, footer_y),
-            str(i + 1),
-            fontsize=8,
-            fontname="helv",
-            color=ash,
-        )
-    doc.save(tmp.as_posix(), garbage=3, deflate=True)
-    doc.close()
-    tmp.replace(path)
 
 
 def _esc(s: str) -> str:

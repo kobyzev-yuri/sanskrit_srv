@@ -15,6 +15,7 @@ from app.deps import get_current_user, require_roles
 from app.models import Job, JobStatus, Page, PageStatus, Project, Role, User
 from app.schemas import ExtractIn, JobOut, ProjectOut, ProjectSettingsIn, ProjectUsageOut
 from app.services import storage
+from app.services.export_docx import build_project_docx
 from app.services.export_pdf import build_project_pdf
 from app.services.llm_usage import project_usage_summary
 from app.services.pdf_extract import classify_pdf, extract_pages, pdf_page_count
@@ -248,38 +249,112 @@ def update_settings(
 def export_pdf(
     project_id: str,
     mode: str = "text",
+    rebuild: bool = False,
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Build PDF. mode=text (HTML) | interleave (scan then HTML per page)."""
+    """Build or download PDF. mode=text | interleave.
+
+    By default serves the last built file (fast). Pass rebuild=1 to regenerate
+    (can take minutes on a full book — avoid browser timeouts).
+    """
+    from pathlib import Path
+
+    from app.services.storage import ensure_dirs
+
     project = db.get(Project, _uid(project_id))
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
-    pages = list(
-        db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
-    )
-    payload = [
-        (p.page_no, p.current_html or "", p.scan_path)
-        for p in pages
-        if (p.current_html and p.current_html.strip()) or (mode == "interleave" and p.scan_path)
-    ]
-    if not payload:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No page text to export yet")
-    try:
-        path = build_project_pdf(
-            project.id,
-            project.slug,
-            project.title,
-            payload,
-            title_sa=project.title_sa,
-            mode=mode,
+    mode_n = (mode or "text").strip().lower()
+    if mode_n not in ("text", "interleave"):
+        mode_n = "text"
+    suffix = "-interleave" if mode_n == "interleave" else ""
+    filename = f"{project.slug}{suffix}.pdf"
+    path = ensure_dirs() / "exports" / str(project.id) / filename
+
+    if rebuild or not path.is_file() or path.stat().st_size < 1024:
+        pages = list(
+            db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
         )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"PDF failed: {exc}") from exc
-    filename = f"{project.slug}-interleave.pdf" if mode == "interleave" else f"{project.slug}.pdf"
+        payload = [
+            (p.page_no, p.current_html or "", p.scan_path)
+            for p in pages
+            if (p.current_html and p.current_html.strip()) or (mode_n == "interleave" and p.scan_path)
+        ]
+        if not payload:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No page text to export yet")
+        try:
+            path = build_project_pdf(
+                project.id,
+                project.slug,
+                project.title,
+                payload,
+                title_sa=project.title_sa,
+                mode=mode_n,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"PDF failed: {exc}"
+            ) from exc
+
     return FileResponse(
         path,
         media_type="application/pdf",
+        filename=filename,
+    )
+
+
+@router.get("/{project_id}/export.docx")
+def export_docx(
+    project_id: str,
+    mode: str = "text",
+    rebuild: bool = False,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Build or download DOCX. mode=text | interleave (same as PDF export)."""
+    from pathlib import Path
+
+    from app.services.storage import ensure_dirs
+
+    project = db.get(Project, _uid(project_id))
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    mode_n = (mode or "text").strip().lower()
+    if mode_n not in ("text", "interleave"):
+        mode_n = "text"
+    suffix = "-interleave" if mode_n == "interleave" else ""
+    filename = f"{project.slug}{suffix}.docx"
+    path = ensure_dirs() / "exports" / str(project.id) / filename
+
+    if rebuild or not path.is_file() or path.stat().st_size < 512:
+        pages = list(
+            db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+        )
+        payload = [
+            (p.page_no, p.current_html or "", p.scan_path)
+            for p in pages
+            if (p.current_html and p.current_html.strip()) or (mode_n == "interleave" and p.scan_path)
+        ]
+        if not payload:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No page text to export yet")
+        try:
+            path = build_project_docx(
+                project.id,
+                project.slug,
+                project.title,
+                payload,
+                title_sa=project.title_sa,
+                mode=mode_n,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"DOCX failed: {exc}"
+            ) from exc
+
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=filename,
     )
 

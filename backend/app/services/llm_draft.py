@@ -71,6 +71,19 @@ DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Do not invent an extra ग after anusvāra: wrong एकहंगसः vs correct एकहंसः / एकहꣳसः (haṃsaḥ — anusvāra on ह, then स, no ङ्ग).
 - Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
 
+VEDIC SVARA / TONE MARKS (critical for mantra / saṃhitā / padapāṭha pages):
+- If the scan shows tone marks, you MUST encode them. Do not drop accents to "simplify" the text.
+- Use ONLY these Devanagari stress signs (after the syllable they mark):
+  - ॑ U+0951 DEVANAGARI STRESS SIGN UDATTA — short vertical stroke ABOVE (svarita / udātta mark as printed)
+  - ॒ U+0952 DEVANAGARI STRESS SIGN ANUDATTA — short horizontal stroke BELOW (anudātta)
+- Examples: य॒ज्ञेन॑ = य + ॒ + ज्ञेन + ॑ ; तत्स॑वितुर्…
+- Anudātta on several consecutive syllables looks like a broken underline under those syllables — that is correct. Do NOT replace tones with HTML <u>, CSS underline, underscore _, or a single long bar.
+- FORBIDDEN substitutes (never emit these as tone marks):
+  U+0346 COMBINING BRIDGE ABOVE, U+0304 MACRON, U+0305 OVERLINE, U+0323 DOT BELOW,
+  U+0303 TILDE, U+0307 DOT ABOVE, or any Latin combining diacritic.
+- If a syllable has no mark on the scan, leave it unmarked (udātta is often unmarked).
+- When the scan is unclear, prefer omitting a doubtful mark over inventing Latin diacritics.
+
 FIGURES:
 - Ornaments/diagrams (not the full page): <figure class="scan-crop" data-box="x,y,w,h"></figure> with fractions 0-1.
 - Embedded figures if listed: <img data-fig="N" alt="..." />.
@@ -91,14 +104,50 @@ GARBAGE_ANYWHERE = re.compile(
 AVAGRAHA_RUN = re.compile(r"ऽ{4,}")
 
 
-def image_to_jpeg_b64(path: Path, max_px: int = 1600) -> str:
+def image_to_jpeg_b64(path: Path, max_px: int = 2048) -> str:
+    """JPEG for vision; 2048px helps fine Vedic accent strokes survive compression."""
     img = Image.open(path)
     if img.mode != "RGB":
         img = img.convert("RGB")
     img.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
+    img.save(buf, format="JPEG", quality=90)
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+# Latin / misc combining marks models invent instead of U+0951 / U+0952.
+_FAKE_SVARA_ABOVE = dict.fromkeys(
+    (
+        "\u0346",  # COMBINING BRIDGE ABOVE
+        "\u0304",  # MACRON
+        "\u0305",  # OVERLINE
+        "\u0307",  # DOT ABOVE
+        "\u0303",  # TILDE
+        "\u0310",  # CANDRABINDU-like
+    ),
+    "\u0951",
+)
+_FAKE_SVARA_BELOW = dict.fromkeys(
+    (
+        "\u0323",  # DOT BELOW
+        "\u0331",  # MACRON BELOW
+        "\u0320",  # MINUS BELOW
+    ),
+    "\u0952",
+)
+_FAKE_SVARA_RE = re.compile(
+    "[" + re.escape("".join(_FAKE_SVARA_ABOVE) + "".join(_FAKE_SVARA_BELOW)) + "]"
+)
+
+
+def normalize_vedic_marks(html: str) -> str:
+    """Map common fake tone diacritics to U+0951 / U+0952; strip the rest of that set."""
+
+    def repl(m: re.Match[str]) -> str:
+        ch = m.group(0)
+        return _FAKE_SVARA_ABOVE.get(ch) or _FAKE_SVARA_BELOW.get(ch) or ""
+
+    return _FAKE_SVARA_RE.sub(repl, html)
 
 
 def extract_html_only(text: str) -> str:
@@ -134,7 +183,7 @@ def looks_like_page_html(html: str) -> bool:
 
 
 def validate_html(html: str) -> str:
-    cleaned = extract_html_only(html)
+    cleaned = normalize_vedic_marks(extract_html_only(html))
     if GARBAGE_ANYWHERE.search(cleaned):
         raise ValueError("response looks like reasoning, not HTML")
     if AVAGRAHA_RUN.search(cleaned):
