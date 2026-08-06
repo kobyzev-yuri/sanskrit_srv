@@ -12,6 +12,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_LINE_SPACING
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
 
@@ -22,7 +23,10 @@ _API_IMG_RE = re.compile(
     re.I,
 )
 
+# Prefer Noto when installed; Windows Word uses Nirmala UI for complex script.
 _FONT = "Noto Serif Devanagari"
+_CS_FONT = "Nirmala UI"
+_LATIN_FONT = "Calibri"
 _FALLBACK_FONT = "FreeSerif"
 _SCAN_MAX_PX = 1400
 _SCAN_JPEG_Q = 78
@@ -114,10 +118,12 @@ def _setup_styles(doc: Document) -> None:
     normal.paragraph_format.space_before = Pt(0)
     rpr = normal.element.get_or_add_rPr()
     rfonts = rpr.get_or_add_rFonts()
-    rfonts.set(qn("w:ascii"), _FONT)
-    rfonts.set(qn("w:hAnsi"), _FONT)
-    rfonts.set(qn("w:cs"), _FONT)
-    rfonts.set(qn("w:eastAsia"), _FONT)
+    rfonts.set(qn("w:ascii"), _LATIN_FONT)
+    rfonts.set(qn("w:hAnsi"), _LATIN_FONT)
+    rfonts.set(qn("w:cs"), _CS_FONT)
+    rfonts.set(qn("w:eastAsia"), _FALLBACK_FONT)
+    # Complex-script size (Devanagari) — Word ignores w:sz for Indic without this.
+    _set_sz_cs(rpr, _BODY_PT)
 
 
 def _add_cover(doc: Document, title: str, title_sa: str | None) -> None:
@@ -172,6 +178,14 @@ def _html_to_docx(
     parser.flush()
 
 
+def _set_sz_cs(rpr, size: float) -> None:
+    sz_cs = rpr.find(qn("w:szCs"))
+    if sz_cs is None:
+        sz_cs = OxmlElement("w:szCs")
+        rpr.append(sz_cs)
+    sz_cs.set(qn("w:val"), str(int(size * 2)))
+
+
 def _set_run(run, *, size: float = _BODY_PT, bold: bool = False):
     run.font.name = _FONT
     run.font.size = Pt(size)
@@ -179,10 +193,11 @@ def _set_run(run, *, size: float = _BODY_PT, bold: bool = False):
     r = run._element
     rpr = r.get_or_add_rPr()
     rfonts = rpr.get_or_add_rFonts()
-    rfonts.set(qn("w:ascii"), _FONT)
-    rfonts.set(qn("w:hAnsi"), _FONT)
-    rfonts.set(qn("w:cs"), _FONT)
+    rfonts.set(qn("w:ascii"), _LATIN_FONT)
+    rfonts.set(qn("w:hAnsi"), _LATIN_FONT)
+    rfonts.set(qn("w:cs"), _CS_FONT)
     rfonts.set(qn("w:eastAsia"), _FALLBACK_FONT)
+    _set_sz_cs(rpr, size)
     return run
 
 
