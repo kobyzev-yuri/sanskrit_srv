@@ -2,10 +2,11 @@
 
 Modes: text (HTML only) | interleave (scan page then HTML for each source page).
 
-Text pages are rendered with headless Chromium when available — that gives both
-correct Devanagari shaping (display) and a usable ToUnicode map (copy/paste into
-Word). Falls back to PyMuPDF Story (shaped display; weaker copy) if Chromium is
-missing.
+Text pages are rendered with headless Chromium when available (correct Devanagari
+shaping). Chromium/poppler then insert spurious U+0020 between glyph clusters on
+copy (reordered ि, conjuncts like कृष्…). We convert painted text to paths and
+overlay MuPDF's clean Unicode as invisible text so Word/Chrome copy stays intact.
+Falls back to PyMuPDF Story if Chromium is missing.
 """
 from __future__ import annotations
 
@@ -162,7 +163,15 @@ def build_project_pdf(
         doc.insert_pdf(empty)
         empty.close()
 
-    engine = "chromium" if _chrome_bin() else "story"
+    try:
+        fixed = _fix_indic_copy(doc)
+        doc.close()
+        doc = fixed
+        engine = ("chromium" if _chrome_bin() else "story") + "+copyfix"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("indic copy-fix skipped (%s)", exc)
+        engine = "chromium" if _chrome_bin() else "story"
+
     doc.set_metadata(
         {
             "producer": f"sanskrit_srv/{engine}",
@@ -175,6 +184,77 @@ def build_project_pdf(
     doc.close()
     tmp_out.replace(out_path)
     return out_path
+
+
+def _deva_fontfile() -> str | None:
+    for path in _FONT_FILES:
+        if Path(path).is_file():
+            return path
+    for _, bundled in _bundled_font_files():
+        if bundled.is_file():
+            return bundled.as_posix()
+    return None
+
+
+def _page_text_lines(page: fitz.Page) -> list[tuple[str, fitz.Rect, float]]:
+    """Clean extractable lines (no ZWNJ) with bboxes — used for invisible overlay."""
+    lines: list[tuple[str, fitz.Rect, float]] = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            spans = line.get("spans") or []
+            if not spans:
+                continue
+            text = "".join(s.get("text", "") for s in spans)
+            text = text.replace("\u200c", "").replace("\u200d", "")
+            if not text.strip():
+                continue
+            bbox = fitz.Rect(
+                min(s["bbox"][0] for s in spans),
+                min(s["bbox"][1] for s in spans),
+                max(s["bbox"][2] for s in spans),
+                max(s["bbox"][3] for s in spans),
+            )
+            size = max(float(s.get("size") or 7.5) for s in spans)
+            lines.append((text, bbox, size))
+    return lines
+
+
+def _fix_indic_copy(src: fitz.Document) -> fitz.Document:
+    """Path-outline Devanagari pages + invisible clean Unicode for copy/paste."""
+    font_path = _deva_fontfile()
+    if not font_path:
+        raise RuntimeError("no Devanagari font for copy-fix overlay")
+    font = fitz.Font(fontfile=font_path)
+    out = fitz.open()
+    for page in src:
+        sample = page.get_text()
+        n_deva = sum(1 for c in sample if "\u0900" <= c <= "\u097f")
+        if n_deva < 4:
+            out.insert_pdf(src, from_page=page.number, to_page=page.number)
+            continue
+        lines = _page_text_lines(page)
+        try:
+            svg = page.get_svg_image(text_as_path=True)
+            svg_doc = fitz.open("svg", svg.encode("utf-8"))
+            pdf_bytes = svg_doc.convert_to_pdf()
+            svg_doc.close()
+            one = fitz.open("pdf", pdf_bytes)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("svg path convert failed p%s (%s); keeping page", page.number, exc)
+            out.insert_pdf(src, from_page=page.number, to_page=page.number)
+            continue
+        dest = out.new_page(width=page.rect.width, height=page.rect.height)
+        dest.show_pdf_page(dest.rect, one, 0)
+        one.close()
+        if lines:
+            tw = fitz.TextWriter(dest.rect)
+            for text, bbox, size in lines:
+                pos = fitz.Point(bbox.x0, bbox.y1 - 0.12 * size)
+                tw.append(pos, text, font=font, fontsize=size)
+            tw.write_text(dest, render_mode=3)
+    return out
 
 
 def _mediabox_for_pages(pages: list[tuple[int, str, str | None]]) -> fitz.Rect:
