@@ -1,13 +1,26 @@
 ---
-description: Ship sanskrit_srv via git push to GitHub; deploy runs on VPS through Actions
+description: Ship sanskrit_srv via git push; deploy and restart VPS yourself when needed
 alwaysApply: true
 ---
 
 # Deploy path
 
-Prefer **commit → `git push origin main` → GitHub Actions → VPS**, not ad-hoc `scp`/`rsync`/`ssh` edits on the server.
+Default: **commit → `git push origin main` → GitHub Actions → VPS**.
 
-- Repo: `sanskrit_srv` (`origin` → GitHub). Workflow: `.github/workflows/deploy.yml` (push to `main` under `backend/**`, `frontend/**`, `deploy/**`, or `workflow_dispatch`).
-- After finishing a shippable change set: commit (when the user wants it shipped), push `main`, then check Actions until Deploy succeeds.
-- Do not patch `/opt/sanskrit_srv` over SSH unless Actions is broken or the user explicitly asks for a hot-fix; if you must, say so and still sync the same change into git.
+If Actions fails (empty SSH secrets, etc.) or the user asks to deploy/restart: do it yourself over SSH — do not wait for the user to run deploy.
+
+```bash
+# from sanskrit_srv/
+rsync -az --delete \
+  --exclude '.git/' --exclude 'docs/' --exclude '.env' --exclude '.env.*' \
+  --exclude 'storage/' --exclude 'data/' --exclude '.venv/' \
+  --exclude '__pycache__/' --exclude '*.pyc' --exclude '.github/' --exclude '.cursor/' \
+  ./ freevpn:/opt/sanskrit_srv/
+ssh freevpn 'bash /opt/sanskrit_srv/deploy/remote_deploy.sh'
+# remote_deploy.sh restarts sanskrit-srv + sanskrit-worker; verify:
+ssh freevpn 'curl -fsS http://127.0.0.1:8000/health'
+```
+
+- Host alias: `freevpn` → `root@72.56.99.56`, app at `/opt/sanskrit_srv`.
+- Keep git and VPS in sync: push to GitHub even when you also rsync.
 - Never commit `.env`, `storage/`, or `data/`.
