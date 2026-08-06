@@ -79,6 +79,7 @@ DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - ज्ञ = ज् + ञ (jña). ङ्ग = ङ् + ग (ṅga). They look different; prefer the scan, not a familiar wrong word.
 - Final consonant / nasal: if the scan shows explicit म् / न् etc., keep the virama form; use anusvāra ं (or Vedic ꣳ) only when the scan has that mark.
 - Do not invent an extra ग after anusvāra: wrong एकहंगसः vs correct एकहंसः / एकहꣳसः (haṃsaḥ — anusvāra on ह, then स, no ङ्ग).
+- Vedic nasal "gum" / candrabindu clusters: if the scan has गुंँ / गँ / ँ over a syllable (often before ह/labials in mantra), KEEP that orthography. Do NOT "correct" it to classical anusvāra ं on the previous syllable (wrong: गणपतिगुंँ हवामहे → गणपतिं हवामहे). Prefer ँ / गुंँ / ꣳ as printed; never normalize Vedic nasals to textbook Classical spelling.
 - Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
 
 VEDIC SVARA / TONE MARKS (only when the scan actually has them — usually Sanskrit mantra / saṃhitā / padapāṭha, not Hindi commentary):
