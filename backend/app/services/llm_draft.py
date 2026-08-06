@@ -77,11 +77,13 @@ FIDELITY OVER MEMORY (critical — this is diplomatic transcription, not editing
 - Familiar hymns are the highest risk: you will "know" गणपतिं हवामहे / ॐ गणानां त्वा… — if the plate prints गणपतिग्ं / ऋतग्ं / ग्ं / etc., keep the plate, even when it looks non-Classical.
 - Same rule for rare or "wrong-looking" words (ऋतग्ं-, odd sandhi, old orthography): leave them; do not silently normalize.
 - Never insert an extra akṣara to "repair" sandhi or word division. Classic false add: plate मीश्वरस्सर्व- / मीश्वर-स्सर्व- misread as मीश्वर-रस्सर्व- (spurious र before स्). Hyphens only where the plate has them; no invented र / रा / य / व for sandhi.
-- Never "fix" nasalization to the textbook form you recall. Scan ग्ं / गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed.
-- Hard ban: do NOT rewrite …ग्ं → classical …ं on the previous syllable (wrong: गणपतिग्ं → गणपतिं, ऋतग्ं → ऋतं). Prefer the marked gum form on the plate, never the dictionary anusvāra.
-- Gold examples from mantra plates (keep nasals exactly; omit ॑/॒ in output per tone policy below):
-  - plate …गणपतिग्ं… (ग + ् + ं) → HTML …गणपतिग्ं… — NOT गणपतिं / गणपतिगुंँ
-  - plate …ऋतग्ं… (same half-ga + anusvāra gum) → HTML …ऋतग्ं… — NOT ऋतं / ऋतगुंँ / ऋतꣳ / ऋतम्
+- Never "fix" nasalization either way. ग्ं / गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed on THIS syllable.
+- Hard ban both directions:
+  - Do NOT rewrite plate …ग्ं… into classical …ं (wrong: गणपतिग्ं → गणपतिं, ऋतग्ं → ऋतं).
+  - Do NOT rewrite ordinary plate …ं… into …ग्ं / गुंँ / ँ / ꣳ. Most anusvāras stay plain ं. Gum is only where the plate shows half-ग + ं (or another marked gum form).
+- Illustrations only (not a global replace rule; omit ॑/॒ in output per tone policy below):
+  - if plate has …गणपतिग्ं… → keep …गणपतिग्ं…; if plate has …गणपतिं… → keep …गणपतिं…
+  - if plate has …ऋतग्ं… → keep …ऋतग्ं…; if plate has …ऋतं… → keep …ऋतं…
 
 DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña).
@@ -90,7 +92,7 @@ DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - ज्ञ = ज् + ञ (jña). ङ्ग = ङ् + ग (ṅga). They look different; prefer the scan, not a familiar wrong word.
 - Final consonant / nasal: if the scan shows explicit म् / न् etc., keep the virama form; use anusvāra ं (or Vedic ꣳ) only when the scan has that mark.
 - Do not invent an extra ग after anusvāra: wrong एकहंगसः vs correct एकहंसः / एकहꣳसः (haṃsaḥ — anusvāra on ह, then स, no ङ्ग).
-- Vedic nasal "gum" as half-ga + anusvāra: scan गणपतिग्ं / ऋतग्ं must stay …ग्ं — NEVER rewrite as गणपतिं / ऋतं (dictionary anusvāra). Do not "improve" ग्ं into गुंँ / ँ / ꣳ unless that is what the plate shows.
+- Vedic "gum" (half-ग + ं) only when visible as such on the plate. Do not sprinkle ग्ं onto every nasal; do not "upgrade" plain ं to gum from hymn memory.
 - Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
 
 VEDIC SVARA / TONE MARKS — OMIT ENTIRELY:
