@@ -14,9 +14,19 @@ from app.config import get_settings
 from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
 from app.services.llm_usage import parse_gemini_usage, parse_openai_usage
 
-BASE_PROMPT = """You restore a Sanskrit scan page (manuscript or printed edition) into an HTML fragment.
+BASE_PROMPT = """You restore a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
 
 The IMAGE is ground truth for TEXT, LAYOUT, and TYPOGRAPHY. Match the book visual style as closely as HTML allows.
+
+LANGUAGE (silent first judgment — encode in lang=, do not narrate):
+- Pure Sanskrit → <article … lang="sa">; body/verse blocks class="sa" lang="sa".
+- Pure Hindi → <article … lang="hi">; prose class="sa" lang="hi" (class sa = Devanagari font, not “Sanskrit-only”).
+- Mixed pages are common: Sanskrit śloka / sūtra / mantra + Hindi ṭīkā / vyākhyā / translation.
+  - Mark Sanskrit lines: class="sa shloka" (or plain sa) lang="sa".
+  - Mark Hindi commentary/prose: class="sa" lang="hi".
+  - Article lang= the dominant language of the page (usually "hi" if commentary fills most of the leaf, else "sa").
+- Do NOT Sanskritize Hindi wording, and do NOT translate or modernize Sanskrit into Hindi.
+- Hindi nukta letters (क़ ख़ ग़ ज़ ड़ ढ़ फ़) must be kept when the scan shows them.
 
 First silently judge from the scan:
 1) text column width (narrow / medium / wide) and whether there are ONE or TWO vertical columns
@@ -53,12 +63,12 @@ FORBIDDEN (never invent browser layout hacks):
 - Layout only via the allowed classes below.
 
 TYPOGRAPHY:
-- Wrap in <article class="page-style TYPE LH" lang="sa"> where TYPE is type-sm|type-md|type-lg and LH is lh-tight|lh-normal|lh-loose.
+- Wrap in <article class="page-style TYPE LH" lang="sa|hi"> where TYPE is type-sm|type-md|type-lg and LH is lh-tight|lh-normal|lh-loose.
 - Headings may add type-lg; body follows the article default.
 - Approximate metal type with size + leading classes and Noto Serif Devanagari (we cannot load the scan font).
 
 TEXT:
-- Capture ALL readable text through the last line of every column. Preserve Devanagari. class="sa" lang="sa".
+- Capture ALL readable text through the last line of every column. Preserve Devanagari; set lang="sa" or lang="hi" per block as above.
 - Do NOT invent text. Do NOT leave blank rows where the scan still has numbers/text.
 - If a previous draft used flex/float or truncated a column, replace with clean class-based line-by-line HTML from the scan.
 
@@ -71,8 +81,9 @@ DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Do not invent an extra ग after anusvāra: wrong एकहंगसः vs correct एकहंसः / एकहꣳसः (haṃsaḥ — anusvāra on ह, then स, no ङ्ग).
 - Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
 
-VEDIC SVARA / TONE MARKS (critical for mantra / saṃhitā / padapāṭha pages):
+VEDIC SVARA / TONE MARKS (only when the scan actually has them — usually Sanskrit mantra / saṃhitā / padapāṭha, not Hindi commentary):
 - If the scan shows tone marks, you MUST encode them. Do not drop accents to "simplify" the text.
+- Do NOT invent ॑ / ॒ on Hindi prose or on unmarked Sanskrit.
 - Use ONLY these Devanagari stress signs (after the syllable they mark):
   - ॑ U+0951 DEVANAGARI STRESS SIGN UDATTA — short vertical stroke ABOVE (svarita / udātta mark as printed)
   - ॒ U+0952 DEVANAGARI STRESS SIGN ANUDATTA — short horizontal stroke BELOW (anudātta)
