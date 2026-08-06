@@ -21,28 +21,29 @@ from app.services.storage import ensure_dirs
 CSS = """
 body {
   font-family: "Noto Serif Devanagari", "Noto Sans Devanagari", "FreeSerif", serif;
-  font-size: 8pt;
-  /* ≥1.4 so anudātta (॒) below does not collide with the next line */
-  line-height: 1.42;
+  font-size: 7.5pt;
+  /* room for anudātta below; still dense enough for prose scans */
+  line-height: 1.35;
   color: #1a1814;
   background-color: #f7f2e8;
 }
-p { margin: 0.18em 0; }
+p { margin: 0.14em 0; }
 .cover { text-align: center; margin: 1em 0 0.3em; }
-.cover-title { font-size: 13pt; font-weight: 700; color: #1a1814; margin: 0.4em 0 0.15em; line-height: 1.25; }
+.cover-title { font-size: 12pt; font-weight: 700; color: #1a1814; margin: 0.4em 0 0.15em; line-height: 1.25; }
 .cover-title-sa {
   font-family: "Noto Serif Devanagari", "Noto Sans Devanagari", serif;
-  font-size: 10.5pt; color: #5c3d2e; margin: 0.1em 0 0.45em;
+  font-size: 10pt; color: #5c3d2e; margin: 0.1em 0 0.45em;
 }
-.cover-brand { font-size: 7.5pt; color: #6b6560; margin-top: 1em; }
-.page, .page-style { margin: 0 auto; max-width: 96%; }
-.narrow { max-width: 84%; margin-left: auto; margin-right: auto; }
-.type-sm { font-size: 7pt; }
-.type-md { font-size: 8pt; }
-.type-lg { font-size: 9pt; }
-.lh-tight { line-height: 1.28; }
-.lh-normal { line-height: 1.42; }
-.lh-loose { line-height: 1.62; }
+.cover-brand { font-size: 7pt; color: #6b6560; margin-top: 1em; }
+.page, .page-style { margin: 0 auto; max-width: 98%; }
+/* LLM often marks dense prose as narrow — keep almost full measure */
+.narrow { max-width: 94%; margin-left: auto; margin-right: auto; }
+.type-sm { font-size: 6.5pt; }
+.type-md { font-size: 7.5pt; }
+.type-lg { font-size: 8.5pt; }
+.lh-tight { line-height: 1.22; }
+.lh-normal { line-height: 1.35; }
+.lh-loose { line-height: 1.55; }
 .compact p { margin: 0.1em 0; }
 .indent { text-indent: 1.2em; }
 h1 {
@@ -72,7 +73,7 @@ th { background: #efe6d8; color: #3d2914; }
 # Fallback when no scan aspect is available (Indian crown-ish; taller than A5).
 _PAGE_W = 412.0
 _PAGE_H = 612.0
-_MARGIN = 14  # Story content inset on each side
+_MARGIN = 12  # Story content inset on each side
 
 _API_IMG_RE = re.compile(
     r'src=["\']/api/v1/pages/([0-9a-fA-F-]{36})/figures/([^"\']+)["\']',

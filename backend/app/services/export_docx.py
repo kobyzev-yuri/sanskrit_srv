@@ -26,9 +26,10 @@ _FONT = "Noto Serif Devanagari"
 _FALLBACK_FONT = "FreeSerif"
 _SCAN_MAX_PX = 1400
 _SCAN_JPEG_Q = 78
-_BODY_PT = 10.0
-_H1_PT = 12.0
-_SMALL_PT = 9.0
+# Match compact PDF measure so one source page ≈ one Word page.
+_BODY_PT = 8.0
+_H1_PT = 10.0
+_SMALL_PT = 7.0
 
 
 def build_project_docx(
@@ -95,20 +96,22 @@ def build_project_docx(
 
 def _setup_styles(doc: Document) -> None:
     section = doc.sections[0]
-    section.page_width = Cm(14.8)  # A5-ish width
-    section.page_height = Cm(21.0)
-    section.left_margin = Cm(1.4)
-    section.right_margin = Cm(1.4)
-    section.top_margin = Cm(1.4)
-    section.bottom_margin = Cm(1.4)
+    # ~412×612 pt Indian crown (taller than A5)
+    section.page_width = Cm(14.55)
+    section.page_height = Cm(21.6)
+    section.left_margin = Cm(1.0)
+    section.right_margin = Cm(1.0)
+    section.top_margin = Cm(1.0)
+    section.bottom_margin = Cm(1.0)
 
     normal = doc.styles["Normal"]
     normal.font.name = _FONT
     normal.font.size = Pt(_BODY_PT)
     normal.font.color.rgb = RGBColor(0x1A, 0x18, 0x14)
-    if normal.paragraph_format.line_spacing is None:
-        normal.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-        normal.paragraph_format.line_spacing = 1.35
+    normal.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+    normal.paragraph_format.line_spacing = 1.28
+    normal.paragraph_format.space_after = Pt(2)
+    normal.paragraph_format.space_before = Pt(0)
     rpr = normal.element.get_or_add_rPr()
     rfonts = rpr.get_or_add_rFonts()
     rfonts.set(qn("w:ascii"), _FONT)
@@ -120,11 +123,11 @@ def _setup_styles(doc: Document) -> None:
 def _add_cover(doc: Document, title: str, title_sa: str | None) -> None:
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _set_run(p.add_run(title or "Untitled"), size=16, bold=True)
+    _set_run(p.add_run(title or "Untitled"), size=13, bold=True)
     if title_sa and title_sa.strip():
         p2 = doc.add_paragraph()
         p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _set_run(p2.add_run(title_sa.strip()), size=12)
+        _set_run(p2.add_run(title_sa.strip()), size=10.5)
     p3 = doc.add_paragraph()
     p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = _set_run(p3.add_run("Sanskrit SRV"), size=_SMALL_PT)
@@ -322,19 +325,26 @@ class _HtmlToDocx(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._skip or not data:
             return
+        # HTML collapses newlines/indent inside <p>; Word does not — normalize.
+        data = re.sub(r"\s+", " ", data)
         if self._in_td:
             self._cell_paras.append(data)
             return
         # Skip whitespace-only between blocks
-        if self._para is None and not data.strip():
-            return
         if self._para is None:
+            data = data.lstrip()
+            if not data:
+                return
             self._para = self.doc.add_paragraph()
             self._para.alignment = self._align
-            self._para.paragraph_format.space_after = Pt(4)
+            self._para.paragraph_format.space_after = Pt(2)
             self._para.paragraph_format.space_before = Pt(0)
+            self._para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+            self._para.paragraph_format.line_spacing = 1.28
             if "indent" in self._classes:
-                self._para.paragraph_format.first_line_indent = Cm(0.6)
+                self._para.paragraph_format.first_line_indent = Cm(0.5)
+        if not data:
+            return
         run = self._para.add_run(data)
         _set_run(run, size=self._size, bold=self._bold)
 
