@@ -77,6 +77,7 @@ FIDELITY OVER MEMORY (critical — this is diplomatic transcription, not editing
 - Familiar hymns are the highest risk: you will "know" गणपतिं हवामहे / ॐ गणानां त्वा… — if the plate prints गणपतिगुंँ / गुंँ / ँ / ꣳ / ऋतग्म् / etc., keep the plate, even when it looks non-Classical.
 - Same rule for rare or "wrong-looking" words (ऋतग्म-, odd sandhi, old orthography): leave them; do not silently normalize.
 - Never "fix" nasalization to the textbook form you recall. Scan गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed.
+- Hard ban: do NOT rewrite गणपतिगुंँ → गणपतिं (or any …गुंँ / …गँ → …ं). If unsure between ं and गुंँ/ँ/ꣳ, prefer the longer / more marked form visible on the plate, never the dictionary anusvāra.
 
 DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña).
@@ -88,19 +89,11 @@ DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Vedic nasal "gum" / candrabindu: scan गणपतिगुंँ हवामहे must stay गणपतिगुंँ — NEVER rewrite as गणपतिं हवामहे (dictionary anusvāra). Keep ँ / गुंँ / ꣳ as printed.
 - Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
 
-VEDIC SVARA / TONE MARKS (diplomatic — marks only where the ink is):
-- Put ॑ (U+0951) or ॒ (U+0952) ONLY on syllables that CLEARLY show that stroke on the scan. No mark on the plate → no mark in HTML.
-- Do NOT sprinkle accents from memory of the hymn, meter, or "typical" Vedic pattern. Random or evenly-spread ॑/॒ is wrong.
-- Prefer MISSING a doubtful accent over inventing one. Inventing accents is worse than omitting them.
-- Do NOT invent ॑ / ॒ on Hindi prose or on unmarked Sanskrit.
-- Use ONLY these Devanagari stress signs (after the syllable they mark):
-  - ॑ U+0951 — short vertical stroke ABOVE (as printed)
-  - ॒ U+0952 — short horizontal stroke BELOW (anudātta)
-- Examples (only if the scan shows them): य॒ज्ञेन॑ = य + ॒ + ज्ञेन + ॑ ; तत्स॑वितुर्…
-- Anudātta on several consecutive syllables looks like a broken underline — copy that pattern from the plate. Do NOT replace tones with HTML <u>, CSS underline, underscore _, or a single long bar.
-- FORBIDDEN substitutes (never emit these as tone marks):
-  U+0346 COMBINING BRIDGE ABOVE, U+0304 MACRON, U+0305 OVERLINE, U+0323 DOT BELOW,
-  U+0303 TILDE, U+0307 DOT ABOVE, or any Latin combining diacritic.
+VEDIC SVARA / TONE MARKS — OMIT ENTIRELY:
+- Do NOT emit ॑ (U+0951) or ॒ (U+0952) at all. False positives are too frequent; bare akṣaras without tones are required.
+- Ignore anudātta underlines and udātta/svarita strokes on the scan for encoding purposes — transcribe letters/matras/nasals only.
+- Do NOT use HTML <u>, CSS underline, underscore _, or Latin diacritics as stand-ins for tones.
+- Also never emit: U+0346, U+0304, U+0305, U+0323, U+0303, U+0307, or other combining tone fakes.
 
 FIGURES:
 - Ornaments/diagrams (not the full page): <figure class="scan-crop" data-box="x,y,w,h"></figure> with fractions 0-1.
@@ -133,39 +126,38 @@ def image_to_jpeg_b64(path: Path, max_px: int = 2048) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-# Latin / misc combining marks models invent instead of U+0951 / U+0952.
-_FAKE_SVARA_ABOVE = dict.fromkeys(
-    (
-        "\u0346",  # COMBINING BRIDGE ABOVE
-        "\u0304",  # MACRON
-        "\u0305",  # OVERLINE
-        "\u0307",  # DOT ABOVE
-        "\u0303",  # TILDE
-        "\u0310",  # CANDRABINDU-like
-    ),
-    "\u0951",
-)
-_FAKE_SVARA_BELOW = dict.fromkeys(
-    (
-        "\u0323",  # DOT BELOW
-        "\u0331",  # MACRON BELOW
-        "\u0320",  # MINUS BELOW
-    ),
-    "\u0952",
-)
+# Fake Latin combining marks models invent instead of real svara.
 _FAKE_SVARA_RE = re.compile(
-    "[" + re.escape("".join(_FAKE_SVARA_ABOVE) + "".join(_FAKE_SVARA_BELOW)) + "]"
+    "["
+    + re.escape(
+        "".join(
+            (
+                "\u0346",  # COMBINING BRIDGE ABOVE
+                "\u0304",  # MACRON
+                "\u0305",  # OVERLINE
+                "\u0307",  # DOT ABOVE
+                "\u0303",  # TILDE
+                "\u0310",  # CANDRABINDU-like
+                "\u0323",  # DOT BELOW
+                "\u0331",  # MACRON BELOW
+                "\u0320",  # MINUS BELOW
+            )
+        )
+    )
+    + "]"
 )
+# Real Devanagari stress signs — stripped from LLM drafts by default.
+_REAL_SVARA_RE = re.compile("[\u0951\u0952]")
 
 
 def normalize_vedic_marks(html: str) -> str:
-    """Map common fake tone diacritics to U+0951 / U+0952; strip the rest of that set."""
+    """Strip fake Latin tone diacritics (safe for saved editor HTML)."""
+    return _FAKE_SVARA_RE.sub("", html)
 
-    def repl(m: re.Match[str]) -> str:
-        ch = m.group(0)
-        return _FAKE_SVARA_ABOVE.get(ch) or _FAKE_SVARA_BELOW.get(ch) or ""
 
-    return _FAKE_SVARA_RE.sub(repl, html)
+def strip_vedic_svara(html: str) -> str:
+    """Remove real ॑/॒ and fake tone marks — default for LLM drafts."""
+    return _REAL_SVARA_RE.sub("", normalize_vedic_marks(html))
 
 
 def extract_html_only(text: str) -> str:
@@ -200,8 +192,9 @@ def looks_like_page_html(html: str) -> bool:
     return "<article" in low or ("<p" in low and "class=" in low)
 
 
-def validate_html(html: str) -> str:
-    cleaned = normalize_vedic_marks(extract_html_only(html))
+def validate_html(html: str, *, strip_svara: bool = True) -> str:
+    cleaned = extract_html_only(html)
+    cleaned = strip_vedic_svara(cleaned) if strip_svara else normalize_vedic_marks(cleaned)
     if GARBAGE_ANYWHERE.search(cleaned):
         raise ValueError("response looks like reasoning, not HTML")
     if AVAGRAHA_RUN.search(cleaned):
@@ -251,8 +244,9 @@ def revise_from_scan(
         parts.append(
             "Current draft HTML (may be incomplete/wrong — fix from the scan; "
             "strip any style=/flex/float and rebuild line-by-line with classes only). "
-            "Distrust dictionary spellings and random ॑/॒ in this draft: re-read nasals and "
-            "accents from the scan (e.g. keep गुंँ if printed, do not keep गणपतिं from memory):\n"
+            "Distrust dictionary spellings in this draft: re-read nasals from the scan "
+            "(keep गुंँ if printed, do not keep गणपतिं from memory). "
+            "Strip any ॑/॒ — tones are not used in drafts:\n"
             + current_html.strip()
         )
     elif current_html and current_html.strip():
@@ -275,6 +269,10 @@ def revise_from_scan(
             "Output ONLY the HTML fragment — no English commentary, no step lists."
         )
     user_text = "\n\n".join(parts)
+    # Keep ॑/॒ only when the editor directive explicitly names them.
+    strip_svara = not bool(
+        directive and re.search(r"[॒॑]|тон", directive, re.I)
+    )
 
     errors: list[str] = []
     gemini_models = [
@@ -291,7 +289,7 @@ def revise_from_scan(
                 settings.openai_api_key, settings.gemini_base_url, model, user_text, image_b64
             )
             usage = {**usage, "network": "gemini", "model": model}
-            return validate_html(html), f"gemini:{model}", usage
+            return validate_html(html, strip_svara=strip_svara), f"gemini:{model}", usage
         except LlmQuotaError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -303,7 +301,7 @@ def revise_from_scan(
                 settings.openai_api_key, settings.openai_base_url, model, user_text, image_b64
             )
             usage = {**usage, "network": "openai", "model": model}
-            return validate_html(html), f"openai:{model}", usage
+            return validate_html(html, strip_svara=strip_svara), f"openai:{model}", usage
         except LlmQuotaError:
             raise
         except Exception as exc:  # noqa: BLE001
