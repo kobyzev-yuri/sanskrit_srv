@@ -9,6 +9,7 @@ missing.
 """
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -20,6 +21,8 @@ import fitz
 
 from app.services.storage import ensure_dirs
 
+log = logging.getLogger("sanskrit.export_pdf")
+
 # Compact book measure: dense Devanagari scans need ~7.5pt on a page
 # slightly taller than A5 so one source page → one PDF page.
 CSS = """
@@ -29,6 +32,11 @@ body {
   line-height: 1.35;
   color: #1a1814;
   background-color: #f7f2e8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "liga" 1, "clig" 1, "calt" 1, "locl" 1;
+  letter-spacing: 0;
+  word-spacing: normal;
 }
 p { margin: 0.14em 0; }
 .cover { text-align: center; margin: 1em 0 0.3em; }
@@ -193,23 +201,52 @@ def _chrome_bin() -> str | None:
     return None
 
 
+def _work_dir() -> Path:
+    # Snap Chromium cannot write under many system paths; home subdir works.
+    d = Path.home() / "sanskrit_pdf_work"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _bundled_font_files() -> list[tuple[str, Path]]:
+    """Copy system Devanagari TTFs into the Chromium-writable work dir.
+
+    Snap Chromium often cannot load file:///usr/share/fonts/…; without a real
+    face it falls back to a Latin font and Devanagari 'falls apart'.
+    """
+    fonts_dir = _work_dir() / "fonts"
+    fonts_dir.mkdir(parents=True, exist_ok=True)
+    out: list[tuple[str, Path]] = []
+    serif = next((p for p in _FONT_FILES if "SerifDevanagari" in p and Path(p).is_file()), None)
+    sans = next((p for p in _FONT_FILES if "SansDevanagari" in p and Path(p).is_file()), None)
+    pairs = [
+        ("Noto Serif Devanagari", serif),
+        ("Noto Sans Devanagari", sans or serif),
+    ]
+    for family, src in pairs:
+        if not src:
+            continue
+        src_path = Path(src)
+        if not src_path.is_file():
+            continue
+        dest = fonts_dir / src_path.name
+        if not dest.is_file() or dest.stat().st_size != src_path.stat().st_size:
+            shutil.copy2(src_path, dest)
+        out.append((family, dest))
+    return out
+
+
 def _font_face_css() -> str:
     parts: list[str] = []
-    for path in _FONT_FILES:
-        if Path(path).is_file():
-            parts.append(
-                "@font-face{"
-                'font-family:"Noto Serif Devanagari";'
-                f"src:url('file://{path}');"
-                "}"
-            )
-            parts.append(
-                "@font-face{"
-                'font-family:"Noto Sans Devanagari";'
-                f"src:url('file://{path}');"
-                "}"
-            )
-            break
+    for family, path in _bundled_font_files():
+        uri = path.resolve().as_uri()
+        parts.append(
+            "@font-face{"
+            f"font-family:\"{family}\";"
+            f"src:url('{uri}');"
+            "font-display:block;"
+            "}"
+        )
     return "\n".join(parts)
 
 
@@ -218,16 +255,11 @@ def _html_to_doc(body_html: str, mediabox: fitz.Rect) -> fitz.Document:
     if chrome:
         try:
             return _html_to_doc_chrome(chrome, body_html, mediabox)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chromium PDF failed (%s); falling back to Story", exc)
+    else:
+        log.warning("chromium not found; PDF text uses Story fallback")
     return _html_to_doc_story(body_html, mediabox)
-
-
-def _work_dir() -> Path:
-    # Snap Chromium cannot write under many system paths; home subdir works.
-    d = Path.home() / "sanskrit_pdf_work"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 def _html_to_doc_chrome(
@@ -252,7 +284,7 @@ def _html_to_doc_chrome(
     pdf_path = work / f"{token}.pdf"
     try:
         html_path.write_text(doc_html, encoding="utf-8")
-        subprocess.run(
+        proc = subprocess.run(
             [
                 chrome,
                 "--headless=new",
@@ -263,13 +295,24 @@ def _html_to_doc_chrome(
                 f"--print-to-pdf={pdf_path.as_posix()}",
                 html_path.resolve().as_uri(),
             ],
-            check=True,
+            check=False,
             timeout=180,
             capture_output=True,
         )
+        if proc.returncode != 0 and not pdf_path.is_file():
+            err = (proc.stderr or b"").decode("utf-8", "replace")[-500:]
+            raise RuntimeError(f"chromium exit {proc.returncode}: {err}")
         if not pdf_path.is_file() or pdf_path.stat().st_size < 100:
             raise RuntimeError("chromium produced no PDF")
         src = fitz.open(pdf_path.as_posix())
+        # Refuse Latin-fallback junk: Devanagari pages must embed a Deva face.
+        fonts = " ".join(f[3] or "" for f in src[0].get_fonts())
+        if src.page_count > 0 and not re.search(r"Devanagari|Noto|FreeSerif|lohit|Nakula", fonts, re.I):
+            # Allow empty/cover-like pages; only warn when body looks Devanagari-heavy.
+            sample = src[0].get_text()
+            if sum(1 for c in sample if "\u0900" <= c <= "\u097f") >= 8:
+                src.close()
+                raise RuntimeError(f"chromium PDF missing Devanagari font (got: {fonts!r})")
         mem = fitz.open()
         mem.insert_pdf(src)
         src.close()
