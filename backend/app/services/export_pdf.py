@@ -162,6 +162,14 @@ def build_project_pdf(
         doc.insert_pdf(empty)
         empty.close()
 
+    engine = "chromium" if _chrome_bin() else "story"
+    doc.set_metadata(
+        {
+            "producer": f"sanskrit_srv/{engine}",
+            "creator": "Sanskrit SRV",
+            "title": title or slug,
+        }
+    )
     tmp_out = out_path.with_suffix(f".{uuid.uuid4().hex}.tmp.pdf")
     doc.save(tmp_out.as_posix(), garbage=3, deflate=True)
     doc.close()
