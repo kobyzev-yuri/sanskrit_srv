@@ -79,8 +79,9 @@ FIDELITY OVER MEMORY (critical — this is diplomatic transcription, not editing
 - Never "fix" nasalization to the textbook form you recall. Scan गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed.
 - Hard ban: do NOT rewrite गणपतिगुंँ → गणपतिं (or any …गुंँ / …गँ → …ं). If unsure between ं and गुंँ/ँ/ꣳ, prefer the longer / more marked form visible on the plate, never the dictionary anusvāra.
 - Gold examples from mantra plates (keep nasals exactly; omit ॑/॒ in output per tone policy below):
-  - plate …गणपतिगुंँ… → HTML …गणपतिगुंँ… — NOT गणपतिं
-  - plate …ऋतगुंँ… → HTML …ऋतगुंँ… — same Vedic "gum", NOT ऋतं / ऋतꣳ / ऋतम्
+  - plate …गणपतिगुंँ… / …पतिगुं… → HTML …गणपतिगुंँ… (or …गुं… if no ँ on the plate) — NOT गणपतिं
+  - plate …ऋतग्ं… (ग + ् + ं, half-ga with anusvāra — another Vedic "gum" spelling) → HTML …ऋतग्ं… — NOT ऋतं / ऋतगुंँ / ऋतꣳ / ऋतम्
+  - Do not unify different gum spellings: गुंँ and ग्ं are not interchangeable; copy whichever the plate has.
 
 DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña).
