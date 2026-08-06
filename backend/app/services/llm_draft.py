@@ -76,6 +76,7 @@ FIDELITY OVER MEMORY (critical — this is diplomatic transcription, not editing
 - Encode ONLY what is printed on THIS scan. Do NOT substitute a "standard", "correct", dictionary, GRETIL, or remembered mantra spelling.
 - Familiar hymns are the highest risk: you will "know" गणपतिं हवामहे / ॐ गणानां त्वा… — if the plate prints गणपतिगुंँ / गुंँ / ँ / ꣳ / ऋतग्म् / etc., keep the plate, even when it looks non-Classical.
 - Same rule for rare or "wrong-looking" words (ऋतग्म-, odd sandhi, old orthography): leave them; do not silently normalize.
+- Never insert an extra akṣara to "repair" sandhi or word division. Classic false add: plate मीश्वरस्सर्व- / मीश्वर-स्सर्व- misread as मीश्वर-रस्सर्व- (spurious र before स्). Hyphens only where the plate has them; no invented र / रा / य / व for sandhi.
 - Never "fix" nasalization to the textbook form you recall. Scan गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed.
 - Hard ban: do NOT rewrite गणपतिगुंँ → गणपतिं (or any …गुंँ / …गँ → …ं). If unsure between ं and गुंँ/ँ/ꣳ, prefer the longer / more marked form visible on the plate, never the dictionary anusvāra.
 - Gold examples from mantra plates (keep nasals exactly; omit ॑/॒ in output per tone policy below):
