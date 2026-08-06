@@ -72,6 +72,12 @@ TEXT:
 - Do NOT invent text. Do NOT leave blank rows where the scan still has numbers/text.
 - If a previous draft used flex/float or truncated a column, replace with clean class-based line-by-line HTML from the scan.
 
+FIDELITY OVER MEMORY (critical — this is diplomatic transcription, not editing):
+- Encode ONLY what is printed on THIS scan. Do NOT substitute a "standard", "correct", dictionary, GRETIL, or remembered mantra spelling.
+- Familiar hymns are the highest risk: you will "know" गणपतिं हवामहे / ॐ गणानां त्वा… — if the plate prints गणपतिगुंँ / गुंँ / ँ / ꣳ / ऋतग्म् / etc., keep the plate, even when it looks non-Classical.
+- Same rule for rare or "wrong-looking" words (ऋतग्म-, odd sandhi, old orthography): leave them; do not silently normalize.
+- Never "fix" nasalization to the textbook form you recall. Scan गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed.
+
 DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña).
 - Classic false reading at line/page end: scan अङ्गानां / अङ्गानाम् (ṅga ligature) misread as अज्ञानां (jña). Also watch for truncated last words/lines — always finish the paragraph as on the scan.
@@ -79,22 +85,22 @@ DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
 - ज्ञ = ज् + ञ (jña). ङ्ग = ङ् + ग (ṅga). They look different; prefer the scan, not a familiar wrong word.
 - Final consonant / nasal: if the scan shows explicit म् / न् etc., keep the virama form; use anusvāra ं (or Vedic ꣳ) only when the scan has that mark.
 - Do not invent an extra ग after anusvāra: wrong एकहंगसः vs correct एकहंसः / एकहꣳसः (haṃsaḥ — anusvāra on ह, then स, no ङ्ग).
-- Vedic nasal "gum" / candrabindu clusters: if the scan has गुंँ / गँ / ँ over a syllable (often before ह/labials in mantra), KEEP that orthography. Do NOT "correct" it to classical anusvāra ं on the previous syllable (wrong: गणपतिगुंँ हवामहे → गणपतिं हवामहे). Prefer ँ / गुंँ / ꣳ as printed; never normalize Vedic nasals to textbook Classical spelling.
+- Vedic nasal "gum" / candrabindu: scan गणपतिगुंँ हवामहे must stay गणपतिगुंँ — NEVER rewrite as गणपतिं हवामहे (dictionary anusvāra). Keep ँ / गुंँ / ꣳ as printed.
 - Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
 
-VEDIC SVARA / TONE MARKS (only when the scan actually has them — usually Sanskrit mantra / saṃhitā / padapāṭha, not Hindi commentary):
-- If the scan shows tone marks, you MUST encode them. Do not drop accents to "simplify" the text.
+VEDIC SVARA / TONE MARKS (diplomatic — marks only where the ink is):
+- Put ॑ (U+0951) or ॒ (U+0952) ONLY on syllables that CLEARLY show that stroke on the scan. No mark on the plate → no mark in HTML.
+- Do NOT sprinkle accents from memory of the hymn, meter, or "typical" Vedic pattern. Random or evenly-spread ॑/॒ is wrong.
+- Prefer MISSING a doubtful accent over inventing one. Inventing accents is worse than omitting them.
 - Do NOT invent ॑ / ॒ on Hindi prose or on unmarked Sanskrit.
 - Use ONLY these Devanagari stress signs (after the syllable they mark):
-  - ॑ U+0951 DEVANAGARI STRESS SIGN UDATTA — short vertical stroke ABOVE (svarita / udātta mark as printed)
-  - ॒ U+0952 DEVANAGARI STRESS SIGN ANUDATTA — short horizontal stroke BELOW (anudātta)
-- Examples: य॒ज्ञेन॑ = य + ॒ + ज्ञेन + ॑ ; तत्स॑वितुर्…
-- Anudātta on several consecutive syllables looks like a broken underline under those syllables — that is correct. Do NOT replace tones with HTML <u>, CSS underline, underscore _, or a single long bar.
+  - ॑ U+0951 — short vertical stroke ABOVE (as printed)
+  - ॒ U+0952 — short horizontal stroke BELOW (anudātta)
+- Examples (only if the scan shows them): य॒ज्ञेन॑ = य + ॒ + ज्ञेन + ॑ ; तत्स॑वितुर्…
+- Anudātta on several consecutive syllables looks like a broken underline — copy that pattern from the plate. Do NOT replace tones with HTML <u>, CSS underline, underscore _, or a single long bar.
 - FORBIDDEN substitutes (never emit these as tone marks):
   U+0346 COMBINING BRIDGE ABOVE, U+0304 MACRON, U+0305 OVERLINE, U+0323 DOT BELOW,
   U+0303 TILDE, U+0307 DOT ABOVE, or any Latin combining diacritic.
-- If a syllable has no mark on the scan, leave it unmarked (udātta is often unmarked).
-- When the scan is unclear, prefer omitting a doubtful mark over inventing Latin diacritics.
 
 FIGURES:
 - Ornaments/diagrams (not the full page): <figure class="scan-crop" data-box="x,y,w,h"></figure> with fractions 0-1.
@@ -244,7 +250,9 @@ def revise_from_scan(
     if current_html and looks_like_page_html(current_html):
         parts.append(
             "Current draft HTML (may be incomplete/wrong — fix from the scan; "
-            "strip any style=/flex/float and rebuild line-by-line with classes only):\n"
+            "strip any style=/flex/float and rebuild line-by-line with classes only). "
+            "Distrust dictionary spellings and random ॑/॒ in this draft: re-read nasals and "
+            "accents from the scan (e.g. keep गुंँ if printed, do not keep गणपतिं from memory):\n"
             + current_html.strip()
         )
     elif current_html and current_html.strip():
