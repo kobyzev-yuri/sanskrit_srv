@@ -112,11 +112,106 @@ def build_project_pdf(
         doc.insert_pdf(empty)
         empty.close()
 
+    # Word paste ignores/misreads compact bfrange ToUnicode on Identity-H Indic.
+    _fix_tounicode_for_word(doc)
+
     tmp_out = out_path.with_suffix(f".{uuid.uuid4().hex}.tmp.pdf")
     doc.save(tmp_out.as_posix(), garbage=3, deflate=True)
     doc.close()
     tmp_out.replace(out_path)
     return out_path
+
+
+def _fix_tounicode_for_word(doc: fitz.Document) -> None:
+    """Rewrite each embedded font's ToUnicode as explicit bfchar from the subset cmap.
+
+    PyMuPDF's default maps use large beginbfrange runs. Acrobat display and MuPDF
+    extract stay fine, but Word copy/paste often decodes Devanagari CIDs as Latin
+    junk. Chromium-style bfchar maps paste correctly into Word.
+    """
+    try:
+        from fontTools.ttLib import TTFont
+    except ImportError:
+        return
+
+    from io import BytesIO
+
+    seen: set[int] = set()
+    for page in doc:
+        for item in page.get_fonts(full=True):
+            xref = item[0]
+            if xref in seen:
+                continue
+            seen.add(xref)
+            try:
+                extracted = doc.extract_font(xref)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(extracted, dict):
+                buf = extracted.get("content") or b""
+            elif isinstance(extracted, (tuple, list)) and len(extracted) >= 4:
+                buf = extracted[3] or b""
+            else:
+                continue
+            if not buf or len(buf) < 100:
+                continue
+            try:
+                tt = TTFont(BytesIO(buf))
+                best = tt.getBestCmap() or {}
+                order = tt.getGlyphOrder()
+            except Exception:  # noqa: BLE001
+                continue
+            name_to_gid = {n: i for i, n in enumerate(order)}
+            mapping: dict[int, str] = {}
+            for uni, gname in best.items():
+                gid = name_to_gid.get(gname)
+                if gid is None or uni <= 0:
+                    continue
+                mapping.setdefault(gid, chr(uni))
+            if not mapping:
+                continue
+            font_obj = doc.xref_object(xref)
+            m = re.search(r"/ToUnicode\s+(\d+)\s+0\s+R", font_obj)
+            if not m:
+                continue
+            tu_xref = int(m.group(1))
+            try:
+                doc.update_stream(tu_xref, _tounicode_bfchar_stream(mapping))
+            except Exception:  # noqa: BLE001
+                continue
+
+
+def _tounicode_bfchar_stream(mapping: dict[int, str]) -> bytes:
+    items = sorted((cid, text) for cid, text in mapping.items() if text)
+    lines = [
+        "/CIDInit /ProcSet findresource begin",
+        "12 dict begin",
+        "begincmap",
+        "/CIDSystemInfo <</Registry(Adobe)/Ordering(UCS)/Supplement 0>> def",
+        "/CMapName /Adobe-Identity-UCS def",
+        "/CMapType 2 def",
+        "1 begincodespacerange",
+        "<0000> <FFFF>",
+        "endcodespacerange",
+    ]
+    # PDF allows at most 100 entries per beginbfchar block.
+    chunk = 100
+    for i in range(0, len(items), chunk):
+        part = items[i : i + chunk]
+        lines.append(f"{len(part)} beginbfchar")
+        for cid, text in part:
+            dst = text.encode("utf-16-be").hex().upper()
+            lines.append(f"<{cid:04X}> <{dst}>")
+        lines.append("endbfchar")
+    lines.extend(
+        [
+            "endcmap",
+            "CMapName currentdict /CMap defineresource pop",
+            "end",
+            "end",
+        ]
+    )
+    return ("\n".join(lines) + "\n").encode("ascii")
 
 
 def _mediabox_for_pages(pages: list[tuple[int, str, str | None]]) -> fitz.Rect:
