@@ -16,10 +16,14 @@ from app.schemas import (
     PageReviewAgainIn,
     PageReviseIn,
     PageVersionOut,
+    ProofreadApplyIn,
+    ProofreadOut,
+    ProofreadSuggestion,
 )
 from app.services.directive_fix import apply_directive_replacements
 from app.services.layout_assets import extract_embedded_figures, finalize_page_html, figure_file
 from app.services.llm_draft import revise_from_scan
+from app.services.llm_proofread import apply_proofread_suggestions, proofread_from_scan
 from app.services.llm_status import LlmQuotaError
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE
@@ -310,6 +314,118 @@ def review_again(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
     directive = body.directive or DEFAULT_REVIEW_DIRECTIVE
     page = _apply_llm_revision(db, page, user, directive)
+    return get_page(str(page.id), user, db)
+
+
+@router.post("/pages/{page_id}/proofread", response_model=ProofreadOut)
+def proofread_page(
+    page_id: str,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Sense-check draft vs scan; return suggestions — does not change HTML."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Page is accepted — revoke consent before proofread",
+        )
+    if not page.scan_path or not Path(page.scan_path).exists():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet")
+    if not (page.current_html or "").strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no HTML draft")
+    try:
+        suggestions, model, usage = proofread_from_scan(
+            Path(page.scan_path),
+            page_no=page.page_no,
+            current_html=page.current_html or "",
+        )
+    except LlmQuotaError as exc:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"code": "llm_quota", "message": str(exc)},
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Proofread failed: {exc}") from exc
+
+    record_usage(
+        db,
+        project_id=page.project_id,
+        page_id=page.id,
+        network=str(usage.get("network") or "gemini"),
+        model=str(usage.get("model") or model.split(":", 1)[-1]),
+        usage=usage,
+        operation="proofread",
+    )
+    note = (
+        f"Найдено предложений: {len(suggestions)}. "
+        "Отметьте нужные и нажмите «Применить выбранные» — остальное можно отклонить."
+        if suggestions
+        else "Подозрительных мест не найдено (или модель не уверена)."
+    )
+    return ProofreadOut(
+        suggestions=[ProofreadSuggestion(**s) for s in suggestions],
+        model=model,
+        note=note,
+    )
+
+
+@router.post("/pages/{page_id}/proofread/apply", response_model=PageDetailOut)
+def apply_proofread(
+    page_id: str,
+    body: ProofreadApplyIn,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Apply only the accepted proofread suggestions to current HTML."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Page is accepted — revoke consent before applying",
+        )
+    accepted = [s.model_dump() for s in (body.accepted or [])]
+    if not accepted:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Nothing selected to apply")
+
+    html, applied = apply_proofread_suggestions(page.current_html or "", accepted)
+    if not applied:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Selected strings not found in current HTML (already changed?)",
+        )
+
+    if page.scan_path and Path(page.scan_path).exists():
+        html = finalize_page_html(
+            html,
+            scan_path=Path(page.scan_path),
+            project_id=page.project_id,
+            page_no=page.page_no,
+            page_id=page.id,
+        )
+
+    page.current_html = html
+    page.status = PageStatus.expert_review
+    next_ver = (
+        db.scalar(select(func.max(PageVersion.version)).where(PageVersion.page_id == page.id)) or 0
+    ) + 1
+    note = "proofread-apply | " + "; ".join(f"{a['wrong']}→{a['right']}" for a in applied)
+    db.add(
+        PageVersion(
+            page_id=page.id,
+            version=next_ver,
+            html=html,
+            source=VersionSource.expert,
+            created_by=user.id,
+            note=note[:500],
+        )
+    )
+    db.commit()
+    db.refresh(page)
     return get_page(str(page.id), user, db)
 
 

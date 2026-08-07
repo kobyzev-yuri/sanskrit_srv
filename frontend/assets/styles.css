@@ -543,6 +543,66 @@ textarea {
   border-top: 1px solid var(--line);
   background: #faf6ee;
 }
+.proofread-box {
+  border-top: 1px solid var(--line);
+  background: #f3f7ef;
+  padding: 0.65rem 0.75rem;
+}
+.proofread-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.proofread-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 0.4rem;
+}
+.proof-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem 0.65rem;
+  align-items: start;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #d5e0c8;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+.proof-item:has(input:checked) {
+  border-color: #7a9a4a;
+  background: #f7fbf0;
+}
+.proof-item .sa-pair {
+  font-family: "Noto Serif Devanagari", serif;
+  font-size: 1.05rem;
+}
+.proof-item .reason {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.proof-item .sev {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #8a6a3d;
+}
+.html-preview mark.proof-hit {
+  background: #ffe08a;
+  color: inherit;
+  padding: 0 0.1em;
+  border-radius: 2px;
+  box-shadow: inset 0 -2px 0 #e0a800;
+  cursor: help;
+}
+.html-preview mark.proof-hit.is-on {
+  background: #c8e6a0;
+  box-shadow: inset 0 -2px 0 #6a9a30;
+}
 
 .toolbar {
   display: flex;

@@ -330,6 +330,61 @@ def revise_from_scan(
     raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
 
 
+def run_vision_prompt(scan_path: Path, user_text: str) -> tuple[str, str, dict[str, Any]]:
+    """Call active LLM route with scan + text prompt. Returns (raw_text, model_id, usage)."""
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY missing in server .env")
+    if not scan_path.exists():
+        raise FileNotFoundError(f"scan missing: {scan_path}")
+
+    image_b64 = image_to_jpeg_b64(scan_path)
+    errors: list[str] = []
+    plan = model_plan()
+
+    for model in _uniq(plan["anthropic"]):
+        try:
+            text, usage = _call_anthropic(
+                settings.openai_api_key,
+                settings.anthropic_base_url,
+                model,
+                user_text,
+                image_b64,
+            )
+            usage = {**usage, "network": "anthropic", "model": model}
+            return text, f"anthropic:{model}", usage
+        except LlmQuotaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"anthropic:{model}: {exc}")
+
+    for model in _uniq(plan["gemini"]):
+        try:
+            text, usage = _call_gemini(
+                settings.openai_api_key, settings.gemini_base_url, model, user_text, image_b64
+            )
+            usage = {**usage, "network": "gemini", "model": model}
+            return text, f"gemini:{model}", usage
+        except LlmQuotaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"gemini:{model}: {exc}")
+
+    for model in _uniq(plan["openai"]):
+        try:
+            text, usage = _call_openai(
+                settings.openai_api_key, settings.openai_base_url, model, user_text, image_b64
+            )
+            usage = {**usage, "network": "openai", "model": model}
+            return text, f"openai:{model}", usage
+        except LlmQuotaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"openai:{model}: {exc}")
+
+    raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
+
+
 def _uniq(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []

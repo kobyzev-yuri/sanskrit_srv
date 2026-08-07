@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260807a" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260807b" />
 </head>
 <body>
   <div class="app-shell">
@@ -157,7 +157,22 @@
                     <div class="edit-actions" style="padding:0;border:0;background:transparent">
                       <button class="primary" type="button" id="btn-revise">Отправить задание</button>
                       <button type="button" id="btn-review-again">Пересмотри страницу</button>
+                      <button type="button" id="btn-proofread" title="Второй проход: смысловая проверка со сканом">Смысловая проверка</button>
                       <span class="muted" id="revise-status"></span>
+                    </div>
+                  </div>
+                  <div id="proofread-box" class="proofread-box" hidden>
+                    <div class="proofread-head">
+                      <strong>Предложения проверки</strong>
+                      <span class="muted" id="proofread-meta"></span>
+                    </div>
+                    <p class="muted" id="proofread-note" style="margin:0.35rem 0"></p>
+                    <div id="proofread-list" class="proofread-list"></div>
+                    <div class="edit-actions" style="padding:0.5rem 0 0;border:0;background:transparent">
+                      <button type="button" id="btn-proof-all">Выбрать все</button>
+                      <button type="button" id="btn-proof-none">Снять все</button>
+                      <button class="primary" type="button" id="btn-proof-apply">Применить выбранные</button>
+                      <button type="button" id="btn-proof-dismiss">Закрыть</button>
                     </div>
                   </div>
                   <div class="edit-actions">
@@ -228,6 +243,6 @@
     </main>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260807a"></script>
+  <script src="/assets/app.js?v=20260807b"></script>
 </body>
 </html>

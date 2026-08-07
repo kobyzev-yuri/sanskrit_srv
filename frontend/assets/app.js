@@ -8,6 +8,7 @@ const state = {
   page: null,
   /** @type {"all"|"open"} */
   thumbFilter: localStorage.getItem("ss_thumb_filter") === "open" ? "open" : "all",
+  proofSuggestions: [],
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -538,6 +539,7 @@ function renderPreview(html) {
   // Draft HTML is trusted content from our pipeline / LLM, not arbitrary user HTML from the open web.
   box.innerHTML = src;
   hydratePreviewFigures(box);
+  if (state.proofSuggestions?.length) highlightProofSuggestions(box, state.proofSuggestions);
 }
 
 /** /api/.../figures/* require Bearer — plain <img src> gets 401 and shows only alt text. */
@@ -743,6 +745,7 @@ function renderSaChart() {
 }
 
 async function loadPage(pageId) {
+  clearProofread();
   state.page = await api(`/pages/${pageId}`);
   const st =
     state.page.status === "expert_done"
@@ -858,12 +861,15 @@ async function runRevision(directive) {
   const st = $("#revise-status");
   $("#btn-revise").disabled = true;
   $("#btn-review-again").disabled = true;
+  const proofBtn = $("#btn-proofread");
+  if (proofBtn) proofBtn.disabled = true;
   st.textContent = "LLM смотрит скан… до 1–2 мин";
   try {
     state.page = await api(`/pages/${state.page.id}/revise`, {
       method: "POST",
       json: { directive },
     });
+    clearProofread();
     setDraftHtml(state.page.current_html || "");
     switchTab("preview");
     $("#page-status").textContent = state.page.status;
@@ -875,6 +881,7 @@ async function runRevision(directive) {
   } finally {
     $("#btn-revise").disabled = false;
     $("#btn-review-again").disabled = false;
+    if (proofBtn) proofBtn.disabled = false;
   }
 }
 
@@ -914,6 +921,175 @@ async function reviewAgain() {
     $("#btn-revise").disabled = false;
     $("#btn-review-again").disabled = false;
   }
+}
+
+function clearProofread() {
+  state.proofSuggestions = [];
+  const box = $("#proofread-box");
+  if (box) box.hidden = true;
+  const list = $("#proofread-list");
+  if (list) list.innerHTML = "";
+  const meta = $("#proofread-meta");
+  if (meta) meta.textContent = "";
+  const note = $("#proofread-note");
+  if (note) note.textContent = "";
+}
+
+function selectedProofSuggestions() {
+  return state.proofSuggestions.filter((s) => {
+    const cb = document.querySelector(`#proofread-list input[data-id="${CSS.escape(s.id)}"]`);
+    return cb && cb.checked;
+  });
+}
+
+function syncProofHighlightClasses() {
+  const selected = new Set(selectedProofSuggestions().map((s) => s.id));
+  $$("#html-preview mark.proof-hit").forEach((mark) => {
+    mark.classList.toggle("is-on", selected.has(mark.dataset.proofId));
+  });
+}
+
+function highlightProofSuggestions(root, suggestions) {
+  if (!root) return;
+  // Unwrap previous marks
+  root.querySelectorAll("mark.proof-hit").forEach((mark) => {
+    const parent = mark.parentNode;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    parent.removeChild(mark);
+  });
+  root.normalize();
+  const selected = new Set(
+    suggestions
+      .filter((s) => {
+        const cb = document.querySelector(`#proofread-list input[data-id="${CSS.escape(s.id)}"]`);
+        return !cb || cb.checked;
+      })
+      .map((s) => s.id)
+  );
+  // Longer strings first
+  const ordered = [...suggestions].sort((a, b) => b.wrong.length - a.wrong.length);
+  for (const s of ordered) {
+    if (!s.wrong) continue;
+    highlightFirstTextMatch(root, s.wrong, s.id, selected.has(s.id), s.reason || "");
+  }
+}
+
+function highlightFirstTextMatch(root, needle, id, isOn, title) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.includes(needle)) return NodeFilter.FILTER_REJECT;
+      if (node.parentElement?.closest("mark.proof-hit")) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const node = walker.nextNode();
+  if (!node) return false;
+  const text = node.nodeValue;
+  const idx = text.indexOf(needle);
+  if (idx < 0) return false;
+  const before = text.slice(0, idx);
+  const match = text.slice(idx, idx + needle.length);
+  const after = text.slice(idx + needle.length);
+  const mark = document.createElement("mark");
+  mark.className = "proof-hit" + (isOn ? " is-on" : "");
+  mark.dataset.proofId = id;
+  mark.title = title || `${needle}`;
+  mark.textContent = match;
+  const parent = node.parentNode;
+  const frag = document.createDocumentFragment();
+  if (before) frag.appendChild(document.createTextNode(before));
+  frag.appendChild(mark);
+  if (after) frag.appendChild(document.createTextNode(after));
+  parent.replaceChild(frag, node);
+  return true;
+}
+
+function renderProofreadPanel(result) {
+  const box = $("#proofread-box");
+  const list = $("#proofread-list");
+  if (!box || !list) return;
+  state.proofSuggestions = result.suggestions || [];
+  $("#proofread-meta").textContent = result.model ? `модель: ${result.model}` : "";
+  $("#proofread-note").textContent = result.note || "";
+  if (!state.proofSuggestions.length) {
+    list.innerHTML = `<p class="muted" style="margin:0">Нечего применять — можно закрыть.</p>`;
+    box.hidden = false;
+    renderPreview($("#html-editor").value);
+    return;
+  }
+  list.innerHTML = state.proofSuggestions
+    .map(
+      (s) => `<label class="proof-item">
+      <input type="checkbox" checked data-id="${escapeHtml(s.id)}" />
+      <span>
+        <span class="sev">${escapeHtml(s.severity || "medium")}</span>
+        <div class="sa-pair"><span class="sa">${escapeHtml(s.wrong)}</span> → <span class="sa">${escapeHtml(s.right)}</span></div>
+        <div class="reason">${escapeHtml(s.reason || "")}</div>
+      </span>
+    </label>`
+    )
+    .join("");
+  list.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+    cb.onchange = () => syncProofHighlightClasses();
+  });
+  box.hidden = false;
+  switchTab("preview");
+  renderPreview($("#html-editor").value);
+}
+
+async function runProofread() {
+  if (!state.page) return;
+  const st = $("#revise-status");
+  const btn = $("#btn-proofread");
+  $("#btn-revise").disabled = true;
+  $("#btn-review-again").disabled = true;
+  if (btn) btn.disabled = true;
+  st.textContent = "Смысловая проверка… до 1–2 мин";
+  try {
+    const result = await api(`/pages/${state.page.id}/proofread`, { method: "POST" });
+    renderProofreadPanel(result);
+    toast(
+      result.suggestions?.length
+        ? `Предложений: ${result.suggestions.length} — отметьте и примените`
+        : "Подозрительных мест не найдено"
+    );
+    st.textContent = "проверка готова";
+  } catch (e) {
+    toast(e.message, true);
+    st.textContent = "";
+  } finally {
+    $("#btn-revise").disabled = false;
+    $("#btn-review-again").disabled = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function applySelectedProofs() {
+  if (!state.page) return;
+  const accepted = selectedProofSuggestions();
+  if (!accepted.length) {
+    toast("Отметьте хотя бы одно предложение", true);
+    return;
+  }
+  try {
+    state.page = await api(`/pages/${state.page.id}/proofread/apply`, {
+      method: "POST",
+      json: { accepted },
+    });
+    clearProofread();
+    setDraftHtml(state.page.current_html || "");
+    switchTab("preview");
+    toast(`Применено правок: ${accepted.length}`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function setProofSelection(all) {
+  $$("#proofread-list input[type=checkbox]").forEach((cb) => {
+    cb.checked = all;
+  });
+  syncProofHighlightClasses();
 }
 
 async function startPipeline() {
@@ -1075,6 +1251,21 @@ function wire() {
   $("#btn-revoke").onclick = revokePage;
   $("#btn-revise").onclick = revisePage;
   $("#btn-review-again").onclick = reviewAgain;
+  const btnProof = $("#btn-proofread");
+  if (btnProof) btnProof.onclick = runProofread;
+  const btnProofApply = $("#btn-proof-apply");
+  if (btnProofApply) btnProofApply.onclick = applySelectedProofs;
+  const btnProofAll = $("#btn-proof-all");
+  if (btnProofAll) btnProofAll.onclick = () => setProofSelection(true);
+  const btnProofNone = $("#btn-proof-none");
+  if (btnProofNone) btnProofNone.onclick = () => setProofSelection(false);
+  const btnProofDismiss = $("#btn-proof-dismiss");
+  if (btnProofDismiss) {
+    btnProofDismiss.onclick = () => {
+      clearProofread();
+      renderPreview($("#html-editor").value);
+    };
+  }
   $("#btn-start-pipeline").onclick = startPipeline;
   $("#btn-export-pdf").onclick = (e) => exportPdf("text", { rebuild: e.shiftKey });
   $("#btn-export-interleave").onclick = (e) =>

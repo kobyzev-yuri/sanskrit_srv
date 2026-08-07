@@ -125,6 +125,25 @@ class PageReviewAgainIn(BaseModel):
     directive: str | None = Field(default=None, max_length=4000)
 
 
+class ProofreadSuggestion(BaseModel):
+    id: str
+    wrong: str
+    right: str
+    reason: str = ""
+    severity: str = "medium"
+
+
+class ProofreadOut(BaseModel):
+    suggestions: list[ProofreadSuggestion]
+    model: str
+    note: str = ""
+
+
+class ProofreadApplyIn(BaseModel):
+    """Expert-accepted subset of proofread suggestions."""
+    accepted: list[ProofreadSuggestion] = Field(default_factory=list)
+
+
 class PageVersionOut(BaseModel):
     id: uuid.UUID
     version: int
