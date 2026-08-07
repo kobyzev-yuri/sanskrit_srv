@@ -330,8 +330,16 @@ def revise_from_scan(
     raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
 
 
-def run_vision_prompt(scan_path: Path, user_text: str) -> tuple[str, str, dict[str, Any]]:
-    """Call active LLM route with scan + text prompt. Returns (raw_text, model_id, usage)."""
+def run_vision_prompt(
+    scan_path: Path,
+    user_text: str,
+    *,
+    opus_only: bool = False,
+) -> tuple[str, str, dict[str, Any]]:
+    """Call active LLM route with scan + text prompt. Returns (raw_text, model_id, usage).
+
+    opus_only=True — only Claude (for sense-check); no silent Gemini/OpenAI fallback.
+    """
     settings = get_settings()
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY missing in server .env")
@@ -340,7 +348,11 @@ def run_vision_prompt(scan_path: Path, user_text: str) -> tuple[str, str, dict[s
 
     image_b64 = image_to_jpeg_b64(scan_path)
     errors: list[str] = []
-    plan = model_plan()
+    if opus_only:
+        opus = (settings.anthropic_model or "").strip() or "claude-opus-5"
+        plan = {"anthropic": [opus], "gemini": [], "openai": []}
+    else:
+        plan = model_plan()
 
     for model in _uniq(plan["anthropic"]):
         try:
@@ -357,6 +369,12 @@ def run_vision_prompt(scan_path: Path, user_text: str) -> tuple[str, str, dict[s
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"anthropic:{model}: {exc}")
+
+    if opus_only:
+        raise RuntimeError(
+            "Смысловая проверка требует Claude Opus, но вызов не удался: "
+            + ("; ".join(errors[-4:]) or "unknown error")
+        )
 
     for model in _uniq(plan["gemini"]):
         try:
@@ -399,10 +417,12 @@ def _call_anthropic(
     api_key: str, base_url: str, model: str, user_text: str, image_b64: str
 ) -> tuple[str, dict[str, Any]]:
     url = f"{base_url.rstrip('/')}/v1/messages"
+    # Opus 5 thinks by default; without a text block we used to fall through to Gemini.
     payload = {
         "model": model,
         "max_tokens": 8192,
         "temperature": 0,
+        "thinking": {"type": "disabled"},
         "messages": [
             {
                 "role": "user",
@@ -431,6 +451,20 @@ def _call_anthropic(
         json=payload,
         timeout=180,
     )
+    # Older Claude ids may reject "thinking"; retry once without it.
+    if resp.status_code == 400 and "thinking" in (resp.text or "").lower():
+        payload.pop("thinking", None)
+        resp = httpx.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=180,
+        )
     if resp.status_code != 200:
         body = resp.text[:400]
         if is_quota_response(resp.status_code, body):
@@ -444,7 +478,14 @@ def _call_anthropic(
         b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"
     )
     if not text.strip():
-        raise RuntimeError("empty text")
+        # Last resort: some gateways put JSON in thinking/signature payloads.
+        text = "".join(
+            b.get("text", "") or b.get("thinking", "")
+            for b in blocks
+            if isinstance(b, dict)
+        )
+    if not text.strip():
+        raise RuntimeError("empty text from Anthropic (thinking-only response?)")
     return text, parse_anthropic_usage(data)
 
 

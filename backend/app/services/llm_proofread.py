@@ -24,6 +24,7 @@ STRICT RULES:
 - Prefer whole-word / akṣara-group replacements over single ambiguous letters when possible.
 - Skip layout/CSS issues. Skip already-correct text.
 - Max 20 suggestions. If nothing suspicious, return an empty list.
+- Output must be the JSON object only (type=text). No preamble.
 
 Return ONLY valid JSON (no markdown fences) with this shape:
 {"suggestions":[{"id":"1","wrong":"…","right":"…","reason":"short reason in Russian or English","severity":"high|medium|low"}]}
@@ -66,7 +67,7 @@ def proofread_from_scan(
             "Draft HTML:\n" + html,
         ]
     )
-    text, model, usage = run_vision_prompt(scan_path, user_text)
+    text, model, usage = run_vision_prompt(scan_path, user_text, opus_only=True)
     data = _extract_json(text)
     raw_items = data.get("suggestions") if isinstance(data, dict) else None
     if not isinstance(raw_items, list):
