@@ -417,11 +417,10 @@ def _call_anthropic(
     api_key: str, base_url: str, model: str, user_text: str, image_b64: str
 ) -> tuple[str, dict[str, Any]]:
     url = f"{base_url.rstrip('/')}/v1/messages"
-    # Opus 5 thinks by default; without a text block we used to fall through to Gemini.
-    payload = {
+    # Opus 5+: no temperature (deprecated); thinking off so we get a text/JSON block.
+    payload: dict[str, Any] = {
         "model": model,
         "max_tokens": 8192,
-        "temperature": 0,
         "thinking": {"type": "disabled"},
         "messages": [
             {
