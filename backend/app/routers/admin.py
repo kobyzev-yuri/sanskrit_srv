@@ -17,6 +17,8 @@ AdminUser = Depends(require_roles(Role.admin))
 
 
 DEFAULT_LLM_CATALOG = [
+    {"provider": "anthropic", "model": "claude-opus-5", "label": "Claude Opus 5"},
+    {"provider": "anthropic", "model": "claude-opus-4-6", "label": "Claude Opus 4.6"},
     {"provider": "gemini", "model": "gemini-3.5-flash", "label": "Gemini 3.5 Flash"},
     {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
     {"provider": "gemini", "model": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     gemini_base_url: str = "https://api.proxyapi.ru/google"
     gemini_model: str = "gemini-2.5-flash"
+    # Claude via ProxyAPI Anthropic gateway (same OPENAI_API_KEY).
+    anthropic_base_url: str = "https://api.proxyapi.ru/anthropic"
+    anthropic_model: str = ""  # e.g. claude-opus-5 — empty = skip Claude
 
     # Legacy: unused for upload (whole book is default). Kept for manual extract helpers.
     default_extract_max_pages: int = 0

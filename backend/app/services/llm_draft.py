@@ -12,7 +12,7 @@ from PIL import Image
 
 from app.config import get_settings
 from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
-from app.services.llm_usage import parse_gemini_usage, parse_openai_usage
+from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 
 BASE_PROMPT = """You restore a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
 
@@ -281,13 +281,35 @@ def revise_from_scan(
     )
 
     errors: list[str] = []
+    anthropic_models = [settings.anthropic_model] if settings.anthropic_model else []
+    # Never send Claude ids to the Google Gemini gateway (common .env mistake).
     gemini_models = [
-        settings.gemini_model,
-        "gemini-2.5-flash",
-        "gemini-3.5-flash",
-        "gemini-2.0-flash",
+        m
+        for m in [
+            settings.gemini_model,
+            "gemini-2.5-flash",
+            "gemini-3.5-flash",
+            "gemini-2.0-flash",
+        ]
+        if m and not m.lower().startswith("claude")
     ]
     openai_models = [settings.openai_model, "gpt-4o-mini", "gpt-4o"]
+
+    for model in _uniq(anthropic_models):
+        try:
+            html, usage = _call_anthropic(
+                settings.openai_api_key,
+                settings.anthropic_base_url,
+                model,
+                user_text,
+                image_b64,
+            )
+            usage = {**usage, "network": "anthropic", "model": model}
+            return validate_html(html, strip_svara=strip_svara), f"anthropic:{model}", usage
+        except LlmQuotaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"anthropic:{model}: {exc}")
 
     for model in _uniq(gemini_models):
         try:
@@ -324,6 +346,59 @@ def _uniq(items: list[str]) -> list[str]:
             seen.add(x)
             out.append(x)
     return out
+
+
+def _call_anthropic(
+    api_key: str, base_url: str, model: str, user_text: str, image_b64: str
+) -> tuple[str, dict[str, Any]]:
+    url = f"{base_url.rstrip('/')}/v1/messages"
+    payload = {
+        "model": model,
+        "max_tokens": 8192,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": image_b64,
+                        },
+                    },
+                    {"type": "text", "text": user_text},
+                ],
+            }
+        ],
+    }
+    resp = httpx.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=180,
+    )
+    if resp.status_code != 200:
+        body = resp.text[:400]
+        if is_quota_response(resp.status_code, body):
+            msg = "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
+            set_quota_alert(msg)
+            raise LlmQuotaError(msg)
+        raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
+    data = resp.json()
+    blocks = data.get("content") or []
+    text = "".join(
+        b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+    )
+    if not text.strip():
+        raise RuntimeError("empty text")
+    return text, parse_anthropic_usage(data)
 
 
 def _call_gemini(

@@ -30,6 +30,19 @@ def parse_gemini_usage(data: dict) -> dict[str, Any]:
     }
 
 
+def parse_anthropic_usage(data: dict) -> dict[str, Any]:
+    usage = data.get("usage") or {}
+    prompt = int(usage.get("input_tokens") or 0)
+    completion = int(usage.get("output_tokens") or 0)
+    total = int(usage.get("total_tokens") or (prompt + completion))
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+        "usage_raw": usage if isinstance(usage, dict) else {"raw": usage},
+    }
+
+
 def parse_openai_usage(data: dict) -> dict[str, Any]:
     usage = data.get("usage") or {}
     prompt = int(usage.get("prompt_tokens") or 0)

@@ -121,7 +121,9 @@
 | `OPENAI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/openai/v1` |
 | `OPENAI_MODEL` | нет | Модель OpenAI-канала, по умолчанию `gpt-4o-mini` |
 | `GEMINI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/google` |
-| `GEMINI_MODEL` | нет | Модель Gemini-канала, по умолчанию `gemini-2.5-flash` |
+| `GEMINI_MODEL` | нет | Модель Gemini-канала, по умолчанию `gemini-2.5-flash`. **Не** ставьте сюда `claude-*` |
+| `ANTHROPIC_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/anthropic` |
+| `ANTHROPIC_MODEL` | нет | Если задано (напр. `claude-opus-5`) — Claude идёт **первым**; иначе только Gemini→OpenAI |
 | `LARGE_BOOK_PAGES` | нет | Порог подтверждения «перевести всю книгу» (по умолчанию `100`) |
 | `DEFAULT_EXTRACT_MAX_PAGES` | нет | Устарело для upload (книга целиком); можно `0` |
 | `LLM_PRICE_PER_1M` | нет | JSON тарифов USD/1M токенов для оценки $ в UI |
