@@ -178,3 +178,17 @@ class ProjectUsageOut(BaseModel):
 class LlmCatalogOut(BaseModel):
     models: list[dict[str, str]]
     note: str
+
+
+class LlmRouteOut(BaseModel):
+    route: str
+    label: str
+    hint: str
+    options: list[dict[str, Any]]
+    primary: dict[str, str]
+    fallback_models: dict[str, str]
+    updated_at: float | None = None
+
+
+class LlmRouteIn(BaseModel):
+    route: str

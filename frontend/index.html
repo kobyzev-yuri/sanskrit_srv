@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260805i" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260807a" />
 </head>
 <body>
   <div class="app-shell">
@@ -197,16 +197,37 @@
             </form>
           </div>
           <div class="admin-section">
+            <h2>Маршрут LLM</h2>
+            <p class="muted">Выбор влияет на перевод страниц и «Отправить задание» / «Пересмотри» для всех проектов.</p>
+            <div id="llm-route-box" class="llm-route-box">
+              <label class="llm-route-opt">
+                <input type="radio" name="llm-route" value="gemini" />
+                <span>
+                  <strong>Gemini (дешевле)</strong>
+                  <span class="muted llm-route-detail" data-for="gemini"></span>
+                </span>
+              </label>
+              <label class="llm-route-opt">
+                <input type="radio" name="llm-route" value="opus" />
+                <span>
+                  <strong>Claude Opus (дороже)</strong>
+                  <span class="muted llm-route-detail" data-for="opus"></span>
+                </span>
+              </label>
+            </div>
+            <p class="muted" id="llm-route-status">—</p>
+          </div>
+          <div class="admin-section">
             <h2>Каталог LLM (ProxyAPI)</h2>
             <p class="muted" id="llm-note"></p>
             <ul id="llm-catalog"></ul>
-            <p class="muted">Ключ API на сервере в <code>.env</code> (scp), не в git. Матрица routing — в settings проекта.</p>
+            <p class="muted">Ключ API на сервере в <code>.env</code>. Конкретные id моделей — <code>GEMINI_MODEL</code> / <code>ANTHROPIC_MODEL</code>.</p>
           </div>
         </div>
       </section>
     </main>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260806a"></script>
+  <script src="/assets/app.js?v=20260807a"></script>
 </body>
 </html>

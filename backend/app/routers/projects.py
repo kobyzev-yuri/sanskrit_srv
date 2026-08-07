@@ -33,14 +33,19 @@ def _uid(value: str) -> uuid.UUID:
 
 def _default_settings() -> dict:
     s = get_settings()
-    primary = (
-        {"provider": "anthropic", "model": s.anthropic_model}
-        if s.anthropic_model
-        else {"provider": "gemini", "model": s.gemini_model}
-    )
-    fallback = [{"provider": "gemini", "model": s.gemini_model}, {"provider": "openai", "model": s.openai_model}]
-    if primary["provider"] == "gemini":
-        fallback = [{"provider": "openai", "model": s.openai_model}]
+    from app.services.llm_route import describe_route
+
+    route = describe_route()
+    primary = route["primary"]
+    fb = route["fallback_models"]
+    fallback = []
+    if primary.get("provider") == "anthropic":
+        fallback = [
+            {"provider": "gemini", "model": fb["gemini"]},
+            {"provider": "openai", "model": fb["openai"]},
+        ]
+    else:
+        fallback = [{"provider": "openai", "model": fb["openai"]}]
     return {
         "llm": {
             "proxyapi": {
@@ -49,6 +54,7 @@ def _default_settings() -> dict:
                 "gemini_base_url": s.gemini_base_url,
                 "openai_base_url": s.openai_base_url,
             },
+            "active_route": route["route"],
             "routes": {
                 "lesson": {
                     "primary": primary,

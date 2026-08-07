@@ -1003,6 +1003,44 @@ async function loadAdmin() {
     .map((m) => `<li><code>${m.provider}</code> · <strong>${escapeHtml(m.model)}</strong> — ${escapeHtml(m.label)}</li>`)
     .join("");
   $("#llm-note").textContent = cat.note;
+  await loadLlmRoute();
+}
+
+async function loadLlmRoute() {
+  const box = $("#llm-route-box");
+  const status = $("#llm-route-status");
+  if (!box || !status) return;
+  try {
+    const route = await api("/admin/llm-route");
+    for (const opt of route.options || []) {
+      const detail = box.querySelector(`.llm-route-detail[data-for="${opt.id}"]`);
+      if (detail && opt.primary) {
+        detail.textContent = `${opt.primary.provider}:${opt.primary.model} — ${opt.hint || ""}`;
+      }
+    }
+    box.querySelectorAll('input[name="llm-route"]').forEach((input) => {
+      input.checked = input.value === route.route;
+      input.onchange = async () => {
+        if (!input.checked) return;
+        try {
+          const updated = await api("/admin/llm-route", {
+            method: "PUT",
+            json: { route: input.value },
+          });
+          toast(`Маршрут LLM: ${updated.label}`);
+          status.textContent = `Активно: ${updated.label} · ${updated.primary.provider}:${updated.primary.model}`;
+          const cat = await api("/admin/llm-catalog");
+          $("#llm-note").textContent = cat.note;
+        } catch (e) {
+          toast(e.message, true);
+          await loadLlmRoute();
+        }
+      };
+    });
+    status.textContent = `Активно: ${route.label} · ${route.primary.provider}:${route.primary.model}`;
+  } catch (e) {
+    status.textContent = e.message || "Не удалось загрузить маршрут";
+  }
 }
 
 async function createUser(ev) {

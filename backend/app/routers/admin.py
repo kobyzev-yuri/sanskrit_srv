@@ -10,7 +10,15 @@ from app.config import get_settings
 from app.db import get_db
 from app.deps import require_roles
 from app.models import Role, User
-from app.schemas import LlmCatalogOut, UserCreateIn, UserOut, UserUpdateIn
+from app.schemas import (
+    LlmCatalogOut,
+    LlmRouteIn,
+    LlmRouteOut,
+    UserCreateIn,
+    UserOut,
+    UserUpdateIn,
+)
+from app.services.llm_route import describe_route, set_route
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 AdminUser = Depends(require_roles(Role.admin))
@@ -80,10 +88,28 @@ def update_user(
 def llm_catalog(_: User = AdminUser):
     settings = get_settings()
     key_set = bool(settings.openai_api_key)
+    route = describe_route()
     return LlmCatalogOut(
         models=DEFAULT_LLM_CATALOG,
         note=(
-            "Catalog is editable in project.settings.llm; ProxyAPI key "
-            + ("is configured on server." if key_set else "is MISSING — scp .env to server.")
+            f"Сейчас: {route['label']} ({route['primary']['provider']}:{route['primary']['model']}). "
+            "Переключение — блок «Маршрут LLM» ниже. "
+            + ("Ключ ProxyAPI настроен." if key_set else "Ключ ProxyAPI MISSING — scp .env.")
         ),
     )
+
+
+@router.get("/llm-route", response_model=LlmRouteOut)
+def get_llm_route(_: User = AdminUser):
+    return describe_route()
+
+
+@router.put("/llm-route", response_model=LlmRouteOut)
+def put_llm_route(body: LlmRouteIn, user: User = AdminUser):
+    route = (body.route or "").strip().lower()
+    if route not in ("gemini", "opus"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="route must be 'gemini' or 'opus'",
+        )
+    return set_route(route, updated_by=user.email)  # type: ignore[arg-type]

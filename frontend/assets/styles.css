@@ -625,6 +625,29 @@ textarea {
   padding: 1rem;
 }
 .admin-section h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
+.llm-route-box {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.75rem 0;
+}
+.llm-route-opt {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  background: #faf7f2;
+}
+.llm-route-opt:has(input:checked) {
+  border-color: #b08958;
+  background: #fff8ee;
+  box-shadow: 0 0 0 1px rgba(176, 137, 88, 0.25);
+}
+.llm-route-opt strong { display: block; }
+.llm-route-opt .muted { display: block; font-size: 0.85rem; margin-top: 0.2rem; }
+.llm-route-opt input { margin-top: 0.2rem; accent-color: #8a6a3d; }
 table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
 th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid var(--line); }
 .muted { color: var(--muted); }

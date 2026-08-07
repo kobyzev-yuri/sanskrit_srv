@@ -12,6 +12,7 @@ from PIL import Image
 
 from app.config import get_settings
 from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
+from app.services.llm_route import model_plan
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 
 BASE_PROMPT = """You restore a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
@@ -281,19 +282,10 @@ def revise_from_scan(
     )
 
     errors: list[str] = []
-    anthropic_models = [settings.anthropic_model] if settings.anthropic_model else []
-    # Never send Claude ids to the Google Gemini gateway (common .env mistake).
-    gemini_models = [
-        m
-        for m in [
-            settings.gemini_model,
-            "gemini-2.5-flash",
-            "gemini-3.5-flash",
-            "gemini-2.0-flash",
-        ]
-        if m and not m.lower().startswith("claude")
-    ]
-    openai_models = [settings.openai_model, "gpt-4o-mini", "gpt-4o"]
+    plan = model_plan()
+    anthropic_models = plan["anthropic"]
+    gemini_models = plan["gemini"]
+    openai_models = plan["openai"]
 
     for model in _uniq(anthropic_models):
         try:
