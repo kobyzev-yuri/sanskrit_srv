@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     anthropic_base_url: str = "https://api.proxyapi.ru/anthropic"
     anthropic_model: str = ""  # e.g. claude-opus-5 — empty = skip Claude
 
+    # OpenRouter (default chat/vision). stealth/ox-alpha: text+image, 1M context.
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "stealth/ox-alpha"
+    openrouter_http_referer: str = "https://sanskrit-srv.local"
+    openrouter_app_title: str = "sanskrit_srv"
+    openrouter_max_tokens: int = 32768
+
     # Legacy: unused for upload (whole book is default). Kept for manual extract helpers.
     default_extract_max_pages: int = 0
     # Warn + require confirm before whole-book pipeline when PDF has more pages.

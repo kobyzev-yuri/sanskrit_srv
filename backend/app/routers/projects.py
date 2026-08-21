@@ -39,7 +39,9 @@ def _default_settings() -> dict:
     primary = route["primary"]
     fb = route["fallback_models"]
     fallback = []
-    if primary.get("provider") == "anthropic":
+    if primary.get("provider") == "openrouter":
+        fallback = []
+    elif primary.get("provider") == "anthropic":
         fallback = [
             {"provider": "gemini", "model": fb["gemini"]},
             {"provider": "openai", "model": fb["openai"]},
@@ -48,6 +50,11 @@ def _default_settings() -> dict:
         fallback = [{"provider": "openai", "model": fb["openai"]}]
     return {
         "llm": {
+            "openrouter": {
+                "api_key_env": "OPENROUTER_API_KEY",
+                "base_url": s.openrouter_base_url,
+                "model": s.openrouter_model,
+            },
             "proxyapi": {
                 "api_key_env": "OPENAI_API_KEY",
                 "anthropic_base_url": s.anthropic_base_url,

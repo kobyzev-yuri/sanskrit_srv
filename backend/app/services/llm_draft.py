@@ -1,4 +1,4 @@
-"""Draft / revise page HTML from scan via ProxyAPI vision (Gemini / OpenAI)."""
+"""Draft / revise page HTML from scan via vision LLM (OpenRouter ox-alpha / ProxyAPI)."""
 from __future__ import annotations
 
 import base64
@@ -12,7 +12,7 @@ from PIL import Image
 
 from app.config import get_settings
 from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
-from app.services.llm_route import model_plan
+from app.services.llm_route import model_plan, model_plan_primary_only
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 
 BASE_PROMPT = """You restore a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
@@ -224,13 +224,13 @@ def revise_from_scan(
     directive: str | None = None,
     available_figures: list[dict] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
-    """Return (html, model_used, usage). Tries Gemini then OpenAI fallbacks.
+    """Return (html, model_used, usage). Tries the admin LLM route (OpenRouter by default).
 
     usage keys: network, model, prompt_tokens, completion_tokens, total_tokens, usage_raw
     """
     settings = get_settings()
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY missing in server .env")
+    plan = model_plan()
+    _require_keys_for_plan(settings, plan)
     if not scan_path.exists():
         raise FileNotFoundError(f"scan missing: {scan_path}")
 
@@ -282,10 +282,26 @@ def revise_from_scan(
     )
 
     errors: list[str] = []
-    plan = model_plan()
     anthropic_models = plan["anthropic"]
     gemini_models = plan["gemini"]
     openai_models = plan["openai"]
+    openrouter_models = plan.get("openrouter") or []
+
+    for model in _uniq(openrouter_models):
+        try:
+            html, usage = _call_openrouter(
+                settings.openrouter_api_key,
+                settings.openrouter_base_url,
+                model,
+                user_text,
+                image_b64,
+            )
+            usage = {**usage, "network": "openrouter", "model": model}
+            return validate_html(html, strip_svara=strip_svara), f"openrouter:{model}", usage
+        except LlmQuotaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"openrouter:{model}: {exc}")
 
     for model in _uniq(anthropic_models):
         try:
@@ -335,24 +351,43 @@ def run_vision_prompt(
     user_text: str,
     *,
     opus_only: bool = False,
+    primary_only: bool = False,
 ) -> tuple[str, str, dict[str, Any]]:
     """Call active LLM route with scan + text prompt. Returns (raw_text, model_id, usage).
 
-    opus_only=True — only Claude (for sense-check); no silent Gemini/OpenAI fallback.
+    primary_only=True — only the selected primary (no Gemini/OpenAI fallback).
+    opus_only=True — deprecated alias: Claude only (ProxyAPI).
     """
     settings = get_settings()
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY missing in server .env")
+    if opus_only:
+        opus = (settings.anthropic_model or "").strip() or "claude-opus-5"
+        plan = {"openrouter": [], "anthropic": [opus], "gemini": [], "openai": []}
+    elif primary_only:
+        plan = model_plan_primary_only()
+    else:
+        plan = model_plan()
+    _require_keys_for_plan(settings, plan)
     if not scan_path.exists():
         raise FileNotFoundError(f"scan missing: {scan_path}")
 
     image_b64 = image_to_jpeg_b64(scan_path)
     errors: list[str] = []
-    if opus_only:
-        opus = (settings.anthropic_model or "").strip() or "claude-opus-5"
-        plan = {"anthropic": [opus], "gemini": [], "openai": []}
-    else:
-        plan = model_plan()
+
+    for model in _uniq(plan.get("openrouter") or []):
+        try:
+            text, usage = _call_openrouter(
+                settings.openrouter_api_key,
+                settings.openrouter_base_url,
+                model,
+                user_text,
+                image_b64,
+            )
+            usage = {**usage, "network": "openrouter", "model": model}
+            return text, f"openrouter:{model}", usage
+        except LlmQuotaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"openrouter:{model}: {exc}")
 
     for model in _uniq(plan["anthropic"]):
         try:
@@ -370,9 +405,9 @@ def run_vision_prompt(
         except Exception as exc:  # noqa: BLE001
             errors.append(f"anthropic:{model}: {exc}")
 
-    if opus_only:
+    if opus_only or primary_only:
         raise RuntimeError(
-            "Смысловая проверка требует Claude Opus, но вызов не удался: "
+            "Смысловая проверка: вызов основной модели не удался: "
             + ("; ".join(errors[-4:]) or "unknown error")
         )
 
@@ -401,6 +436,91 @@ def run_vision_prompt(
             errors.append(f"openai:{model}: {exc}")
 
     raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
+
+
+def _require_keys_for_plan(settings: Any, plan: dict[str, list[str]]) -> None:
+    if plan.get("openrouter") and not (settings.openrouter_api_key or "").strip():
+        raise RuntimeError("OPENROUTER_API_KEY missing in server .env")
+    if (plan.get("anthropic") or plan.get("gemini") or plan.get("openai")) and not (
+        settings.openai_api_key or ""
+    ).strip():
+        raise RuntimeError("OPENAI_API_KEY missing in server .env")
+
+
+def _openai_message_text(message: dict[str, Any] | None) -> str:
+    msg = message or {}
+    content = msg.get("content")
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        parts = [
+            str(p.get("text") or "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") in (None, "text")
+        ]
+        joined = "".join(parts)
+        if joined.strip():
+            return joined
+    reasoning = msg.get("reasoning")
+    if isinstance(reasoning, str) and reasoning.strip():
+        return reasoning
+    return ""
+
+
+def _call_openrouter(
+    api_key: str, base_url: str, model: str, user_text: str, image_b64: str
+) -> tuple[str, dict[str, Any]]:
+    settings = get_settings()
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    limit = max(1024, int(settings.openrouter_max_tokens or 32768))
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                    },
+                ],
+            }
+        ],
+    }
+    mid = (model or "").lower()
+    if "ox-alpha" in mid or mid.startswith("stealth/"):
+        payload["max_completion_tokens"] = limit
+        payload["reasoning"] = {"enabled": True}
+    else:
+        payload["temperature"] = 0
+        payload["max_tokens"] = limit
+    resp = httpx.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": (settings.openrouter_http_referer or "https://sanskrit-srv.local"),
+            "X-Title": (settings.openrouter_app_title or "sanskrit_srv"),
+        },
+        json=payload,
+        timeout=300,
+    )
+    if resp.status_code != 200:
+        body = resp.text[:400]
+        if is_quota_response(resp.status_code, body):
+            msg = "Лимит OpenRouter / оплата (HTTP 402)."
+            set_quota_alert(msg)
+            raise LlmQuotaError(msg)
+        raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
+    data = resp.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("empty choices")
+    text = _openai_message_text(choices[0].get("message") if isinstance(choices[0], dict) else None)
+    if not str(text).strip():
+        raise RuntimeError("empty text from OpenRouter (reasoning-only?)")
+    return text, parse_openai_usage(data)
 
 
 def _uniq(items: list[str]) -> list[str]:

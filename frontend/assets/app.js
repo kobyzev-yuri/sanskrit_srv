@@ -1188,12 +1188,22 @@ async function loadLlmRoute() {
   if (!box || !status) return;
   try {
     const route = await api("/admin/llm-route");
-    for (const opt of route.options || []) {
-      const detail = box.querySelector(`.llm-route-detail[data-for="${opt.id}"]`);
-      if (detail && opt.primary) {
-        detail.textContent = `${opt.primary.provider}:${opt.primary.model} — ${opt.hint || ""}`;
-      }
-    }
+    const options = route.options || [];
+    box.innerHTML = options
+      .map((opt) => {
+        const primary = opt.primary || {};
+        const detail = primary.provider
+          ? `${primary.provider}:${primary.model} — ${opt.hint || ""}`
+          : opt.hint || "";
+        return `<label class="llm-route-opt">
+          <input type="radio" name="llm-route" value="${escapeHtml(opt.id)}" />
+          <span>
+            <strong>${escapeHtml(opt.label || opt.id)}</strong>
+            <span class="muted llm-route-detail">${escapeHtml(detail)}</span>
+          </span>
+        </label>`;
+      })
+      .join("");
     box.querySelectorAll('input[name="llm-route"]').forEach((input) => {
       input.checked = input.value === route.route;
       input.onchange = async () => {

@@ -114,7 +114,42 @@ def fetch_balance() -> dict[str, Any]:
 
 
 def llm_status() -> dict[str, Any]:
+    from app.services.llm_route import get_route
+
     alert = read_alert()
+    route = get_route()
+    if route == "openrouter":
+        or_ok = bool((get_settings().openrouter_api_key or "").strip())
+        if not or_ok:
+            return {
+                "ok": False,
+                "warning": True,
+                "code": "llm_key",
+                "message": "OPENROUTER_API_KEY не задан в .env — нужен для Ox Alpha.",
+                "balance": None,
+                "balance_ok": False,
+                "balance_error": "OPENROUTER_API_KEY missing",
+            }
+        if alert.get("active"):
+            return {
+                "ok": False,
+                "warning": True,
+                "code": alert.get("code") or "llm_quota",
+                "message": alert.get("message"),
+                "balance": None,
+                "balance_ok": True,
+                "balance_error": None,
+            }
+        return {
+            "ok": True,
+            "warning": False,
+            "code": None,
+            "message": "OpenRouter · stealth/ox-alpha",
+            "balance": None,
+            "balance_ok": True,
+            "balance_error": None,
+        }
+
     bal = fetch_balance()
     active = bool(alert.get("active")) or bool(bal.get("low"))
     message = None
@@ -142,4 +177,9 @@ def llm_status() -> dict[str, Any]:
 
 
 def settings_key_ok() -> bool:
-    return bool(get_settings().openai_api_key)
+    s = get_settings()
+    from app.services.llm_route import get_route
+
+    if get_route() == "openrouter":
+        return bool((s.openrouter_api_key or "").strip())
+    return bool(s.openai_api_key)

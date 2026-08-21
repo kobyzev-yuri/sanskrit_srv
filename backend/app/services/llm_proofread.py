@@ -67,7 +67,7 @@ def proofread_from_scan(
             "Draft HTML:\n" + html,
         ]
     )
-    text, model, usage = run_vision_prompt(scan_path, user_text, opus_only=True)
+    text, model, usage = run_vision_prompt(scan_path, user_text, primary_only=True)
     data = _extract_json(text)
     raw_items = data.get("suggestions") if isinstance(data, dict) else None
     if not isinstance(raw_items, list):

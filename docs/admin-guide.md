@@ -13,7 +13,8 @@
 | **Worker** (`python -m app.worker`) | Очередь jobs: нарезка сканов + LLM-черновики |
 | **SQLite** | Пользователи, проекты, страницы, версии, usage (по умолчанию) |
 | **storage/** | Исходные PDF, PNG страниц, экспорты |
-| **ProxyAPI** | Шлюз к Gemini / OpenAI (один ключ) |
+| **OpenRouter** | По умолчанию: `stealth/ox-alpha` (скан + текст). Бесплатный preview |
+| **ProxyAPI** | Запасной шлюз Gemini / Claude Opus / OpenAI (один ключ) |
 
 Без запущенного **worker** загрузка PDF создаст проект, но страницы не переведутся.
 
@@ -117,13 +118,17 @@
 | `JWT_SECRET` | да | Длинная случайная строка для подписи токенов |
 | `STORAGE_ROOT` | да | Каталог файлов проекта (сканы, PDF) |
 | `CORS_ORIGINS` | нет | Список origin через запятую; `*` для alpha |
-| `OPENAI_API_KEY` | да* | Ключ ProxyAPI (`*` нужен для LLM; без ключа — только extract/заглушки) |
+| `OPENROUTER_API_KEY` | да* | Ключ OpenRouter для Ox Alpha (`*` нужен для LLM по умолчанию) |
+| `OPENROUTER_BASE_URL` | нет | По умолчанию `https://openrouter.ai/api/v1` |
+| `OPENROUTER_MODEL` | нет | По умолчанию `stealth/ox-alpha` |
+| `OPENROUTER_MAX_TOKENS` | нет | Лимит completion (по умолчанию `32768`; модель до 131k) |
+| `OPENAI_API_KEY` | нет* | Ключ ProxyAPI — нужен только для маршрутов Gemini / Opus |
 | `OPENAI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/openai/v1` |
 | `OPENAI_MODEL` | нет | Модель OpenAI-канала, по умолчанию `gpt-4o-mini` |
 | `GEMINI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/google` |
 | `GEMINI_MODEL` | нет | Модель Gemini-канала, по умолчанию `gemini-2.5-flash`. **Не** ставьте сюда `claude-*` |
 | `ANTHROPIC_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/anthropic` |
-| `ANTHROPIC_MODEL` | нет | Если задано (напр. `claude-opus-5`) — Claude идёт **первым**; иначе только Gemini→OpenAI |
+| `ANTHROPIC_MODEL` | нет | Claude на маршруте Opus (напр. `claude-opus-5`) |
 | `LARGE_BOOK_PAGES` | нет | Порог подтверждения «перевести всю книгу» (по умолчанию `100`) |
 | `DEFAULT_EXTRACT_MAX_PAGES` | нет | Устарело для upload (книга целиком); можно `0` |
 | `LLM_PRICE_PER_1M` | нет | JSON тарифов USD/1M токенов для оценки $ в UI |
@@ -134,7 +139,7 @@
 LLM_PRICE_PER_1M={"gemini:gemini-2.5-flash":{"in":0.1,"out":0.4},"openai:gpt-4o-mini":{"in":0.15,"out":0.6}}
 ```
 
-Ключ: `сеть:модель`. Цены сверяйте с тарифами ProxyAPI вручную.
+Ключ: `сеть:модель`. Для ProxyAPI сверяйте тарифы вручную. Ox Alpha на OpenRouter в preview — $0.
 
 Приложение ищет `.env` в: текущий каталог → корень репозитория → `/opt/sanskrit_srv/.env`.
 
@@ -160,13 +165,15 @@ python -m app.cli user-reset-password --email u@x --password '...'
 Роль **admin** → пункт **Бэкофис**:
 
 1. Пользователи (создание / роли).
-2. **Маршрут LLM** — переключатель:
-   - **Gemini (дешевле)** — основной Flash, Claude не вызывается;
-   - **Claude Opus (дороже)** — основной Opus, запасные Gemini и OpenAI.
-   Выбор пишется в `data/llm_route.json` и действует сразу (без правки `.env` / без рестарта) на перевод и пересмотр страниц.
-3. Каталог моделей ProxyAPI (справочник id).
+2. **Маршрут LLM** — переключатель в бэкофисе (список строится с сервера):
+   - **Ox Alpha (OpenRouter, бесплатно)** — по умолчанию; скан уходит картинкой, ProxyAPI не вызывается;
+   - **Gemini (ProxyAPI)** — Flash, запасной OpenAI;
+   - **Claude Opus (ProxyAPI)** — Opus, запасные Gemini и OpenAI.
+   Выбор пишется в `data/llm_route.json` и действует сразу (без правки `.env` / без рестарта) на перевод, пересмотр и смысловую проверку.
+   Если на сервере уже сохранён старый `gemini`/`opus`, переключите радио на Ox Alpha один раз.
+3. Каталог моделей (OpenRouter + ProxyAPI, справочник id).
 
-Конкретные id задаются в `.env`: `GEMINI_MODEL`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`.
+Конкретные id задаются в `.env`: `OPENROUTER_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`.
 
 Загрузка PDF — на экране **Проекты** (только admin). Книги > `LARGE_BOOK_PAGES` страниц требуют подтверждения полного перевода.
 
@@ -183,7 +190,7 @@ python -m app.cli user-reset-password --email u@x --password '...'
 | Обновление кода | rsync/Actions → `remote_deploy.sh` (venv + restart); `.env` / data / storage не трогать |
 | Перезапуск конвейера книги | В UI (admin): **Перевести всю книгу заново** — дорого, затирает черновики |
 
-Лимиты alpha на слабом хосте: `MemoryMax` в unit-файлах (~400M API / ~550M worker). Большие книги (сотни страниц) гоняются **последовательно**, долго и с расходом ProxyAPI.
+Лимиты alpha на слабом хосте: `MemoryMax` в unit-файлах (~400M API / ~550M worker). Большие книги (сотни страниц) гоняются **последовательно** и долго.
 
 ---
 

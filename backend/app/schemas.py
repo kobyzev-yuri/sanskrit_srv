@@ -207,6 +207,8 @@ class LlmRouteOut(BaseModel):
     primary: dict[str, str]
     fallback_models: dict[str, str]
     updated_at: float | None = None
+    openrouter_key: bool = False
+    proxyapi_key: bool = False
 
 
 class LlmRouteIn(BaseModel):

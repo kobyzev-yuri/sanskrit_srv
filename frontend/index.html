@@ -59,7 +59,7 @@
           <div class="modal-card">
             <h2>Большая книга</h2>
             <p id="large-book-text" class="muted"></p>
-            <p>Перевести <strong>все страницы</strong>? Для скана это LLM по каждой странице (время и расход ProxyAPI).</p>
+            <p>Перевести <strong>все страницы</strong>? Для скана это LLM по каждой странице (время; Ox Alpha на OpenRouter бесплатно, Gemini/Opus — расход ProxyAPI).</p>
             <div class="edit-actions" style="border:0;padding:0;background:transparent">
               <button type="button" class="primary" id="btn-confirm-whole-book">Да, перевести всю книгу</button>
               <button type="button" id="btn-cancel-whole-book">Пока не переводить</button>
@@ -213,36 +213,21 @@
           </div>
           <div class="admin-section">
             <h2>Маршрут LLM</h2>
-            <p class="muted">Выбор влияет на перевод страниц и «Отправить задание» / «Пересмотри» для всех проектов.</p>
-            <div id="llm-route-box" class="llm-route-box">
-              <label class="llm-route-opt">
-                <input type="radio" name="llm-route" value="gemini" />
-                <span>
-                  <strong>Gemini (дешевле)</strong>
-                  <span class="muted llm-route-detail" data-for="gemini"></span>
-                </span>
-              </label>
-              <label class="llm-route-opt">
-                <input type="radio" name="llm-route" value="opus" />
-                <span>
-                  <strong>Claude Opus (дороже)</strong>
-                  <span class="muted llm-route-detail" data-for="opus"></span>
-                </span>
-              </label>
-            </div>
+            <p class="muted">Выбор влияет на перевод страниц, «Отправить задание», «Пересмотри» и смысловую проверку. По умолчанию — OpenRouter Ox Alpha (картинка скана + текст).</p>
+            <div id="llm-route-box" class="llm-route-box"></div>
             <p class="muted" id="llm-route-status">—</p>
           </div>
           <div class="admin-section">
-            <h2>Каталог LLM (ProxyAPI)</h2>
+            <h2>Каталог LLM</h2>
             <p class="muted" id="llm-note"></p>
             <ul id="llm-catalog"></ul>
-            <p class="muted">Ключ API на сервере в <code>.env</code>. Конкретные id моделей — <code>GEMINI_MODEL</code> / <code>ANTHROPIC_MODEL</code>.</p>
+            <p class="muted">Ключи в <code>.env</code>: <code>OPENROUTER_API_KEY</code> (Ox Alpha) и при необходимости <code>OPENAI_API_KEY</code> (ProxyAPI). Id: <code>OPENROUTER_MODEL</code> / <code>GEMINI_MODEL</code> / <code>ANTHROPIC_MODEL</code>.</p>
           </div>
         </div>
       </section>
     </main>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260807b"></script>
+  <script src="/assets/app.js?v=20260821or"></script>
 </body>
 </html>
