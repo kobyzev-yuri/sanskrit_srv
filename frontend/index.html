@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260823tr4" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260823wy1" />
 </head>
 <body>
   <div class="app-shell">
@@ -151,6 +151,7 @@
                 <header>
                   <div class="tabs">
                     <button type="button" class="tab active" data-tab="preview">Превью</button>
+                    <button type="button" class="tab" data-tab="wysiwyg" title="Правка текста без HTML-тегов">Текст</button>
                     <button type="button" class="tab" data-tab="source">HTML</button>
                     <button type="button" class="tab" data-tab="chart">Справочник</button>
                   </div>
@@ -158,6 +159,10 @@
                 </header>
                 <div id="tab-preview" class="tab-panel active">
                   <div id="html-preview" class="html-preview" aria-live="polite"></div>
+                </div>
+                <div id="tab-wysiwyg" class="tab-panel">
+                  <p class="muted wy-hint" id="wysiwyg-hint">Правите русский прямо в подсвеченных строках. Санскрит не меняется, теги не показываются.</p>
+                  <div id="html-wysiwyg" class="html-preview wysiwyg-preview"></div>
                 </div>
                 <div id="tab-source" class="tab-panel">
                   <textarea id="html-editor" spellcheck="false" placeholder="HTML черновик страницы…"></textarea>
@@ -280,6 +285,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260823tr4"></script>
+  <script src="/assets/app.js?v=20260823wy1"></script>
 </body>
 </html>

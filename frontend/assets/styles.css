@@ -408,8 +408,39 @@ textarea {
   overflow: auto;
 }
 .tab-panel.active { display: block; }
-#tab-source.active {
+#tab-source.active,
+#tab-wysiwyg.active {
   display: grid;
+}
+#tab-wysiwyg.active {
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  height: 100%;
+}
+.wy-hint {
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  background: #faf6ee;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.88rem;
+}
+.wysiwyg-preview .wy-edit {
+  outline: 1px dashed #c4b496;
+  outline-offset: 2px;
+  border-radius: 4px;
+  cursor: text;
+  background: #fffdf8;
+}
+.wysiwyg-preview .wy-edit:focus {
+  outline: 2px solid var(--accent);
+  background: #fff;
+}
+.wysiwyg-preview .wy-lock {
+  cursor: default;
+}
+#tab-wysiwyg .wysiwyg-preview {
+  min-height: 0;
+  overflow: auto;
 }
 #tab-source textarea {
   height: 100%;

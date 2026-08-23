@@ -627,8 +627,16 @@ function updateEditMode() {
   $("#edit-tools").hidden = accepted || pendingDraft;
   const srcTab = document.querySelector('.tab[data-tab="source"]');
   if (srcTab) srcTab.hidden = accepted;
+  const wyTab = document.querySelector('.tab[data-tab="wysiwyg"]');
+  if (wyTab) wyTab.hidden = accepted;
   if (accepted) switchTab("preview");
   $("#html-editor").readOnly = accepted || pendingDraft;
+  const wyBox = $("#html-wysiwyg");
+  if (wyBox && (accepted || pendingDraft)) {
+    wyBox.querySelectorAll(".wy-edit").forEach((el) => {
+      el.contentEditable = "false";
+    });
+  }
   const agreed = Boolean(translationCfg().agreed);
   if (isTranslate()) {
     const trPage = $("#btn-translate-page");
@@ -730,13 +738,129 @@ async function hydratePreviewFigures(box) {
 function setDraftHtml(html) {
   $("#html-editor").value = html || "";
   renderPreview(html || "");
+  if ($("#tab-wysiwyg")?.classList.contains("active")) renderWysiwyg(html || "");
+}
+
+function draftTab() {
+  return isTranslate() ? "wysiwyg" : "preview";
+}
+
+function isWysiwygActive() {
+  return Boolean($("#tab-wysiwyg")?.classList.contains("active"));
+}
+
+function serializeWysiwyg(box) {
+  const clone = box.cloneNode(true);
+  clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
+  clone.querySelectorAll(".wy-edit, .wy-lock").forEach((el) => {
+    el.classList.remove("wy-edit", "wy-lock");
+    if (!el.getAttribute("class")?.trim()) el.removeAttribute("class");
+  });
+  clone.querySelectorAll("span[style], font").forEach((el) => {
+    if (el.closest(".sa")) return;
+    const parent = el.parentNode;
+    if (!parent) return;
+    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+    parent.removeChild(el);
+  });
+  return clone.innerHTML;
+}
+
+function flushWysiwyg() {
+  const box = $("#html-wysiwyg");
+  if (!box || box.querySelector(".wy-empty")) return;
+  if (!box.querySelector(".wy-edit, article, .page-style")) return;
+  $("#html-editor").value = serializeWysiwyg(box);
+}
+
+function currentDraftHtml() {
+  if (isWysiwygActive()) flushWysiwyg();
+  return $("#html-editor").value;
+}
+
+function markWysiwygEditable(root, enabled) {
+  root.querySelectorAll(".sa, [lang='sa']").forEach((el) => {
+    if (el.classList.contains("ru") || el.classList.contains("tr")) return;
+    el.contentEditable = "false";
+    el.classList.add("wy-lock");
+  });
+  let targets = [...root.querySelectorAll(".ru, .tr, .note")];
+  if (!targets.length) {
+    targets = [...root.querySelectorAll("p, h1, h2, h3, li, td, blockquote")].filter(
+      (el) => !el.classList.contains("sa") && !el.closest(".sa, [lang='sa']")
+    );
+  }
+  targets.forEach((el) => {
+    el.contentEditable = enabled ? "true" : "false";
+    el.classList.toggle("wy-edit", enabled);
+    if (enabled) el.spellcheck = true;
+  });
+}
+
+function renderWysiwyg(html) {
+  const box = $("#html-wysiwyg");
+  const hint = $("#wysiwyg-hint");
+  if (!box) return;
+  if (hint) {
+    hint.textContent = isTranslate()
+      ? "Правите русский в подсвеченных строках. Санскрит не меняется, HTML-теги не показываются."
+      : "Правите текст страницы прямо здесь. HTML-теги не показываются.";
+  }
+  const src = (html || "").trim();
+  if (!src) {
+    box.innerHTML = `<p class="muted wy-empty">${
+      isTranslate()
+        ? "Черновика ещё нет — согласуйте шаблон и нажмите «Перевести страницу»."
+        : "Черновик ещё готовится или пуст."
+    }</p>`;
+    return;
+  }
+  box.innerHTML = src;
+  hydratePreviewFigures(box);
+  const enabled = !$("#html-editor")?.readOnly;
+  markWysiwygEditable(box, enabled);
 }
 
 function switchTab(name) {
+  if (isWysiwygActive() && name !== "wysiwyg") flushWysiwyg();
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
   if (name === "preview") renderPreview($("#html-editor").value);
+  if (name === "wysiwyg") renderWysiwyg($("#html-editor").value);
   if (name === "chart") renderSaChart();
+}
+
+function insertPlainText(text) {
+  if (document.execCommand("insertText", false, text)) return;
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  sel.deleteContents();
+  sel.getRangeAt(0).insertNode(document.createTextNode(text));
+  sel.collapseToEnd();
+}
+
+function wyEditFromEvent(ev) {
+  const el = ev.target?.nodeType === 1 ? ev.target : ev.target?.parentElement;
+  return el?.closest?.(".wy-edit") || null;
+}
+
+function onWysiwygInput() {
+  flushWysiwyg();
+}
+
+function onWysiwygPaste(ev) {
+  if (!wyEditFromEvent(ev)) return;
+  ev.preventDefault();
+  insertPlainText(ev.clipboardData?.getData("text/plain") || "");
+  flushWysiwyg();
+}
+
+function onWysiwygKeydown(ev) {
+  if (ev.key !== "Enter") return;
+  if (!wyEditFromEvent(ev)) return;
+  ev.preventDefault();
+  document.execCommand("insertLineBreak");
+  flushWysiwyg();
 }
 
 /** Click Devanagari → copy to clipboard (for HTML / задания). */
@@ -918,7 +1042,9 @@ async function loadPage(pageId) {
   $("#page-total").textContent = String(state.pages.length || state.project?.pdf_pages || 0);
   highlightThumb(pageId);
   setDraftHtml(state.page.current_html || "");
-  switchTab("preview");
+  const accepted =
+    state.page.status === "expert_done" && Boolean((state.page.current_html || "").trim());
+  switchTab(accepted ? "preview" : draftTab());
   updateEditMode();
   await renderLeftPane();
 }
@@ -982,7 +1108,7 @@ async function saveHtml() {
   try {
     state.page = await api(`/pages/${state.page.id}`, {
       method: "PATCH",
-      json: { html: $("#html-editor").value, note: "manual edit" },
+      json: { html: currentDraftHtml(), note: "manual edit" },
     });
     setDraftHtml(state.page.current_html || $("#html-editor").value);
     $("#page-status").textContent = state.page.status;
@@ -999,7 +1125,7 @@ async function acceptPage() {
   if (!state.page) return;
   try {
     // Direct HTML edit is first-class: persist textarea before acceptance.
-    const html = $("#html-editor").value;
+    const html = currentDraftHtml();
     if (html !== (state.page.current_html || "")) {
       state.page = await api(`/pages/${state.page.id}`, {
         method: "PATCH",
@@ -1053,7 +1179,7 @@ async function runRevision(directive) {
     });
     clearProofread();
     setDraftHtml(state.page.current_html || "");
-    switchTab("preview");
+    switchTab(draftTab());
     $("#page-status").textContent = state.page.status;
     toast("Черновик обновлён");
     st.textContent = "готово";
@@ -1098,7 +1224,7 @@ async function reviewAgain() {
       json: {},
     });
     setDraftHtml(state.page.current_html || "");
-    switchTab("preview");
+    switchTab(draftTab());
     $("#page-status").textContent = state.page.status;
     toast("Страница пересмотрена");
     st.textContent = "готово";
@@ -1131,7 +1257,7 @@ async function translatePage() {
       json: { directive: directive.length >= 3 ? directive : null },
     });
     setDraftHtml(state.page.current_html || "");
-    switchTab("preview");
+    switchTab("wysiwyg");
     $("#page-status").textContent = state.page.status;
     toast("Черновик перевода готов");
     st.textContent = "готово";
@@ -1667,6 +1793,12 @@ function wire() {
     thumbFilter.onchange = () => setThumbFilter(thumbFilter.checked);
   }
   $("#html-editor").addEventListener("input", () => renderPreview($("#html-editor").value));
+  const wyBox = $("#html-wysiwyg");
+  if (wyBox) {
+    wyBox.addEventListener("input", onWysiwygInput);
+    wyBox.addEventListener("paste", onWysiwygPaste);
+    wyBox.addEventListener("keydown", onWysiwygKeydown);
+  }
   $$(".tab").forEach((t) => {
     t.onclick = () => switchTab(t.dataset.tab);
   });
