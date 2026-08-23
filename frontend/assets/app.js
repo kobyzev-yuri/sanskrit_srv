@@ -740,7 +740,7 @@ function setDraftHtml(html) {
 }
 
 function draftTab() {
-  return isTranslate() ? "wysiwyg" : "preview";
+  return "wysiwyg";
 }
 
 function isWysiwygActive() {
@@ -750,8 +750,8 @@ function isWysiwygActive() {
 function serializeWysiwyg(box) {
   const clone = box.cloneNode(true);
   clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
-  clone.querySelectorAll(".wy-edit, .wy-lock").forEach((el) => {
-    el.classList.remove("wy-edit", "wy-lock");
+  clone.querySelectorAll(".wy-edit, .wy-lock, .wy-sa, .wy-ru").forEach((el) => {
+    el.classList.remove("wy-edit", "wy-lock", "wy-sa", "wy-ru");
     if (!el.getAttribute("class")?.trim()) el.removeAttribute("class");
   });
   clone.querySelectorAll("span[style], font").forEach((el) => {
@@ -790,7 +790,13 @@ function isSaLine(el) {
 }
 
 function wysiwygBlocks(root) {
-  return [...root.querySelectorAll("p, h1, h2, h3, h4, li, td, blockquote")];
+  return [
+    ...new Set([
+      ...root.querySelectorAll(
+        "p, h1, h2, h3, h4, li, td, th, blockquote, figcaption, dt, dd, .running-head, .page-num, .footer"
+      ),
+    ]),
+  ];
 }
 
 function setWysiwygEditable(el, enabled) {
@@ -811,24 +817,23 @@ function setWysiwygEditable(el, enabled) {
 
 function markWysiwygEditable(root, enabled) {
   root.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
-  root.querySelectorAll(".wy-edit, .wy-lock").forEach((el) => {
-    el.classList.remove("wy-edit", "wy-lock");
+  root.querySelectorAll(".wy-edit, .wy-lock, .wy-sa, .wy-ru").forEach((el) => {
+    el.classList.remove("wy-edit", "wy-lock", "wy-sa", "wy-ru");
   });
   const blocks = wysiwygBlocks(root);
-  const russian = blocks.filter(
-    (el) =>
+  blocks.forEach((el) => {
+    if (isSaLine(el)) el.classList.add("wy-sa");
+    else if (
       el.classList.contains("ru") ||
       el.classList.contains("tr") ||
       el.classList.contains("note") ||
       (el.getAttribute("lang") || "").toLowerCase() === "ru" ||
       looksRussian(el)
-  );
-  const sanskrit = blocks.filter((el) => isSaLine(el));
-  sanskrit.forEach((el) => el.classList.add("wy-lock"));
-  let targets = russian;
-  if (!targets.length) targets = blocks.filter((el) => !isSaLine(el));
-  if (!targets.length) targets = blocks;
-  targets.forEach((el) => setWysiwygEditable(el, enabled));
+    ) {
+      el.classList.add("wy-ru");
+    }
+    setWysiwygEditable(el, enabled);
+  });
 }
 
 function seedRuAfterSa(html) {
@@ -854,8 +859,8 @@ function renderWysiwyg(html) {
   if (!box) return;
   if (hint) {
     hint.textContent = isTranslate()
-      ? "Кликните по подсвеченной русской строке и правьте как обычный текст. Санскрит не меняется."
-      : "Кликните по строке и правьте текст. HTML-теги не показываются.";
+      ? "Можно править и санскрит, и русский (разный цвет рамки). Теги не показываются."
+      : "Правите санскрит прямо в строках, как в книге. Скан слева, теги не показываются.";
   }
   let src = (html || "").trim();
   if (!src && isTranslate() && (state.page?.source_html || "").trim()) {

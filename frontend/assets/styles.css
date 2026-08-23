@@ -436,6 +436,14 @@ textarea {
   outline: 2px solid var(--accent);
   background: #fff;
 }
+.wysiwyg-preview .wy-edit.wy-sa {
+  outline-color: #8b6b3a;
+  background: #fbf6eb;
+}
+.wysiwyg-preview .wy-edit.wy-ru {
+  outline-color: #3d6b4a;
+  background: #f3f8f3;
+}
 .wysiwyg-preview .wy-lock {
   cursor: default;
 }
