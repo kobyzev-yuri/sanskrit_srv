@@ -69,7 +69,11 @@ class ProjectOut(BaseModel):
     draft_ready: int = 0
     accepted: int = 0
     source_kind: str = "scan"  # scan | text
-    confirm_required: bool = False  # True if >100 pages and pipeline not started yet
+    task: str = "digitize"  # digitize | translate
+    manual_pages: bool = False  # True when auto whole-book pipeline was skipped (>N pages)
+    translation: dict[str, Any] | None = None
+    source_project_id: str | None = None
+    confirm_required: bool = False  # unused; kept for older UI
     pipeline: JobOut | None = None
     created_at: datetime
 
@@ -95,6 +99,7 @@ class PageOut(BaseModel):
     status: PageStatus
     has_scan: bool
     has_html: bool
+    has_source_html: bool = False
     updated_at: datetime
 
     model_config = {"from_attributes": True}
@@ -106,6 +111,7 @@ class PageDetailOut(BaseModel):
     page_no: int
     status: PageStatus
     current_html: str | None
+    source_html: str | None = None
     scan_url: str | None
     updated_at: datetime
 
@@ -158,6 +164,25 @@ class PageVersionOut(BaseModel):
 class ExtractIn(BaseModel):
     extract_from: int = Field(default=1, ge=1)
     extract_to: int | None = Field(default=None, ge=1)
+
+
+class TranslationStyleIn(BaseModel):
+    style: str | None = None
+    english_comments: str | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    agree: bool | None = None
+
+
+class SpawnTranslationIn(BaseModel):
+    slug: str = Field(min_length=2, max_length=128, pattern=r"^[a-z0-9][a-z0-9\-]*$")
+    title: str | None = None
+    style: str = "interlinear"
+    english_comments: str = "replace"
+    notes: str = ""
+
+
+class PageTranslateIn(BaseModel):
+    directive: str | None = Field(default=None, max_length=4000)
 
 
 class LlmUsageTotalsOut(BaseModel):

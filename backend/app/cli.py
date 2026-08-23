@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app.auth import hash_password
 from app.config import get_settings
-from app.db import get_engine, get_session_factory
+from app.db import ensure_schema, get_engine, get_session_factory
 from app.models import Base, Role, User
 from app.services.storage import ensure_dirs
 
@@ -22,7 +22,7 @@ def init_db() -> None:
         db_path = settings.database_url.replace("sqlite:///", "", 1)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     ensure_dirs()
-    Base.metadata.create_all(bind=get_engine())
+    ensure_schema()
     print(f"OK: database tables ready ({settings.database_url})")
 
 

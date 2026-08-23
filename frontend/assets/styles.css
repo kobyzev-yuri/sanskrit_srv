@@ -453,6 +453,19 @@ textarea {
   margin: 0.45rem auto;
   line-height: inherit;
 }
+.html-preview .ru,
+.html-preview .tr {
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+  color: #3d331f;
+}
+.html-preview p.ru.tr,
+.html-preview p.ru {
+  text-align: left;
+  max-width: 36rem;
+  margin: 0.15rem auto 0.85rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px dashed #e0d6c4;
+}
 .html-preview .page-num {
   text-align: center;
   font-size: 0.9em;

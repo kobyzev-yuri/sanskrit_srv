@@ -284,7 +284,25 @@ function prTotal(p) {
   return p.pipeline?.progress?.total || p.pdf_pages || p.page_count || "?";
 }
 
-function updatePipelineBar() {
+function isTranslate() {
+  return (state.project?.task || state.project?.settings?.task) === "translate";
+}
+
+function syncExportButtons() {
+  const tr = isTranslate();
+  const pdf = $("#btn-export-pdf");
+  const pdfI = $("#btn-export-interleave");
+  const docx = $("#btn-export-docx");
+  const docxI = $("#btn-export-docx-interleave");
+  const trPdf = $("#btn-export-tr-pdf");
+  const trXlsx = $("#btn-export-tr-xlsx");
+  if (pdf) pdf.hidden = tr;
+  if (pdfI) pdfI.hidden = tr;
+  if (docx) docx.hidden = tr;
+  if (docxI) docxI.hidden = tr;
+  if (trPdf) trPdf.hidden = !tr;
+  if (trXlsx) trXlsx.hidden = !tr;
+}
   const p = state.project;
   if (!p) return;
   $("#pipeline-info").textContent = pipelineLabel(p);
@@ -346,6 +364,7 @@ async function openProject(id) {
   $("#proj-title").textContent = state.project.title;
   $("#proj-meta").textContent = `${state.project.slug} · согласовано ${state.project.accepted ?? 0} · на правке ${state.project.draft_ready ?? 0}`;
   updatePipelineBar();
+  syncExportButtons();
   await loadUsage();
   $("#page-total").textContent = String(state.pages.length || state.project.pdf_pages || 0);
   $("#page-jump").max = String(state.pages.length || 1);
@@ -1161,6 +1180,33 @@ async function exportDocx(mode = "text", opts = {}) {
   return exportDocument("docx", mode, opts);
 }
 
+async function exportXlsx({ rebuild = false } = {}) {
+  if (!state.project) return;
+  try {
+    toast(rebuild ? "Собираем XLSX перевода…" : "Скачиваем XLSX перевода…");
+    const q = rebuild ? "?rebuild=1" : "";
+    const res = await fetch(`${API}/projects/${state.project.id}/export.xlsx${q}`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      const detail = j.detail;
+      throw new Error(
+        typeof detail === "string" ? detail : detail?.message || res.statusText
+      );
+    }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${state.project.slug}-translation.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("XLSX скачан");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 async function loadAdmin() {
   if (state.user?.role !== "admin") return;
   const users = await api("/admin/users");
@@ -1288,6 +1334,16 @@ function wire() {
   $("#btn-export-docx-interleave").title =
     "DOCX: скан и текст чередуются. Shift+клик — пересобрать заново.";
   $("#btn-export-docx").title = "DOCX из HTML. Shift+клик — пересобрать заново.";
+  const btnTrPdf = $("#btn-export-tr-pdf");
+  if (btnTrPdf) {
+    btnTrPdf.onclick = (e) => exportPdf("text", { rebuild: e.shiftKey });
+    btnTrPdf.title = "PDF русской версии. Shift+клик — пересобрать заново.";
+  }
+  const btnTrXlsx = $("#btn-export-tr-xlsx");
+  if (btnTrXlsx) {
+    btnTrXlsx.onclick = (e) => exportXlsx({ rebuild: e.shiftKey });
+    btnTrXlsx.title = "Таблица: страница, санскрит, русский. Shift+клик — пересобрать.";
+  }
   const thumbFilter = $("#thumb-filter-open");
   if (thumbFilter) {
     thumbFilter.checked = state.thumbFilter === "open";

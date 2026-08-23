@@ -15,6 +15,7 @@ from app.schemas import (
     PageOut,
     PageReviewAgainIn,
     PageReviseIn,
+    PageTranslateIn,
     PageVersionOut,
     ProofreadApplyIn,
     ProofreadOut,
@@ -25,8 +26,10 @@ from app.services.layout_assets import extract_embedded_figures, finalize_page_h
 from app.services.llm_draft import revise_from_scan
 from app.services.llm_proofread import apply_proofread_suggestions, proofread_from_scan
 from app.services.llm_status import LlmQuotaError
+from app.services.llm_translate import translate_from_source
 from app.services.llm_usage import record_usage
-from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE
+from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
+from app.services.translation_style import project_task, translation_agreed, translation_cfg
 
 router = APIRouter(tags=["pages"])
 
@@ -46,6 +49,7 @@ def _page_out(page: Page) -> PageOut:
         status=page.status,
         has_scan=bool(page.scan_path and Path(page.scan_path).exists()),
         has_html=bool(page.current_html),
+        has_source_html=bool((page.source_html or "").strip()),
         updated_at=page.updated_at,
     )
 
@@ -69,13 +73,18 @@ def get_page(page_id: str, user: User = Depends(get_current_user), db: Session =
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
-    scan_url = f"/api/v1/pages/{page.id}/scan" if page.scan_path else None
+    project = db.get(Project, page.project_id)
+    if project is not None and project_task(project) != "translate":
+        ensure_page_scan(db, page)
+        db.refresh(page)
+    scan_url = f"/api/v1/pages/{page.id}/scan" if page.scan_path and Path(page.scan_path).exists() else None
     return PageDetailOut(
         id=page.id,
         project_id=page.project_id,
         page_no=page.page_no,
         status=page.status,
         current_html=page.current_html,
+        source_html=page.source_html,
         scan_url=scan_url,
         updated_at=page.updated_at,
     )
@@ -84,11 +93,14 @@ def get_page(page_id: str, user: User = Depends(get_current_user), db: Session =
 @router.get("/pages/{page_id}/scan")
 def get_scan(page_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page = db.get(Page, _uid(page_id))
-    if page is None or not page.scan_path:
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Scan not found")
+    if not page.scan_path or not Path(page.scan_path).exists():
+        ensure_page_scan(db, page)
+        db.refresh(page)
+    if not page.scan_path or not Path(page.scan_path).exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Scan not found")
     path = Path(page.scan_path)
-    if not path.exists():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Scan file missing")
     return FileResponse(path, media_type="image/png")
 
 
@@ -180,12 +192,138 @@ def revoke_page(
     return get_page(str(page.id), user, db)
 
 
+def _save_page_html(
+    db: Session,
+    page: Page,
+    user: User,
+    html: str,
+    *,
+    source: VersionSource,
+    note: str,
+    status: PageStatus = PageStatus.expert_review,
+) -> Page:
+    page.current_html = html
+    page.status = status
+    next_ver = (
+        db.scalar(select(func.max(PageVersion.version)).where(PageVersion.page_id == page.id)) or 0
+    ) + 1
+    db.add(
+        PageVersion(
+            page_id=page.id,
+            version=next_ver,
+            html=html,
+            source=source,
+            created_by=user.id,
+            note=note[:500],
+        )
+    )
+    db.commit()
+    db.refresh(page)
+    return page
+
+
+@router.post("/pages/{page_id}/draft", response_model=PageDetailOut)
+def draft_one_page(
+    page_id: str,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Digitize a single page (extract scan + LLM/text). For books uploaded without whole-book pipeline."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    project = db.get(Project, page.project_id)
+    if project is not None and project_task(project) == "translate":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Это проект перевода — используйте «Перевести страницу»")
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
+    try:
+        process_one_page(db, page, force=False, force_llm=False)
+    except LlmQuotaError as exc:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"code": "llm_quota", "message": str(exc)},
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Draft failed: {exc}") from exc
+    db.refresh(page)
+    return get_page(str(page.id), user, db)
+
+
+@router.post("/pages/{page_id}/translate", response_model=PageDetailOut)
+def translate_one_page(
+    page_id: str,
+    body: PageTranslateIn = PageTranslateIn(),
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """LLM Russian translation of this page's Sanskrit source HTML."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    page = _apply_translate_revision(db, page, user, body.directive)
+    return get_page(str(page.id), user, db)
+
+
+def _apply_translate_revision(
+    db: Session,
+    page: Page,
+    user: User,
+    directive: str | None,
+) -> Page:
+    project = db.get(Project, page.project_id)
+    if project is None or project_task(project) != "translate":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Не проект перевода")
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
+    if not translation_agreed(project):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Сначала согласуйте шаблон перевода с экспертом",
+        )
+    source_html = (page.source_html or "").strip()
+    if not source_html:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет выверенного санскрита на этой странице")
+    cfg = translation_cfg(project)
+    try:
+        html, model, usage = translate_from_source(
+            source_html=source_html,
+            cfg=cfg,
+            current_html=page.current_html,
+            directive=directive,
+        )
+    except LlmQuotaError as exc:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"code": "llm_quota", "message": str(exc)},
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Translate failed: {exc}") from exc
+
+    record_usage(
+        db,
+        project_id=page.project_id,
+        page_id=page.id,
+        network=str(usage.get("network") or "openrouter"),
+        model=str(usage.get("model") or model.split(":", 1)[-1]),
+        usage=usage,
+        operation="translate",
+    )
+    note = f"translate {cfg.get('style')} | {model}"
+    if directive:
+        note = f"{note} | {directive[:300]}"
+    return _save_page_html(db, page, user, html, source=VersionSource.llm, note=note)
+
+
 def _apply_llm_revision(
     db: Session,
     page: Page,
     user: User,
     directive: str,
 ) -> Page:
+    project = db.get(Project, page.project_id)
+    if project is not None and project_task(project) == "translate":
+        return _apply_translate_revision(db, page, user, directive)
     if not page.scan_path or not Path(page.scan_path).exists():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet — pipeline still running")
 

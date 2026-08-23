@@ -7,18 +7,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.db import get_engine
+from app.db import ensure_schema, get_engine
 from app.models import Base
 from app.routers import admin, auth, pages, projects, system
 from app.services.storage import ensure_dirs
 
 settings = get_settings()
 ensure_dirs()
-# Auto-create tables on boot (MVP; Alembic later)
-if settings.database_url.startswith("sqlite"):
-    db_path = settings.database_url.replace("sqlite:///", "", 1)
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-Base.metadata.create_all(bind=get_engine())
+ensure_schema()
 
 app = FastAPI(
     title="Sanskrit SRV",

@@ -4,6 +4,8 @@ import asyncio
 import uuid
 from pathlib import Path
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
@@ -13,13 +15,30 @@ from app.config import get_settings
 from app.db import get_db
 from app.deps import get_current_user, require_roles
 from app.models import Job, JobStatus, Page, PageStatus, Project, Role, User
-from app.schemas import ExtractIn, JobOut, ProjectOut, ProjectSettingsIn, ProjectUsageOut
+from app.schemas import (
+    ExtractIn,
+    JobOut,
+    ProjectOut,
+    ProjectSettingsIn,
+    ProjectUsageOut,
+    SpawnTranslationIn,
+    TranslationStyleIn,
+)
 from app.services import storage
 from app.services.export_docx import build_project_docx
 from app.services.export_pdf import build_project_pdf
+from app.services.export_xlsx import build_project_xlsx
+from app.services.html_pages import split_html_pages
 from app.services.llm_usage import project_usage_summary
-from app.services.pdf_extract import classify_pdf, extract_pages, pdf_page_count
+from app.services.pdf_extract import classify_pdf, extract_page_text_html, extract_pages, pdf_page_count
 from app.services.pipeline import enqueue_project_pipeline, ensure_page_stubs
+from app.services.translation_style import (
+    ENGLISH_POLICIES,
+    STYLES,
+    default_translation_settings,
+    project_task,
+    translation_cfg,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -95,13 +114,13 @@ def _project_out(db: Session, project: Project) -> ProjectOut:
         .limit(1)
     )
     settings = project.settings or {}
-    threshold = get_settings().large_book_pages
     pages_n = pdf_pages or count
-    awaiting = project.status == "awaiting_confirm"
-    large = bool(pages_n and pages_n > threshold)
-    confirm_required = awaiting or (
-        large and job is None and project.status in ("draft", "awaiting_confirm")
+    threshold = get_settings().large_book_pages
+    manual = bool(settings.get("manual_pages")) or (
+        bool(pages_n) and pages_n > threshold and job is None and project_task(project) == "digitize"
     )
+    trans = settings.get("translation") if isinstance(settings.get("translation"), dict) else None
+    src_pid = settings.get("source_project_id")
     return ProjectOut(
         id=project.id,
         slug=project.slug,
@@ -114,10 +133,50 @@ def _project_out(db: Session, project: Project) -> ProjectOut:
         draft_ready=ready,
         accepted=accepted,
         source_kind=settings.get("source_kind") or "scan",
-        confirm_required=confirm_required,
+        task=project_task(project),
+        manual_pages=manual,
+        translation=trans,
+        source_project_id=str(src_pid) if src_pid else None,
+        confirm_required=False,
         pipeline=JobOut.model_validate(job) if job else None,
         created_at=project.created_at,
     )
+
+
+def _unique_slug(db: Session, slug: str) -> None:
+    if db.scalar(select(Project).where(Project.slug == slug)):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Slug already exists")
+
+
+def _fill_source_html_from_pdf(db: Session, project: Project) -> int:
+    pdf_path = Path(project.source_pdf_path)
+    pages = list(db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all())
+    n = 0
+    for page in pages:
+        html = extract_page_text_html(pdf_path, page.page_no)
+        page.source_html = html
+        n += 1
+    db.commit()
+    return n
+
+
+def _copy_pages_as_translation_source(db: Session, src: Project, dest: Project) -> int:
+    rows = list(db.scalars(select(Page).where(Page.project_id == src.id).order_by(Page.page_no)).all())
+    if not rows:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="У исходного проекта нет страниц")
+    for p in rows:
+        db.add(
+            Page(
+                project_id=dest.id,
+                page_no=p.page_no,
+                status=PageStatus.pending,
+                source_html=p.current_html,
+                current_html=None,
+                scan_path=None,
+            )
+        )
+    db.commit()
+    return len(rows)
 
 
 @router.get("", response_model=list[ProjectOut])
@@ -131,18 +190,28 @@ async def create_project(
     slug: str = Form(...),
     title: str = Form(...),
     title_sa: str | None = Form(None),
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+    task: str = Form("digitize"),
+    source_project_id: str | None = Form(None),
+    translation_style: str = Form("interlinear"),
+    english_comments: str = Form("replace"),
+    translation_notes: str = Form(""),
     user: User = Depends(require_roles(Role.admin)),
     db: Session = Depends(get_db),
 ):
-    """Upload PDF → classify. Auto-pipeline if ≤100 pages; else await confirm for whole book."""
+    """Upload a scan PDF (digitize) or start a Russian translation project.
+
+    Digitize: auto LLM only if page count ≤ LARGE_BOOK_PAGES (default 10).
+    Larger books get page stubs only — digitize one page at a time.
+    Translate: never auto-runs; expert agrees the template, then translates per page.
+    """
     slug = slug.strip().lower()
-    if db.scalar(select(Project).where(Project.slug == slug)):
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Slug already exists")
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="PDF required")
+    _unique_slug(db, slug)
+    task_n = "translate" if (task or "").strip().lower() == "translate" else "digitize"
+    fname = (file.filename or "").lower() if file is not None else ""
 
     settings = _default_settings()
+    settings["task"] = task_n
     project = Project(
         slug=slug,
         title=title,
@@ -155,8 +224,89 @@ async def create_project(
     db.flush()
     project_id = project.id
 
+    if task_n == "translate":
+        settings["translation"] = default_translation_settings(
+            style=translation_style,
+            english_comments=english_comments,
+            notes=translation_notes,
+        )
+        src_id = (source_project_id or "").strip()
+        if src_id:
+            src = db.get(Project, _uid(src_id))
+            if src is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Source project not found")
+            settings["source_project_id"] = str(src.id)
+            settings["source_kind"] = "html"
+            project.settings = settings
+            db.commit()
+            _copy_pages_as_translation_source(db, src, project)
+            project.status = "in_progress"
+            db.commit()
+            db.refresh(project)
+            return _project_out(db, project)
+
+        if not file or not fname:
+            db.rollback()
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Для перевода нужен PDF/HTML санскрита или исходный проект",
+            )
+        if fname.endswith((".html", ".htm")):
+            raw = (await file.read()).decode("utf-8", errors="replace")
+            articles = split_html_pages(raw)
+            if not articles:
+                db.rollback()
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="HTML пуст")
+            settings["source_kind"] = "html"
+            project.settings = settings
+            for i, html in enumerate(articles, start=1):
+                db.add(
+                    Page(
+                        project_id=project.id,
+                        page_no=i,
+                        status=PageStatus.pending,
+                        source_html=html,
+                    )
+                )
+            project.status = "in_progress"
+            db.commit()
+            db.refresh(project)
+            return _project_out(db, project)
+
+        if not fname.endswith(".pdf"):
+            db.rollback()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нужен PDF или HTML")
+        data = await file.read()
+        try:
+            pdf_path, info = await asyncio.to_thread(_save_and_classify, project_id, file.filename, data)
+        except Exception as exc:
+            storage.remove_project_files(project_id)
+            db.rollback()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"PDF open failed: {exc}") from exc
+        if info.get("kind") == "scan":
+            storage.remove_project_files(project_id)
+            db.rollback()
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Это скан без текстового слоя. Сначала оцифруйте книгу, затем создайте перевод из проекта.",
+            )
+        project.source_pdf_path = str(pdf_path)
+        settings["source_kind"] = "text"
+        settings["source_detect"] = {"avg_chars": info["avg_chars"], "samples": info["samples"][:5]}
+        project.settings = settings
+        db.commit()
+        ensure_page_stubs(db, project)
+        _fill_source_html_from_pdf(db, project)
+        project.status = "in_progress"
+        db.commit()
+        db.refresh(project)
+        return _project_out(db, project)
+
+    # digitize
+    if not file or not fname.endswith(".pdf"):
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="PDF required")
     data = await file.read()
-    # Disk + PyMuPDF off the event loop so UI polling stays responsive during big uploads.
     try:
         pdf_path, info = await asyncio.to_thread(_save_and_classify, project_id, file.filename, data)
     except Exception as exc:
@@ -181,7 +331,10 @@ async def create_project(
 
     threshold = get_settings().large_book_pages
     if total > threshold:
-        project.status = "awaiting_confirm"
+        settings["manual_pages"] = True
+        settings["auto_pipeline"] = False
+        project.settings = settings
+        project.status = "in_progress"
         db.commit()
         db.refresh(project)
         return _project_out(db, project)
@@ -197,6 +350,85 @@ def _save_and_classify(project_id, filename: str, data: bytes):
     pdf_path = storage.save_upload_pdf(project_id, filename, data)
     info = classify_pdf(pdf_path)
     return pdf_path, info
+
+
+@router.post("/{project_id}/spawn-translation", response_model=ProjectOut, status_code=201)
+def spawn_translation(
+    project_id: str,
+    body: SpawnTranslationIn,
+    user: User = Depends(require_roles(Role.admin, Role.expert)),
+    db: Session = Depends(get_db),
+):
+    """New translate project whose left pane is this book's current Sanskrit HTML."""
+    src = db.get(Project, _uid(project_id))
+    if src is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if project_task(src) == "translate":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Это уже проект перевода")
+    slug = body.slug.strip().lower()
+    _unique_slug(db, slug)
+    settings = _default_settings()
+    settings["task"] = "translate"
+    settings["source_kind"] = "html"
+    settings["source_project_id"] = str(src.id)
+    settings["translation"] = default_translation_settings(
+        style=body.style,
+        english_comments=body.english_comments,
+        notes=body.notes,
+    )
+    dest = Project(
+        slug=slug,
+        title=(body.title or f"{src.title} · перевод").strip(),
+        title_sa=src.title_sa,
+        status="in_progress",
+        settings=settings,
+        created_by=user.id,
+    )
+    db.add(dest)
+    db.flush()
+    _copy_pages_as_translation_source(db, src, dest)
+    db.refresh(dest)
+    return _project_out(db, dest)
+
+
+@router.patch("/{project_id}/translation-style", response_model=ProjectOut)
+def update_translation_style(
+    project_id: str,
+    body: TranslationStyleIn,
+    user: User = Depends(require_roles(Role.admin, Role.expert)),
+    db: Session = Depends(get_db),
+):
+    """Set / agree / revoke the translation template. LLM translate requires agreed=true."""
+    project = db.get(Project, _uid(project_id))
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if project_task(project) != "translate":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Не проект перевода")
+    settings = dict(project.settings or {})
+    cfg = translation_cfg(project)
+    if body.style is not None:
+        if body.style not in STYLES:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown translation style")
+        cfg["style"] = body.style
+    if body.english_comments is not None:
+        if body.english_comments not in ENGLISH_POLICIES:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown english_comments policy")
+        cfg["english_comments"] = body.english_comments
+    if body.notes is not None:
+        cfg["notes"] = body.notes.strip()[:4000]
+    if body.agree is True:
+        cfg["agreed"] = True
+        cfg["agreed_by"] = str(user.id)
+        cfg["agreed_at"] = datetime.now(timezone.utc).isoformat()
+    elif body.agree is False:
+        cfg["agreed"] = False
+        cfg["agreed_by"] = None
+        cfg["agreed_at"] = None
+    settings["translation"] = cfg
+    project.settings = settings
+    db.commit()
+    db.refresh(project)
+    return _project_out(db, project)
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -377,6 +609,47 @@ def export_docx(
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=filename,
+    )
+
+
+@router.get("/{project_id}/export.xlsx")
+def export_xlsx(
+    project_id: str,
+    rebuild: bool = False,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Spreadsheet of the Russian translation: page / Sanskrit / Russian."""
+    from app.services.storage import ensure_dirs
+
+    project = db.get(Project, _uid(project_id))
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    filename = f"{project.slug}-translation.xlsx"
+    path = ensure_dirs() / "exports" / str(project.id) / filename
+    if rebuild or not path.is_file() or path.stat().st_size < 256:
+        pages = list(
+            db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+        )
+        payload = [(p.page_no, p.current_html or "") for p in pages if (p.current_html or "").strip()]
+        if not payload:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет страниц с переводом для выгрузки")
+        try:
+            path = build_project_xlsx(
+                project.id,
+                project.slug,
+                project.title,
+                payload,
+                title_sa=project.title_sa,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"XLSX failed: {exc}"
+            ) from exc
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=filename,
     )
 

@@ -58,6 +58,25 @@ def project_source_kind(project: Project) -> str:
     return settings.get("source_kind") or "scan"
 
 
+def ensure_page_scan(db: Session, page: Page) -> bool:
+    """Extract one page PNG from the source PDF if missing. Returns True if a scan file exists."""
+    if page.scan_path and Path(page.scan_path).exists():
+        return True
+    project = db.get(Project, page.project_id)
+    if project is None or not project.source_pdf_path:
+        return False
+    pdf_path = Path(project.source_pdf_path)
+    if not pdf_path.exists():
+        return False
+    extract_pages(pdf_path, project.id, page.page_no, page.page_no)
+    scan = storage.page_png_path(project.id, page.page_no)
+    if not scan.exists():
+        return False
+    page.scan_path = str(scan)
+    db.commit()
+    return True
+
+
 def ensure_page_stubs(db: Session, project: Project) -> int:
     """Create pending Page rows for every PDF page. Returns total pages."""
     if not project.source_pdf_path:

@@ -80,6 +80,8 @@ class Page(Base):
     ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[PageStatus] = mapped_column(Enum(PageStatus), default=PageStatus.pending)
     current_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Verified Sanskrit HTML (left pane in translate task). Digitize projects leave this null.
+    source_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     assigned_expert_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     project: Mapped[Project] = relationship(back_populates="pages")

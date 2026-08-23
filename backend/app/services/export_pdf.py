@@ -66,6 +66,14 @@ h1.sa, .sa, span.sa, p.sa, footer.sa {
 .shloka, p.shloka {
   text-align: center; margin: 0.28em auto; max-width: 88%; line-height: inherit; color: #1a1814;
 }
+.ru, .tr, p.ru {
+  font-family: "Liberation Serif", "Noto Serif", "FreeSerif", serif;
+  font-size: 8pt;
+  text-align: left;
+  max-width: 94%;
+  margin: 0.08em auto 0.32em;
+  color: #2a2418;
+}
 .running-head { text-align: center; font-size: 7.5pt; color: #6b6560; margin: 0 0 0.35em; }
 .centered { text-align: center; }
 .page-num { text-align: center; font-size: 7.5pt; color: #6b6560; margin-top: 0.5em; }

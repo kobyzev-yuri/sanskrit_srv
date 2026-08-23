@@ -53,8 +53,9 @@ class Settings(BaseSettings):
 
     # Legacy: unused for upload (whole book is default). Kept for manual extract helpers.
     default_extract_max_pages: int = 0
-    # Warn + require confirm before whole-book pipeline when PDF has more pages.
-    large_book_pages: int = 100
+    # Auto-run whole-book pipeline only if PDF has this many pages or fewer.
+    # Above this, upload extracts stubs; author digitizes page-by-page (avoids breaking large scans).
+    large_book_pages: int = 10
     # USD per 1M tokens: {"gemini:gemini-2.5-flash":{"in":0.1,"out":0.4}, ...}
     # JSON string in env LLM_PRICE_PER_1M; empty = no cost estimate.
     llm_price_per_1m: str = ""

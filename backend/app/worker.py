@@ -9,7 +9,7 @@ import time
 
 from sqlalchemy import select
 
-from app.db import get_engine, get_session_factory
+from app.db import ensure_schema, get_engine, get_session_factory
 from app.models import Base, Job, JobStatus
 from app.services.pipeline import run_pipeline_job
 from app.services.storage import ensure_dirs
@@ -37,7 +37,7 @@ def reclaim_stale_running_jobs(db) -> int:
 
 def main() -> None:
     ensure_dirs()
-    Base.metadata.create_all(bind=get_engine())
+    ensure_schema()
     SessionLocal = get_session_factory()
     with SessionLocal() as db:
         n = reclaim_stale_running_jobs(db)
