@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260823tr3" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260823tr4" />
 </head>
 <body>
   <div class="app-shell">
@@ -53,37 +53,6 @@
             <button class="primary" id="btn-upload" type="submit">Загрузить PDF</button>
             <p id="upload-status" class="muted" hidden></p>
           </form>
-        </div>
-
-        <div id="translate-modal" class="modal" hidden>
-          <div class="modal-card wide">
-            <h2>Перевод на русский</h2>
-            <p class="muted">Создаётся <strong>новый проект</strong> из выверенного санскрита этой книги. Слева останется санскрит, справа — русский по шаблону. Автоперевод всей книги не запускается: после согласования шаблона эксперт переводит <strong>по страницам</strong>.</p>
-            <form id="translate-form" class="form-col">
-              <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" /></label>
-              <label>Название <input name="title" required /></label>
-              <label>Шаблон
-                <select name="style">
-                  <option value="interlinear">Шлока + строка перевода</option>
-                  <option value="samasa_gloss">Самаса в скобках (члены в круглых скобках)</option>
-                  <option value="custom">Свой шаблон (из заметок)</option>
-                </select>
-              </label>
-              <label>Английские комментарии в источнике
-                <select name="english_comments">
-                  <option value="replace">заменить русским</option>
-                  <option value="drop">убрать</option>
-                </select>
-              </label>
-              <label>Заметки эксперта к шаблону
-                <textarea name="notes" rows="3" placeholder="Например: после каждой пады — русский; самасу можно переставлять."></textarea>
-              </label>
-              <div class="edit-actions" style="border:0;padding:0;background:transparent">
-                <button type="submit" class="primary" id="btn-spawn-translate">Создать проект перевода</button>
-                <button type="button" id="btn-cancel-translate">Отмена</button>
-              </div>
-            </form>
-          </div>
         </div>
 
         <div id="large-book-modal" class="modal" hidden>
@@ -280,7 +249,37 @@
       </section>
     </main>
   </div>
+  <div id="translate-modal" class="modal" hidden>
+    <div class="modal-card wide">
+      <h2>Перевод на русский</h2>
+      <p class="muted">Создаётся <strong>новый проект</strong> из выверенного санскрита этой книги. Слева останется санскрит, справа — русский по шаблону. Автоперевод всей книги не запускается: после согласования шаблона эксперт переводит <strong>по страницам</strong>.</p>
+      <form id="translate-form" class="form-col">
+        <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" /></label>
+        <label>Название <input name="title" required /></label>
+        <label>Шаблон
+          <select name="style">
+            <option value="interlinear">Шлока + строка перевода</option>
+            <option value="samasa_gloss">Самаса в скобках (члены в круглых скобках)</option>
+            <option value="custom">Свой шаблон (из заметок)</option>
+          </select>
+        </label>
+        <label>Английские комментарии в источнике
+          <select name="english_comments">
+            <option value="replace">заменить русским</option>
+            <option value="drop">убрать</option>
+          </select>
+        </label>
+        <label>Заметки эксперта к шаблону
+          <textarea name="notes" rows="3" placeholder="Например: после каждой пады — русский; самасу можно переставлять."></textarea>
+        </label>
+        <div class="edit-actions" style="border:0;padding:0;background:transparent">
+          <button type="submit" class="primary" id="btn-spawn-translate">Создать проект перевода</button>
+          <button type="button" id="btn-cancel-translate">Отмена</button>
+        </div>
+      </form>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260823tr3"></script>
+  <script src="/assets/app.js?v=20260823tr4"></script>
 </body>
 </html>

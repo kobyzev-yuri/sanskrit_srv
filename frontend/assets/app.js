@@ -1152,16 +1152,28 @@ function showTranslateModal(show) {
   if (modal) modal.hidden = !show;
 }
 
+function formField(form, name) {
+  return form.elements.namedItem(name);
+}
+
 function openTranslateModal() {
   const p = state.project;
   if (!p) return;
   const form = $("#translate-form");
-  if (!form) return;
-  form.slug.value = `${p.slug}-ru`.slice(0, 128);
-  form.title.value = `${p.title} · перевод`;
-  form.style.value = "interlinear";
-  form.english_comments.value = "replace";
-  form.notes.value = "";
+  if (!form) {
+    toast("Форма перевода не найдена", true);
+    return;
+  }
+  const slug = formField(form, "slug");
+  const title = formField(form, "title");
+  const style = formField(form, "style");
+  const english = formField(form, "english_comments");
+  const notes = formField(form, "notes");
+  if (slug) slug.value = `${p.slug}-ru`.slice(0, 128);
+  if (title) title.value = `${p.title} · перевод`;
+  if (style) style.value = "interlinear";
+  if (english) english.value = "replace";
+  if (notes) notes.value = "";
   showTranslateModal(true);
 }
 
@@ -1180,11 +1192,11 @@ async function spawnTranslation(ev) {
   const form = ev.target;
   const btn = $("#btn-spawn-translate");
   const body = {
-    slug: form.slug.value.trim().toLowerCase(),
-    title: form.title.value.trim(),
-    style: form.style.value,
-    english_comments: form.english_comments.value,
-    notes: form.notes.value.trim(),
+    slug: String(formField(form, "slug")?.value || "").trim().toLowerCase(),
+    title: String(formField(form, "title")?.value || "").trim(),
+    style: String(formField(form, "style")?.value || "interlinear"),
+    english_comments: String(formField(form, "english_comments")?.value || "replace"),
+    notes: String(formField(form, "notes")?.value || "").trim(),
   };
   if (btn) {
     btn.disabled = true;

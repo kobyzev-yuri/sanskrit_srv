@@ -701,7 +701,7 @@ textarea {
   background: rgba(28, 25, 21, 0.45);
   display: grid;
   place-items: center;
-  z-index: 30;
+  z-index: 80;
   padding: 1rem;
 }
 .modal[hidden] { display: none !important; }
