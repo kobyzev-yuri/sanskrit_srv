@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260823tr" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260823tr3" />
 </head>
 <body>
   <div class="app-shell">
@@ -48,11 +48,42 @@
             <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" placeholder="my-book" /></label>
             <label>Название <input name="title" required placeholder="Название книги" /></label>
             <label>Название (sa) <input name="title_sa" class="sa" placeholder="देवनागरी" /></label>
-            <p class="muted">По умолчанию — <strong>вся книга</strong>. Если больше 100 страниц, спросим подтверждение (долго и может дорого по LLM).</p>
+            <p class="muted">Автоперевод скана — только если в PDF <strong>не больше 10 страниц</strong>. Большую книгу загружаем страницами-заглушками: оцифровывайте по одной, затем «Перевод на русский».</p>
             <label>PDF <input name="file" type="file" accept="application/pdf" required /></label>
             <button class="primary" id="btn-upload" type="submit">Загрузить PDF</button>
             <p id="upload-status" class="muted" hidden></p>
           </form>
+        </div>
+
+        <div id="translate-modal" class="modal" hidden>
+          <div class="modal-card wide">
+            <h2>Перевод на русский</h2>
+            <p class="muted">Создаётся <strong>новый проект</strong> из выверенного санскрита этой книги. Слева останется санскрит, справа — русский по шаблону. Автоперевод всей книги не запускается: после согласования шаблона эксперт переводит <strong>по страницам</strong>.</p>
+            <form id="translate-form" class="form-col">
+              <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" /></label>
+              <label>Название <input name="title" required /></label>
+              <label>Шаблон
+                <select name="style">
+                  <option value="interlinear">Шлока + строка перевода</option>
+                  <option value="samasa_gloss">Самаса в скобках (члены в круглых скобках)</option>
+                  <option value="custom">Свой шаблон (из заметок)</option>
+                </select>
+              </label>
+              <label>Английские комментарии в источнике
+                <select name="english_comments">
+                  <option value="replace">заменить русским</option>
+                  <option value="drop">убрать</option>
+                </select>
+              </label>
+              <label>Заметки эксперта к шаблону
+                <textarea name="notes" rows="3" placeholder="Например: после каждой пады — русский; самасу можно переставлять."></textarea>
+              </label>
+              <div class="edit-actions" style="border:0;padding:0;background:transparent">
+                <button type="submit" class="primary" id="btn-spawn-translate">Создать проект перевода</button>
+                <button type="button" id="btn-cancel-translate">Отмена</button>
+              </div>
+            </form>
+          </div>
         </div>
 
         <div id="large-book-modal" class="modal" hidden>
@@ -115,6 +146,24 @@
             <div class="toolbar extract-bar" id="pipeline-bar">
               <span id="pipeline-info" class="muted">Конвейер: —</span>
               <button type="button" id="btn-start-pipeline" hidden>Перевести всю книгу заново</button>
+              <button type="button" class="primary" id="btn-open-translate" hidden>Перевод на русский</button>
+              <button type="button" id="btn-back-source" hidden>← К оцифровке</button>
+            </div>
+            <div class="toolbar extract-bar" id="style-bar" hidden>
+              <span class="muted">Шаблон перевода</span>
+              <select id="style-select" aria-label="Шаблон перевода">
+                <option value="interlinear">Шлока + строка перевода</option>
+                <option value="samasa_gloss">Самаса в скобках</option>
+                <option value="custom">Свой шаблон</option>
+              </select>
+              <select id="style-english" aria-label="Английские комментарии">
+                <option value="replace">англ. → русский</option>
+                <option value="drop">англ. убрать</option>
+              </select>
+              <input id="style-notes" type="text" placeholder="Заметки эксперта к шаблону" />
+              <button type="button" class="primary" id="btn-agree-style">Согласовать шаблон</button>
+              <button type="button" id="btn-revoke-style" hidden>Отозвать шаблон</button>
+              <span class="muted" id="style-agreed-mark"></span>
             </div>
             <div class="toolbar extract-bar" id="usage-bar" hidden>
               <span id="usage-info" class="muted">Расход LLM: —</span>
@@ -122,11 +171,12 @@
 
             <div class="editor-layout">
               <section class="panel">
-                <header><span>Скан</span><span class="muted">как в PDF</span></header>
-                <div class="scan-pane">
+                <header><span id="left-pane-title">Скан</span><span class="muted" id="left-pane-sub">как в PDF</span></header>
+                <div class="scan-pane" id="left-scan-wrap">
                   <img id="scan-img" alt="scan page" />
                   <p id="scan-empty" class="scan-empty" hidden>Скан ещё не готов</p>
                 </div>
+                <div id="left-source-html" class="html-preview source-html-pane" hidden></div>
               </section>
               <section class="panel edit-pane">
                 <header>
@@ -135,7 +185,7 @@
                     <button type="button" class="tab" data-tab="source">HTML</button>
                     <button type="button" class="tab" data-tab="chart">Справочник</button>
                   </div>
-                  <span class="muted sa">देवनागरी</span>
+                  <span class="muted sa" id="right-pane-sub">देवनागरी</span>
                 </header>
                 <div id="tab-preview" class="tab-panel active">
                   <div id="html-preview" class="html-preview" aria-live="polite"></div>
@@ -159,6 +209,7 @@
                     <div class="edit-actions" style="padding:0;border:0;background:transparent">
                       <button class="primary" type="button" id="btn-revise">Отправить задание</button>
                       <button type="button" id="btn-review-again">Пересмотри страницу</button>
+                      <button type="button" id="btn-translate-page" hidden>Перевести страницу</button>
                       <button type="button" id="btn-proofread" title="Второй проход: смысловая проверка со сканом">Смысловая проверка</button>
                       <span class="muted" id="revise-status"></span>
                     </div>
@@ -230,6 +281,6 @@
     </main>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260823tr2"></script>
+  <script src="/assets/app.js?v=20260823tr3"></script>
 </body>
 </html>

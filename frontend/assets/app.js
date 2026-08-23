@@ -115,15 +115,19 @@ async function loadProjects() {
     return;
   }
   box.innerHTML = state.projects
-    .map(
-      (p) => `
+    .map((p) => {
+      const task = p.task || p.settings?.task || "digitize";
+      const pill = task === "translate" ? "перевод" : "оцифровка";
+      const pillClass = task === "translate" ? "task-pill ru" : "task-pill";
+      return `
     <article class="project-card" data-id="${p.id}">
+      <div class="${pillClass}">${pill}</div>
       <h3>${escapeHtml(p.title)}</h3>
       <div class="meta sa">${escapeHtml(p.title_sa || "")}</div>
-      <div class="meta">PDF ${p.pdf_pages ?? "?"} · согласовано ${p.accepted ?? 0} · на правке ${p.draft_ready ?? 0}</div>
+      <div class="meta">${task === "translate" ? "стр." : "PDF"} ${p.pdf_pages ?? p.page_count ?? "?"} · согласовано ${p.accepted ?? 0} · на правке ${p.draft_ready ?? 0}</div>
       <div class="meta">${pipelineLabel(p)} · ${escapeHtml(p.slug)}</div>
-    </article>`
-    )
+    </article>`;
+    })
     .join("");
   box.querySelectorAll(".project-card").forEach((card) => {
     card.onclick = () => openProject(card.dataset.id);
@@ -257,9 +261,18 @@ function sourceKindLabel(p) {
 }
 
 function pipelineLabel(p) {
+  const task = p.task || p.settings?.task || "digitize";
+  const total = prTotal(p);
+  if (task === "translate") {
+    const tr = p.translation || p.settings?.translation || {};
+    const agreed = tr.agreed ? "шаблон согласован" : "шаблон не согласован";
+    return `перевод на русский · ${agreed} · ${total} стр.`;
+  }
   const kind = sourceKindLabel(p);
   const pipe = p.pipeline;
-  const total = prTotal(p);
+  if (p.manual_pages && !pipe) {
+    return `${kind} · ${total} стр. · постранично (автоперевод всей книги не запускался)`;
+  }
   if (p.confirm_required || p.status === "awaiting_confirm") {
     return `${kind} · ${total} стр. (>100) — нужно подтверждение перевода всей книги`;
   }
@@ -288,6 +301,22 @@ function isTranslate() {
   return (state.project?.task || state.project?.settings?.task) === "translate";
 }
 
+function translationCfg() {
+  return state.project?.translation || state.project?.settings?.translation || {};
+}
+
+function canAgreeStyle() {
+  return ["admin", "expert"].includes(state.user?.role);
+}
+
+function childTranslation() {
+  const id = state.project?.id;
+  if (!id) return null;
+  return (state.projects || []).find(
+    (p) => String(p.source_project_id || "") === String(id) && (p.task || p.settings?.task) === "translate"
+  );
+}
+
 function syncExportButtons() {
   const tr = isTranslate();
   const pdf = $("#btn-export-pdf");
@@ -304,11 +333,93 @@ function syncExportButtons() {
   if (trXlsx) trXlsx.hidden = !tr;
 }
 
+function syncTaskUi() {
+  const tr = isTranslate();
+  const p = state.project;
+  const cfg = translationCfg();
+  const agreed = Boolean(cfg.agreed);
+  const leftTitle = $("#left-pane-title");
+  const leftSub = $("#left-pane-sub");
+  const rightSub = $("#right-pane-sub");
+  if (leftTitle) leftTitle.textContent = tr ? "Санскрит" : "Скан";
+  if (leftSub) leftSub.textContent = tr ? "выверенный текст" : "как в PDF";
+  if (rightSub) {
+    rightSub.textContent = tr ? "русский" : "देवनागरी";
+    rightSub.classList.toggle("sa", !tr);
+  }
+  const scanWrap = $("#left-scan-wrap");
+  const sourceBox = $("#left-source-html");
+  if (scanWrap) scanWrap.hidden = tr;
+  if (sourceBox) sourceBox.hidden = !tr;
+
+  const styleBar = $("#style-bar");
+  if (styleBar) styleBar.hidden = !tr;
+  if (tr) {
+    const sel = $("#style-select");
+    const eng = $("#style-english");
+    const notes = $("#style-notes");
+    if (sel && cfg.style) sel.value = cfg.style;
+    if (eng && cfg.english_comments) eng.value = cfg.english_comments;
+    if (notes) notes.value = cfg.notes || "";
+    const lock = agreed || !canAgreeStyle();
+    if (sel) sel.disabled = lock;
+    if (eng) eng.disabled = lock;
+    if (notes) notes.disabled = lock;
+    const agreeBtn = $("#btn-agree-style");
+    const revokeBtn = $("#btn-revoke-style");
+    const mark = $("#style-agreed-mark");
+    if (agreeBtn) agreeBtn.hidden = !canAgreeStyle() || agreed;
+    if (revokeBtn) revokeBtn.hidden = !canAgreeStyle() || !agreed;
+    if (mark) mark.textContent = agreed ? "согласован" : "не согласован — LLM не запустится";
+  }
+
+  const dir = $("#directive-input");
+  if (dir) {
+    dir.placeholder = tr
+      ? "Замечание к переводу — или нажмите «Перевести страницу»."
+      : "С чем не согласны — или: пересмотри страницу.";
+  }
+  const proof = $("#btn-proofread");
+  if (proof) proof.hidden = tr;
+  const review = $("#btn-review-again");
+  if (review) review.hidden = tr;
+  const trPage = $("#btn-translate-page");
+  if (trPage) {
+    trPage.hidden = !tr;
+    trPage.disabled = tr && !agreed;
+    trPage.title = agreed ? "LLM переводит эту страницу по согласованному шаблону" : "Сначала согласуйте шаблон";
+  }
+
+  const openTr = $("#btn-open-translate");
+  const back = $("#btn-back-source");
+  if (openTr) {
+    if (tr) {
+      openTr.hidden = true;
+    } else {
+      const child = childTranslation();
+      const canSpawn = canAgreeStyle();
+      openTr.hidden = !child && !canSpawn;
+      openTr.textContent = child ? "Открыть перевод" : "Перевод на русский";
+      openTr.classList.toggle("primary", !child);
+    }
+  }
+  if (back) {
+    back.hidden = !tr || !p?.source_project_id;
+  }
+  syncExportButtons();
+}
+
 function updatePipelineBar() {
   const p = state.project;
   if (!p) return;
   $("#pipeline-info").textContent = pipelineLabel(p);
   const btn = $("#btn-start-pipeline");
+  const tr = isTranslate();
+  if (tr) {
+    btn.hidden = true;
+    syncTaskUi();
+    return;
+  }
   const busy = p.pipeline && ["queued", "running"].includes(p.pipeline.status);
   btn.hidden = state.user?.role !== "admin";
   btn.disabled = !!busy;
@@ -316,9 +427,11 @@ function updatePipelineBar() {
     btn.hidden = state.user?.role !== "admin";
     btn.disabled = false;
     btn.textContent = "Подтвердить перевод всей книги";
+    syncTaskUi();
     return;
   }
   btn.textContent = busy ? "Идёт перевод всей книги…" : "Перевести всю книгу заново";
+  syncTaskUi();
 }
 
 function formatTokens(n) {
@@ -361,18 +474,27 @@ async function loadUsage() {
 }
 
 async function openProject(id) {
+  try {
+    state.projects = await api("/projects");
+  } catch (_) {}
   state.project = await api(`/projects/${id}`);
   state.pages = await api(`/projects/${id}/pages`);
   $("#proj-title").textContent = state.project.title;
   $("#proj-meta").textContent = `${state.project.slug} · согласовано ${state.project.accepted ?? 0} · на правке ${state.project.draft_ready ?? 0}`;
   updatePipelineBar();
-  syncExportButtons();
   await loadUsage();
   $("#page-total").textContent = String(state.pages.length || state.project.pdf_pages || 0);
   $("#page-jump").max = String(state.pages.length || 1);
   renderThumbList();
   showView("editor");
-  startPipelinePoll();
+  if (isTranslate()) {
+    if (pipelineTimer) {
+      clearInterval(pipelineTimer);
+      pipelineTimer = null;
+    }
+  } else {
+    startPipelinePoll();
+  }
   if (state.pages.length) {
     const keep =
       state.page && state.pages.some((p) => p.id === state.page.id)
@@ -430,7 +552,9 @@ function renderThumbList() {
         ${
           p.has_scan
             ? `<img alt="" data-scan-page="${p.id}" />`
-            : `<span class="ph">стр. ${p.page_no}<br>в очереди</span>`
+            : `<span class="ph">стр. ${p.page_no}<br>${
+                p.has_source_html ? "санскрит" : p.has_html ? "текст" : "в очереди"
+              }</span>`
         }
       </div>
       <div class="thumb-meta">
@@ -493,21 +617,34 @@ function highlightThumb(pageId) {
 
 function updateEditMode() {
   const hasHtml = Boolean((state.page?.current_html || "").trim());
+  const hasSource = Boolean((state.page?.source_html || "").trim());
   const accepted = state.page?.status === "expert_done" && hasHtml;
-  const pendingDraft =
-    !hasHtml &&
-    ["pending", "extracting", "llm_draft", "ocr"].includes(state.page?.status || "");
+  const pendingDraft = isTranslate()
+    ? !hasSource && !hasHtml
+    : !hasHtml &&
+      ["pending", "extracting", "llm_draft", "ocr"].includes(state.page?.status || "");
   $("#accepted-box").hidden = !accepted;
   $("#edit-tools").hidden = accepted || pendingDraft;
   const srcTab = document.querySelector('.tab[data-tab="source"]');
   if (srcTab) srcTab.hidden = accepted;
   if (accepted) switchTab("preview");
   $("#html-editor").readOnly = accepted || pendingDraft;
+  const agreed = Boolean(translationCfg().agreed);
+  if (isTranslate()) {
+    const trPage = $("#btn-translate-page");
+    if (trPage) trPage.disabled = !agreed || accepted;
+    const revise = $("#btn-revise");
+    if (revise) revise.disabled = !agreed || accepted;
+  } else {
+    const revise = $("#btn-revise");
+    if (revise) revise.disabled = accepted || pendingDraft;
+  }
 }
 
 let pipelineTimer = null;
 function startPipelinePoll() {
   if (pipelineTimer) clearInterval(pipelineTimer);
+  if (isTranslate()) return;
   pipelineTimer = setInterval(async () => {
     if (!state.project) return;
     try {
@@ -554,7 +691,9 @@ function renderPreview(html) {
   const box = $("#html-preview");
   const src = (html || "").trim();
   if (!src) {
-    box.innerHTML = `<p class="muted">Черновик ещё готовится (автоперевод) или пуст.</p>`;
+    box.innerHTML = isTranslate()
+      ? `<p class="muted">Русский черновик ещё не готов. Согласуйте шаблон и нажмите «Перевести страницу».</p>`
+      : `<p class="muted">Черновик ещё готовится (автоперевод) или пуст.</p>`;
     return;
   }
   // Draft HTML is trusted content from our pipeline / LLM, not arbitrary user HTML from the open web.
@@ -781,8 +920,28 @@ async function loadPage(pageId) {
   setDraftHtml(state.page.current_html || "");
   switchTab("preview");
   updateEditMode();
+  await renderLeftPane();
+}
+
+async function renderLeftPane() {
   const img = $("#scan-img");
   const empty = $("#scan-empty");
+  const sourceBox = $("#left-source-html");
+  if (isTranslate()) {
+    if (img) {
+      img.removeAttribute("src");
+      img.hidden = true;
+    }
+    if (empty) empty.hidden = true;
+    if (!sourceBox) return;
+    const src = (state.page?.source_html || "").trim();
+    sourceBox.innerHTML = src
+      ? src
+      : `<p class="muted">На этой странице нет выверенного санскрита.</p>`;
+    if (src) await hydratePreviewFigures(sourceBox);
+    return;
+  }
+  if (sourceBox) sourceBox.innerHTML = "";
   if (state.page.scan_url) {
     if (empty) empty.hidden = true;
     img.hidden = false;
@@ -884,7 +1043,9 @@ async function runRevision(directive) {
   $("#btn-review-again").disabled = true;
   const proofBtn = $("#btn-proofread");
   if (proofBtn) proofBtn.disabled = true;
-  st.textContent = "LLM смотрит скан… до 1–2 мин";
+  const trBtn = $("#btn-translate-page");
+  if (trBtn) trBtn.disabled = true;
+  st.textContent = isTranslate() ? "LLM переводит страницу… до 1–2 мин" : "LLM смотрит скан… до 1–2 мин";
   try {
     state.page = await api(`/pages/${state.page.id}/revise`, {
       method: "POST",
@@ -903,13 +1064,19 @@ async function runRevision(directive) {
     $("#btn-revise").disabled = false;
     $("#btn-review-again").disabled = false;
     if (proofBtn) proofBtn.disabled = false;
+    updateEditMode();
   }
 }
 
 async function revisePage() {
   const directive = $("#directive-input").value.trim();
   if (directive.length < 3) {
-    toast("Опишите, с чем не согласны, или нажмите «Пересмотри страницу»", true);
+    toast(
+      isTranslate()
+        ? "Опишите правку или нажмите «Перевести страницу»"
+        : "Опишите, с чем не согласны, или нажмите «Пересмотри страницу»",
+      true
+    );
     return;
   }
   await runRevision(directive);
@@ -941,6 +1108,124 @@ async function reviewAgain() {
   } finally {
     $("#btn-revise").disabled = false;
     $("#btn-review-again").disabled = false;
+    updateEditMode();
+  }
+}
+
+async function translatePage() {
+  if (!state.page) return;
+  if (!translationCfg().agreed) {
+    toast("Сначала согласуйте шаблон перевода", true);
+    return;
+  }
+  const st = $("#revise-status");
+  const trBtn = $("#btn-translate-page");
+  const reviseBtn = $("#btn-revise");
+  if (trBtn) trBtn.disabled = true;
+  if (reviseBtn) reviseBtn.disabled = true;
+  st.textContent = "LLM переводит страницу… до 1–2 мин";
+  try {
+    const directive = $("#directive-input").value.trim();
+    state.page = await api(`/pages/${state.page.id}/translate`, {
+      method: "POST",
+      json: { directive: directive.length >= 3 ? directive : null },
+    });
+    setDraftHtml(state.page.current_html || "");
+    switchTab("preview");
+    $("#page-status").textContent = state.page.status;
+    toast("Черновик перевода готов");
+    st.textContent = "готово";
+    if (state.project?.id) {
+      state.pages = await api(`/projects/${state.project.id}/pages`);
+      renderThumbList();
+    }
+  } catch (e) {
+    toast(e.message, true);
+    st.textContent = "";
+  } finally {
+    updateEditMode();
+  }
+}
+
+function showTranslateModal(show) {
+  const modal = $("#translate-modal");
+  if (modal) modal.hidden = !show;
+}
+
+function openTranslateModal() {
+  const p = state.project;
+  if (!p) return;
+  const form = $("#translate-form");
+  if (!form) return;
+  form.slug.value = `${p.slug}-ru`.slice(0, 128);
+  form.title.value = `${p.title} · перевод`;
+  form.style.value = "interlinear";
+  form.english_comments.value = "replace";
+  form.notes.value = "";
+  showTranslateModal(true);
+}
+
+async function onOpenTranslate() {
+  const child = childTranslation();
+  if (child) {
+    await openProject(child.id);
+    return;
+  }
+  openTranslateModal();
+}
+
+async function spawnTranslation(ev) {
+  ev.preventDefault();
+  if (!state.project) return;
+  const form = ev.target;
+  const btn = $("#btn-spawn-translate");
+  const body = {
+    slug: form.slug.value.trim().toLowerCase(),
+    title: form.title.value.trim(),
+    style: form.style.value,
+    english_comments: form.english_comments.value,
+    notes: form.notes.value.trim(),
+  };
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Копируем санскрит…";
+  }
+  toast("Создаём проект перевода — для большой книги это может занять минуту");
+  try {
+    const dest = await api(`/projects/${state.project.id}/spawn-translation`, {
+      method: "POST",
+      json: body,
+    });
+    showTranslateModal(false);
+    toast("Проект перевода создан — согласуйте шаблон");
+    await openProject(dest.id);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Создать проект перевода";
+    }
+  }
+}
+
+async function patchTranslationStyle(agree) {
+  if (!state.project) return;
+  try {
+    state.project = await api(`/projects/${state.project.id}/translation-style`, {
+      method: "PATCH",
+      json: {
+        style: $("#style-select").value,
+        english_comments: $("#style-english").value,
+        notes: $("#style-notes").value,
+        agree,
+      },
+    });
+    updatePipelineBar();
+    updateEditMode();
+    toast(agree ? "Шаблон согласован — можно переводить страницы" : "Согласование отозвано");
+  } catch (e) {
+    toast(e.message, true);
   }
 }
 
@@ -1325,6 +1610,24 @@ function wire() {
     };
   }
   $("#btn-start-pipeline").onclick = startPipeline;
+  const btnOpenTr = $("#btn-open-translate");
+  if (btnOpenTr) btnOpenTr.onclick = () => onOpenTranslate();
+  const btnBackSrc = $("#btn-back-source");
+  if (btnBackSrc) {
+    btnBackSrc.onclick = () => {
+      if (state.project?.source_project_id) openProject(state.project.source_project_id);
+    };
+  }
+  const btnAgree = $("#btn-agree-style");
+  if (btnAgree) btnAgree.onclick = () => patchTranslationStyle(true);
+  const btnRevokeStyle = $("#btn-revoke-style");
+  if (btnRevokeStyle) btnRevokeStyle.onclick = () => patchTranslationStyle(false);
+  const btnTrPage = $("#btn-translate-page");
+  if (btnTrPage) btnTrPage.onclick = translatePage;
+  const trForm = $("#translate-form");
+  if (trForm) trForm.onsubmit = spawnTranslation;
+  const btnCancelTr = $("#btn-cancel-translate");
+  if (btnCancelTr) btnCancelTr.onclick = () => showTranslateModal(false);
   $("#btn-export-pdf").onclick = (e) => exportPdf("text", { rebuild: e.shiftKey });
   $("#btn-export-interleave").onclick = (e) =>
     exportPdf("interleave", { rebuild: e.shiftKey });
