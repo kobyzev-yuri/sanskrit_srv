@@ -632,10 +632,8 @@ function updateEditMode() {
   if (accepted) switchTab("preview");
   $("#html-editor").readOnly = accepted || pendingDraft;
   const wyBox = $("#html-wysiwyg");
-  if (wyBox && (accepted || pendingDraft)) {
-    wyBox.querySelectorAll(".wy-edit").forEach((el) => {
-      el.contentEditable = "false";
-    });
+  if (wyBox && !wyBox.querySelector(".wy-empty")) {
+    markWysiwygEditable(wyBox, !(accepted || pendingDraft));
   }
   const agreed = Boolean(translationCfg().agreed);
   if (isTranslate()) {
@@ -778,23 +776,76 @@ function currentDraftHtml() {
   return $("#html-editor").value;
 }
 
-function markWysiwygEditable(root, enabled) {
-  root.querySelectorAll(".sa, [lang='sa']").forEach((el) => {
-    if (el.classList.contains("ru") || el.classList.contains("tr")) return;
-    el.contentEditable = "false";
-    el.classList.add("wy-lock");
-  });
-  let targets = [...root.querySelectorAll(".ru, .tr, .note")];
-  if (!targets.length) {
-    targets = [...root.querySelectorAll("p, h1, h2, h3, li, td, blockquote")].filter(
-      (el) => !el.classList.contains("sa") && !el.closest(".sa, [lang='sa']")
-    );
+function looksRussian(el) {
+  return /[А-Яа-яЁёІіѢѣѲѳѴѵ]/.test(el.textContent || "");
+}
+
+function isSaLine(el) {
+  if (el.classList.contains("ru") || el.classList.contains("tr") || el.classList.contains("note")) {
+    return false;
   }
-  targets.forEach((el) => {
-    el.contentEditable = enabled ? "true" : "false";
-    el.classList.toggle("wy-edit", enabled);
-    if (enabled) el.spellcheck = true;
+  if ((el.getAttribute("lang") || "").toLowerCase() === "ru") return false;
+  if (looksRussian(el) && !el.classList.contains("sa")) return false;
+  return el.classList.contains("sa") || (el.getAttribute("lang") || "").toLowerCase() === "sa";
+}
+
+function wysiwygBlocks(root) {
+  return [...root.querySelectorAll("p, h1, h2, h3, h4, li, td, blockquote")];
+}
+
+function setWysiwygEditable(el, enabled) {
+  if (!enabled) {
+    el.removeAttribute("contenteditable");
+    el.classList.remove("wy-edit");
+    return;
+  }
+  el.classList.add("wy-edit");
+  el.spellcheck = true;
+  try {
+    el.contentEditable = "plaintext-only";
+  } catch (_) {
+    el.contentEditable = "true";
+  }
+  if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
+}
+
+function markWysiwygEditable(root, enabled) {
+  root.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
+  root.querySelectorAll(".wy-edit, .wy-lock").forEach((el) => {
+    el.classList.remove("wy-edit", "wy-lock");
   });
+  const blocks = wysiwygBlocks(root);
+  const russian = blocks.filter(
+    (el) =>
+      el.classList.contains("ru") ||
+      el.classList.contains("tr") ||
+      el.classList.contains("note") ||
+      (el.getAttribute("lang") || "").toLowerCase() === "ru" ||
+      looksRussian(el)
+  );
+  const sanskrit = blocks.filter((el) => isSaLine(el));
+  sanskrit.forEach((el) => el.classList.add("wy-lock"));
+  let targets = russian;
+  if (!targets.length) targets = blocks.filter((el) => !isSaLine(el));
+  if (!targets.length) targets = blocks;
+  targets.forEach((el) => setWysiwygEditable(el, enabled));
+}
+
+function seedRuAfterSa(html) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html || "";
+  const blocks = wysiwygBlocks(wrap);
+  for (const el of blocks) {
+    if (el.classList.contains("ru") || el.classList.contains("tr")) continue;
+    const next = el.nextElementSibling;
+    if (next && (next.classList.contains("ru") || next.classList.contains("tr"))) continue;
+    const ru = document.createElement("p");
+    ru.className = "ru tr";
+    ru.setAttribute("lang", "ru");
+    ru.appendChild(document.createElement("br"));
+    el.insertAdjacentElement("afterend", ru);
+  }
+  return wrap.innerHTML;
 }
 
 function renderWysiwyg(html) {
@@ -803,10 +854,14 @@ function renderWysiwyg(html) {
   if (!box) return;
   if (hint) {
     hint.textContent = isTranslate()
-      ? "Правите русский в подсвеченных строках. Санскрит не меняется, HTML-теги не показываются."
-      : "Правите текст страницы прямо здесь. HTML-теги не показываются.";
+      ? "Кликните по подсвеченной русской строке и правьте как обычный текст. Санскрит не меняется."
+      : "Кликните по строке и правьте текст. HTML-теги не показываются.";
   }
-  const src = (html || "").trim();
+  let src = (html || "").trim();
+  if (!src && isTranslate() && (state.page?.source_html || "").trim()) {
+    src = seedRuAfterSa(state.page.source_html);
+    $("#html-editor").value = src;
+  }
   if (!src) {
     box.innerHTML = `<p class="muted wy-empty">${
       isTranslate()
@@ -817,8 +872,7 @@ function renderWysiwyg(html) {
   }
   box.innerHTML = src;
   hydratePreviewFigures(box);
-  const enabled = !$("#html-editor")?.readOnly;
-  markWysiwygEditable(box, enabled);
+  markWysiwygEditable(box, !$("#html-editor")?.readOnly);
 }
 
 function switchTab(name) {

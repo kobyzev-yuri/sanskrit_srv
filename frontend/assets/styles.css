@@ -408,14 +408,11 @@ textarea {
   overflow: auto;
 }
 .tab-panel.active { display: block; }
-#tab-source.active,
-#tab-wysiwyg.active {
+#tab-source.active {
   display: grid;
 }
 #tab-wysiwyg.active {
-  grid-template-rows: auto 1fr;
-  min-height: 0;
-  height: 100%;
+  display: block;
 }
 .wy-hint {
   margin: 0;
@@ -430,6 +427,10 @@ textarea {
   border-radius: 4px;
   cursor: text;
   background: #fffdf8;
+  min-height: 1.45em;
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
 }
 .wysiwyg-preview .wy-edit:focus {
   outline: 2px solid var(--accent);
@@ -439,7 +440,7 @@ textarea {
   cursor: default;
 }
 #tab-wysiwyg .wysiwyg-preview {
-  min-height: 0;
+  min-height: 12rem;
   overflow: auto;
 }
 #tab-source textarea {
