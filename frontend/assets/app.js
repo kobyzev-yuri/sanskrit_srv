@@ -303,6 +303,8 @@ function syncExportButtons() {
   if (trPdf) trPdf.hidden = !tr;
   if (trXlsx) trXlsx.hidden = !tr;
 }
+
+function updatePipelineBar() {
   const p = state.project;
   if (!p) return;
   $("#pipeline-info").textContent = pipelineLabel(p);
