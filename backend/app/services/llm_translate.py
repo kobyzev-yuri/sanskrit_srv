@@ -1,7 +1,7 @@
 """Translate verified Sanskrit HTML → Russian HTML (text LLM, no scan)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -13,7 +13,7 @@ from app.services.llm_draft import (
     _uniq,
     extract_html_only,
 )
-from app.services.llm_route import model_plan
+from app.services.llm_route import model_plan_primary_only
 from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 from app.services.layout_assets import preserve_figure_srcs
@@ -49,6 +49,7 @@ def translate_from_source(
     cfg: dict[str, Any],
     current_html: str | None = None,
     directive: str | None = None,
+    on_chunk: Callable[[int, int, str, dict[str, Any]], None] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     if not (source_html or "").strip():
         raise ValueError("empty Sanskrit source")
@@ -65,6 +66,8 @@ def translate_from_source(
             directive=directive,
         )
         raw, model, usage = run_text_prompt(prompt)
+        if on_chunk:
+            on_chunk(1, 1, model, usage)
         html = validate_translation_html(raw, source_html=source_html)
         return html, model, usage
 
@@ -86,6 +89,8 @@ def translate_from_source(
         raw, model, usage = run_text_prompt(prompt)
         parts_html.append(extract_html_only(raw))
         usages.append(usage)
+        if on_chunk:
+            on_chunk(i, total, model, usage)
     merged = merge_translated_chunks(parts_html, article_open=article_open or None)
     html = validate_translation_html(merged, source_html=source_html)
     return html, model, _sum_usage(usages)
@@ -93,7 +98,7 @@ def translate_from_source(
 
 def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     settings = get_settings()
-    plan = model_plan()
+    plan = model_plan_primary_only()
     _require_keys_for_plan(settings, plan)
     errors: list[str] = []
 

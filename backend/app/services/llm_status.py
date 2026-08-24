@@ -114,41 +114,61 @@ def fetch_balance() -> dict[str, Any]:
 
 
 def llm_status() -> dict[str, Any]:
-    from app.services.llm_route import get_route
+    from app.services.llm_route import describe_route, get_route
+
+    desc = describe_route()
+    route = get_route()
+    primary = desc.get("primary") or {}
+    live = f"{desc.get('label') or route} · {primary.get('provider')}:{primary.get('model')}"
+
+    def attach(payload: dict[str, Any]) -> dict[str, Any]:
+        payload["route"] = route
+        payload["route_label"] = desc.get("label")
+        payload["route_model"] = f"{primary.get('provider')}:{primary.get('model')}"
+        if not payload.get("message"):
+            payload["message"] = live
+        elif payload.get("ok") and not payload.get("warning"):
+            payload["message"] = live
+        return payload
 
     alert = read_alert()
-    route = get_route()
     if route == "openrouter":
         or_ok = bool((get_settings().openrouter_api_key or "").strip())
         if not or_ok:
-            return {
-                "ok": False,
-                "warning": True,
-                "code": "llm_key",
-                "message": "OPENROUTER_API_KEY не задан в .env — нужен для Ox Alpha.",
-                "balance": None,
-                "balance_ok": False,
-                "balance_error": "OPENROUTER_API_KEY missing",
-            }
+            return attach(
+                {
+                    "ok": False,
+                    "warning": True,
+                    "code": "llm_key",
+                    "message": "OPENROUTER_API_KEY не задан в .env — нужен для Ox Alpha.",
+                    "balance": None,
+                    "balance_ok": False,
+                    "balance_error": "OPENROUTER_API_KEY missing",
+                }
+            )
         if alert.get("active"):
-            return {
-                "ok": False,
-                "warning": True,
-                "code": alert.get("code") or "llm_quota",
-                "message": alert.get("message"),
+            return attach(
+                {
+                    "ok": False,
+                    "warning": True,
+                    "code": alert.get("code") or "llm_quota",
+                    "message": alert.get("message"),
+                    "balance": None,
+                    "balance_ok": True,
+                    "balance_error": None,
+                }
+            )
+        return attach(
+            {
+                "ok": True,
+                "warning": False,
+                "code": None,
+                "message": live,
                 "balance": None,
                 "balance_ok": True,
                 "balance_error": None,
             }
-        return {
-            "ok": True,
-            "warning": False,
-            "code": None,
-            "message": "OpenRouter · stealth/ox-alpha",
-            "balance": None,
-            "balance_ok": True,
-            "balance_error": None,
-        }
+        )
 
     bal = fetch_balance()
     active = bool(alert.get("active")) or bool(bal.get("low"))
@@ -160,20 +180,20 @@ def llm_status() -> dict[str, Any]:
     elif not bal.get("ok") and not settings_key_ok():
         message = "Ключ ProxyAPI не задан в .env"
         active = True
-    return {
-        "ok": not active,
-        "warning": active,
-        "code": "llm_quota" if active else None,
-        "message": message
-        or (
-            "ProxyAPI OK"
-            if bal.get("ok")
-            else "Баланс недоступен (включите «Запрос баланса» у ключа в кабинете ProxyAPI) — квота всё равно отловится по HTTP 402."
-        ),
-        "balance": bal.get("balance"),
-        "balance_ok": bal.get("ok"),
-        "balance_error": None if bal.get("ok") else bal.get("error"),
-    }
+    ok_msg = live if bal.get("ok") else (
+        "Баланс недоступен (включите «Запрос баланса» у ключа в кабинете ProxyAPI) — квота всё равно отловится по HTTP 402."
+    )
+    return attach(
+        {
+            "ok": not active,
+            "warning": active,
+            "code": "llm_quota" if active else None,
+            "message": message or ok_msg,
+            "balance": bal.get("balance"),
+            "balance_ok": bal.get("ok"),
+            "balance_error": None if bal.get("ok") else bal.get("error"),
+        }
+    )
 
 
 def settings_key_ok() -> bool:

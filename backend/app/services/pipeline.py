@@ -1,14 +1,16 @@
 """Auto extract + LLM draft pipeline (one page at a time for small VPS)."""
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
-from app.models import Job, JobStatus, Page, PageStatus, PageVersion, Project, VersionSource
+from app.models import Job, JobStatus, Page, PageStatus, PageVersion, Project, VersionSource, utcnow
 from app.services import storage
 from app.services.layout_assets import extract_embedded_figures, finalize_page_html
 from app.services.llm_draft import revise_from_scan
@@ -34,6 +36,26 @@ DEFAULT_REVIEW_DIRECTIVE = (
 )
 
 AGREED_STATUSES = (PageStatus.expert_done, PageStatus.scholar_review, PageStatus.published)
+
+
+def job_progress_dict(job: Job) -> dict:
+    raw = job.progress or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def set_job_progress(db: Session, job: Job, **fields) -> None:
+    """Assign a fresh progress dict so SQLite JSON actually persists."""
+    prog = job_progress_dict(job)
+    prog.update(fields)
+    job.progress = prog
+    job.updated_at = utcnow()
+    flag_modified(job, "progress")
+    db.commit()
 
 
 def enqueue_project_pipeline(
@@ -181,25 +203,68 @@ def process_one_translate_page(
     if not source_html:
         return "skip_no_source"
 
+    # Resume after worker restart: skip pages already written by this job.
+    if job_id is not None:
+        job = db.get(Job, job_id)
+        if (
+            job is not None
+            and (page.current_html or "").strip()
+            and page.updated_at
+            and job.created_at
+            and page.updated_at >= job.created_at
+            and page.status in (PageStatus.expert_review, PageStatus.expert_done)
+        ):
+            return "skip_already_this_job"
+
     page.status = PageStatus.llm_draft
     db.commit()
     cfg = translation_cfg(project)
+    recorded: list[int] = []
+
+    def on_chunk(index: int, total_chunks: int, model: str, usage: dict) -> None:
+        record_usage(
+            db,
+            project_id=project.id,
+            page_id=page.id,
+            job_id=job_id,
+            network=str(usage.get("network") or "openrouter"),
+            model=str(usage.get("model") or model.split(":", 1)[-1]),
+            usage=usage,
+            operation="translate",
+        )
+        recorded.append(index)
+        if job_id is None:
+            return
+        job = db.get(Job, job_id)
+        if job is None:
+            return
+        set_job_progress(
+            db,
+            job,
+            current_page=page.page_no,
+            chunk=index,
+            chunks=total_chunks,
+            model=model,
+        )
+
     html, model, usage = translate_from_source(
         source_html=source_html,
         cfg=cfg,
         current_html=None,
         directive=None,
+        on_chunk=on_chunk,
     )
-    record_usage(
-        db,
-        project_id=project.id,
-        page_id=page.id,
-        job_id=job_id,
-        network=str(usage.get("network") or "openrouter"),
-        model=str(usage.get("model") or model.split(":", 1)[-1]),
-        usage=usage,
-        operation="translate",
-    )
+    if not recorded:
+        record_usage(
+            db,
+            project_id=project.id,
+            page_id=page.id,
+            job_id=job_id,
+            network=str(usage.get("network") or "openrouter"),
+            model=str(usage.get("model") or model.split(":", 1)[-1]),
+            usage=usage,
+            operation="translate",
+        )
     _save_version(
         db,
         page,

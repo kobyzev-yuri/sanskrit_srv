@@ -50,13 +50,19 @@ def test_opus_route_uses_proxyapi(tmp_path, monkeypatch):
     assert "gemini-2.5-flash" in plan["gemini"]
 
 
-def test_primary_only_openrouter(tmp_path, monkeypatch):
+def test_primary_only_follows_saved_route(tmp_path, monkeypatch):
     from app.services import llm_route as lr
 
-    monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
+    monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path, openai_api_key="px"))
+    set_route("gemini", updated_by="t")
+    plan = model_plan_primary_only()
+    assert plan["gemini"][:1] == ["gemini-2.5-flash"]
+    assert plan["openrouter"] == []
+    assert plan["anthropic"] == []
+    set_route("openrouter", updated_by="t")
     plan = model_plan_primary_only()
     assert plan["openrouter"] == ["stealth/ox-alpha"]
-    assert plan["openai"] == []
+    assert plan["gemini"] == []
 
 
 def test_openai_message_text_reasoning_fallback():

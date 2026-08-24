@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.models import PageStatus, Role, VersionSource
 
@@ -53,8 +54,29 @@ class JobOut(BaseModel):
     progress: dict[str, Any] = {}
     error: str | None = None
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _job_status_str(cls, v: Any) -> str:
+        if hasattr(v, "value"):
+            return str(v.value)
+        text = str(v or "")
+        return text.split(".")[-1] if text else ""
+
+    @field_validator("progress", mode="before")
+    @classmethod
+    def _job_progress_dict(cls, v: Any) -> dict[str, Any]:
+        if not v:
+            return {}
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        return v if isinstance(v, dict) else {}
 
 
 class ProjectOut(BaseModel):
@@ -217,6 +239,9 @@ class ProjectUsageOut(BaseModel):
     by_network: list[LlmUsageNetworkOut]
     by_model: list[LlmUsageModelOut]
     est_usd_total: float | None = None
+    route: str | None = None
+    route_label: str | None = None
+    route_model: str | None = None
 
 
 class LlmCatalogOut(BaseModel):

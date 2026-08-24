@@ -504,7 +504,11 @@ function usageLabel(u, llm) {
     .join(" · ");
   const usd =
     u.est_usd_total != null ? ` · ≈ $${Number(u.est_usd_total).toFixed(4)}` : "";
-  const live = llm?.message ? `Сейчас: ${llm.message}. ` : "";
+  const live = llm?.route_label
+    ? `Сейчас: ${llm.route_label}${llm.route_model ? " (" + llm.route_model + ")" : ""}. `
+    : llm?.message
+      ? `Сейчас: ${llm.message}. `
+      : "";
   return (
     live +
     `Расход проекта: ${formatTokens(t.total_tokens)} ток. / ${t.calls} вызов.` +
@@ -1825,7 +1829,7 @@ async function loadLlmRoute() {
           ? `${primary.provider}:${primary.model} — ${opt.hint || ""}`
           : opt.hint || "";
         return `<label class="llm-route-opt">
-          <input type="radio" name="llm-route" value="${escapeHtml(opt.id)}" />
+          <input type="radio" name="llm-route" value="${escapeHtml(opt.id)}"${opt.id === route.route ? " checked" : ""} />
           <span>
             <strong>${escapeHtml(opt.label || opt.id)}</strong>
             <span class="muted llm-route-detail">${escapeHtml(detail)}</span>

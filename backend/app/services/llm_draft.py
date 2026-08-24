@@ -229,7 +229,7 @@ def revise_from_scan(
     usage keys: network, model, prompt_tokens, completion_tokens, total_tokens, usage_raw
     """
     settings = get_settings()
-    plan = model_plan()
+    plan = model_plan_primary_only()
     _require_keys_for_plan(settings, plan)
     if not scan_path.exists():
         raise FileNotFoundError(f"scan missing: {scan_path}")
@@ -351,11 +351,11 @@ def run_vision_prompt(
     user_text: str,
     *,
     opus_only: bool = False,
-    primary_only: bool = False,
+    primary_only: bool = True,
 ) -> tuple[str, str, dict[str, Any]]:
-    """Call active LLM route with scan + text prompt. Returns (raw_text, model_id, usage).
+    """Call the admin-selected LLM route with scan + text prompt. Returns (raw_text, model_id, usage).
 
-    primary_only=True — only the selected primary (no Gemini/OpenAI fallback).
+    primary_only=True (default) — only the backoffice primary, no silent Gemini/OpenAI fallback.
     opus_only=True — deprecated alias: Claude only (ProxyAPI).
     """
     settings = get_settings()

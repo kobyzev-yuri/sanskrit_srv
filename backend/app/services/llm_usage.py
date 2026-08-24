@@ -184,6 +184,11 @@ def project_usage_summary(db: Session, project_id: uuid.UUID) -> dict[str, Any]:
             }
         )
 
+    from app.services.llm_route import describe_route
+
+    desc = describe_route()
+    primary = desc.get("primary") or {}
+
     return {
         "project_id": str(project_id),
         "totals": {
@@ -195,4 +200,11 @@ def project_usage_summary(db: Session, project_id: uuid.UUID) -> dict[str, Any]:
         "by_network": by_network_rows,
         "by_model": by_model_rows,
         "est_usd_total": round(est_total, 6) if has_any_price else None,
+        "route": desc.get("route"),
+        "route_label": desc.get("label"),
+        "route_model": (
+            f"{(desc.get('primary') or {}).get('provider')}:{(desc.get('primary') or {}).get('model')}"
+            if desc.get("primary")
+            else None
+        ),
     }
