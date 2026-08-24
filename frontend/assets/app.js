@@ -403,6 +403,7 @@ function syncTaskUi() {
     trPage.disabled = tr && !agreed;
     trPage.title = agreed ? "LLM переводит эту страницу по согласованному шаблону" : "Сначала согласуйте шаблон";
   }
+  syncTranslateAllButtons();
 
   const openTr = $("#btn-open-translate");
   const back = $("#btn-back-source");
@@ -423,6 +424,40 @@ function syncTaskUi() {
   syncExportButtons();
 }
 
+function canRunTranslateAll() {
+  return ["admin", "expert", "scholar"].includes(state.user?.role);
+}
+
+function syncTranslateAllButtons() {
+  const tr = isTranslate();
+  const agreed = Boolean(translationCfg().agreed);
+  const can = canRunTranslateAll();
+  const busy =
+    !!state.project?.pipeline &&
+    ["queued", "running"].includes(state.project.pipeline.status);
+  const openOnly = state.thumbFilter === "open";
+  const label = busy
+    ? "Идёт перевод…"
+    : openOnly
+      ? "Перевести несогласованные"
+      : "Перевести все";
+  const title = !agreed
+    ? "Сначала согласуйте шаблон перевода"
+    : openOnly
+      ? "Перевести страницы без согласия (фильтр включён)"
+      : "Перевести все страницы книги";
+  const ids = ["btn-translate-all", "btn-translate-all-page"];
+  if (tr) ids.push("btn-start-pipeline");
+  for (const id of ids) {
+    const el = $(`#${id}`);
+    if (!el) continue;
+    el.hidden = !tr || !can;
+    el.disabled = !agreed || busy;
+    el.textContent = label;
+    el.title = title;
+  }
+}
+
 function updatePipelineBar() {
   const p = state.project;
   if (!p) return;
@@ -430,14 +465,9 @@ function updatePipelineBar() {
   const btn = $("#btn-start-pipeline");
   const tr = isTranslate();
   const busy = p.pipeline && ["queued", "running"].includes(p.pipeline.status);
-  const role = state.user?.role;
 
   if (tr) {
-    const agreed = !!translationCfg().agreed;
-    const can = ["admin", "expert", "scholar"].includes(role) && agreed;
-    btn.hidden = !can;
-    btn.disabled = !!busy || !agreed;
-    btn.textContent = busy ? "Идёт перевод…" : "Перевести все";
+    syncTranslateAllButtons();
     syncTaskUi();
     return;
   }
@@ -1874,6 +1904,10 @@ function wire() {
     };
   }
   $("#btn-start-pipeline").onclick = startPipeline;
+  const btnTrAll = $("#btn-translate-all");
+  if (btnTrAll) btnTrAll.onclick = startPipeline;
+  const btnTrAllPage = $("#btn-translate-all-page");
+  if (btnTrAllPage) btnTrAllPage.onclick = startPipeline;
   const btnOpenTr = $("#btn-open-translate");
   if (btnOpenTr) btnOpenTr.onclick = () => onOpenTranslate();
   const btnBackSrc = $("#btn-back-source");
