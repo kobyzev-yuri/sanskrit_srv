@@ -37,6 +37,7 @@ from app.services.translation_style import (
     STYLES,
     default_translation_settings,
     project_task,
+    translation_agreed,
     translation_cfg,
 )
 
@@ -457,14 +458,34 @@ def start_pipeline(
     project_id: str,
     force: bool = False,
     force_llm: bool = False,
-    user: User = Depends(require_roles(Role.admin)),
+    open_only: bool = False,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Restart pipeline. force_llm=true runs vision LLM even for text PDFs."""
+    """Start / restart pipeline.
+
+    Digitize: extract + LLM draft (admin only).
+    Translate: batch Russian translation (admin/expert/scholar; style must be agreed).
+
+    open_only=true → only pages that are not expert_done / scholar_review / published.
+    open_only=false + force → all pages (including agreed; drafts overwritten).
+    """
     project = db.get(Project, _uid(project_id))
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
-    ensure_page_stubs(db, project)
+
+    is_translate = project_task(project) == "translate"
+    if is_translate:
+        if not translation_agreed(project):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Сначала согласуйте шаблон перевода с экспертом",
+            )
+    else:
+        if user.role != Role.admin:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only admin can restart digitize pipeline")
+        ensure_page_stubs(db, project)
+
     running = db.scalar(
         select(Job).where(
             Job.project_id == project.id,
@@ -473,13 +494,24 @@ def start_pipeline(
     )
     if running:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Pipeline already running")
+
     # Confirm whole-book translation (also clears awaiting_confirm for large books).
     project.status = "processing"
     settings = dict(project.settings or {})
     settings["whole_book_confirmed"] = True
     project.settings = settings
     db.commit()
-    enqueue_project_pipeline(db, project.id, force=force, force_llm=force_llm)
+
+    # Re-run selected pages: force when rewriting all, or when filtering to open pages.
+    page_force = force or open_only
+    enqueue_project_pipeline(
+        db,
+        project.id,
+        force=page_force,
+        force_llm=force_llm,
+        open_only=open_only,
+        translate=is_translate,
+    )
     return _project_out(db, project)
 
 

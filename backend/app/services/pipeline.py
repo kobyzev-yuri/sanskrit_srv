@@ -13,6 +13,7 @@ from app.services import storage
 from app.services.layout_assets import extract_embedded_figures, finalize_page_html
 from app.services.llm_draft import revise_from_scan
 from app.services.llm_status import LlmQuotaError, set_quota_alert
+from app.services.llm_translate import translate_from_source
 from app.services.llm_usage import record_usage
 from app.services.pdf_extract import (
     classify_pdf,
@@ -21,6 +22,7 @@ from app.services.pdf_extract import (
     pdf_page_count,
     seed_html,
 )
+from app.services.translation_style import project_task, translation_agreed, translation_cfg
 
 log = logging.getLogger("sanskrit.pipeline")
 
@@ -31,6 +33,7 @@ DEFAULT_REVIEW_DIRECTIVE = (
     "(лево|стр|право|стр), без второй узкой таблицы внизу. Текст построчно, обе колонки до конца."
 )
 
+AGREED_STATUSES = (PageStatus.expert_done, PageStatus.scholar_review, PageStatus.published)
 
 
 def enqueue_project_pipeline(
@@ -39,18 +42,29 @@ def enqueue_project_pipeline(
     *,
     force: bool = False,
     force_llm: bool = False,
+    open_only: bool = False,
+    translate: bool = False,
 ) -> Job:
     job = Job(
         kind="pipeline_project",
         project_id=project_id,
         status=JobStatus.queued,
-        payload={"force": force, "force_llm": force_llm},
+        payload={
+            "force": force,
+            "force_llm": force_llm,
+            "open_only": open_only,
+            "translate": translate,
+        },
         progress={"done": 0, "total": 0, "current_page": None},
     )
     db.add(job)
     db.commit()
     db.refresh(job)
     return job
+
+
+def page_is_agreed(page: Page) -> bool:
+    return page.status in AGREED_STATUSES
 
 
 def project_source_kind(project: Project) -> str:
@@ -131,9 +145,11 @@ def _save_version(
     html: str,
     source: VersionSource,
     note: str,
+    *,
+    status: PageStatus = PageStatus.expert_done,
 ) -> None:
     page.current_html = html
-    page.status = PageStatus.expert_done
+    page.status = status
     next_ver = (
         db.scalar(select(func.max(PageVersion.version)).where(PageVersion.page_id == page.id)) or 0
     ) + 1
@@ -147,6 +163,52 @@ def _save_version(
         )
     )
     db.commit()
+
+
+def process_one_translate_page(
+    db: Session,
+    page: Page,
+    *,
+    job_id: uuid.UUID | None = None,
+) -> str:
+    """LLM Russian translation from verified Sanskrit source_html."""
+    project = db.get(Project, page.project_id)
+    if project is None or project_task(project) != "translate":
+        raise RuntimeError("not a translate project")
+    if not translation_agreed(project):
+        raise RuntimeError("translation style not agreed")
+    source_html = (page.source_html or "").strip()
+    if not source_html:
+        return "skip_no_source"
+
+    page.status = PageStatus.llm_draft
+    db.commit()
+    cfg = translation_cfg(project)
+    html, model, usage = translate_from_source(
+        source_html=source_html,
+        cfg=cfg,
+        current_html=None,
+        directive=None,
+    )
+    record_usage(
+        db,
+        project_id=project.id,
+        page_id=page.id,
+        job_id=job_id,
+        network=str(usage.get("network") or "openrouter"),
+        model=str(usage.get("model") or model.split(":", 1)[-1]),
+        usage=usage,
+        operation="translate",
+    )
+    _save_version(
+        db,
+        page,
+        html,
+        VersionSource.llm,
+        f"batch translate {cfg.get('style')} | {model}",
+        status=PageStatus.expert_review,
+    )
+    return f"translate:{model}"
 
 
 def process_one_page(
@@ -237,9 +299,17 @@ def run_pipeline_job(db: Session, job: Job) -> None:
         db.commit()
         return
 
-    force = bool((job.payload or {}).get("force"))
-    force_llm = bool((job.payload or {}).get("force_llm"))
+    payload = job.payload or {}
+    force = bool(payload.get("force"))
+    force_llm = bool(payload.get("force_llm"))
+    open_only = bool(payload.get("open_only"))
+    translate = bool(payload.get("translate")) or project_task(project) == "translate"
+
     try:
+        if translate:
+            _run_translate_pipeline(db, job, project, open_only=open_only)
+            return
+
         # Classify once if not set
         settings = dict(project.settings or {})
         if "source_kind" not in settings and project.source_pdf_path:
@@ -258,21 +328,27 @@ def run_pipeline_job(db: Session, job: Job) -> None:
                 info["avg_chars"],
             )
 
-        total = ensure_page_stubs(db, project)
+        ensure_page_stubs(db, project)
         pages = list(
             db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
         )
+        if open_only:
+            pages = [p for p in pages if not page_is_agreed(p)]
+        # User re-run with filter: re-draft selected pages even if a draft exists.
+        page_force = force or open_only
+        total = len(pages)
         job.progress = {
             "done": 0,
             "total": total,
             "current_page": None,
             "source_kind": project_source_kind(project),
+            "open_only": open_only,
+            "scope": "whole_book",
         }
         db.commit()
 
         done = 0
         for page in pages:
-            # refresh page from DB each time
             page = db.get(Page, page.id)
             if page is None:
                 continue
@@ -281,13 +357,16 @@ def run_pipeline_job(db: Session, job: Job) -> None:
                 "total": total,
                 "current_page": page.page_no,
                 "source_kind": project_source_kind(project),
+                "open_only": open_only,
+                "scope": "whole_book",
             }
             db.commit()
             try:
-                note = process_one_page(db, page, force=force, force_llm=force_llm, job_id=job.id)
+                note = process_one_page(
+                    db, page, force=page_force, force_llm=force_llm, job_id=job.id
+                )
                 log.info("page %s/%s: %s", page.page_no, total, note)
             except LlmQuotaError as exc:
-                # Stop whole-book run — no point continuing without funds.
                 msg = str(exc)
                 set_quota_alert(msg)
                 log.error("quota exhausted at page %s: %s", page.page_no, msg)
@@ -299,6 +378,7 @@ def run_pipeline_job(db: Session, job: Job) -> None:
                     "current_page": page.page_no,
                     "source_kind": project_source_kind(project),
                     "last_error": job.error,
+                    "open_only": open_only,
                     "scope": "whole_book",
                 }
                 project.status = "in_progress"
@@ -310,7 +390,6 @@ def run_pipeline_job(db: Session, job: Job) -> None:
                 if page is not None:
                     if not page.current_html:
                         page.current_html = seed_html(page.page_no)
-                    # leave for expert; continue rest of the book
                     if page.status == PageStatus.pending:
                         page.status = PageStatus.expert_review
                     db.commit()
@@ -320,6 +399,7 @@ def run_pipeline_job(db: Session, job: Job) -> None:
                     "current_page": page.page_no if page else None,
                     "source_kind": project_source_kind(project),
                     "last_error": str(exc)[:500],
+                    "open_only": open_only,
                     "scope": "whole_book",
                 }
                 db.commit()
@@ -329,6 +409,7 @@ def run_pipeline_job(db: Session, job: Job) -> None:
                 "total": total,
                 "current_page": None,
                 "source_kind": project_source_kind(project),
+                "open_only": open_only,
                 "scope": "whole_book",
             }
             db.commit()
@@ -340,6 +421,7 @@ def run_pipeline_job(db: Session, job: Job) -> None:
             "total": total,
             "current_page": None,
             "source_kind": project_source_kind(project),
+            "open_only": open_only,
             "scope": "whole_book",
         }
         db.commit()
@@ -348,3 +430,103 @@ def run_pipeline_job(db: Session, job: Job) -> None:
         job.error = str(exc)[:2000]
         db.commit()
         raise
+
+
+def _run_translate_pipeline(
+    db: Session,
+    job: Job,
+    project: Project,
+    *,
+    open_only: bool,
+) -> None:
+    if not translation_agreed(project):
+        job.status = JobStatus.failed
+        job.error = "translation style not agreed"
+        db.commit()
+        return
+
+    pages = list(
+        db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+    )
+    if open_only:
+        pages = [p for p in pages if not page_is_agreed(p)]
+    # Skip pages without Sanskrit source (nothing to translate).
+    pages = [p for p in pages if (p.source_html or "").strip()]
+    total = len(pages)
+    job.progress = {
+        "done": 0,
+        "total": total,
+        "current_page": None,
+        "open_only": open_only,
+        "scope": "translate_all",
+    }
+    db.commit()
+
+    done = 0
+    for page in pages:
+        page = db.get(Page, page.id)
+        if page is None:
+            continue
+        job.progress = {
+            "done": done,
+            "total": total,
+            "current_page": page.page_no,
+            "open_only": open_only,
+            "scope": "translate_all",
+        }
+        db.commit()
+        try:
+            note = process_one_translate_page(db, page, job_id=job.id)
+            log.info("translate page %s/%s: %s", page.page_no, total, note)
+        except LlmQuotaError as exc:
+            msg = str(exc)
+            set_quota_alert(msg)
+            log.error("quota exhausted at translate page %s: %s", page.page_no, msg)
+            job.status = JobStatus.failed
+            job.error = f"llm_quota at page {page.page_no}: {msg}"
+            job.progress = {
+                "done": done,
+                "total": total,
+                "current_page": page.page_no,
+                "last_error": job.error,
+                "open_only": open_only,
+                "scope": "translate_all",
+            }
+            project.status = "in_progress"
+            db.commit()
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.exception("translate page %s failed", page.page_no)
+            page = db.get(Page, page.id)
+            if page is not None and page.status == PageStatus.llm_draft:
+                page.status = PageStatus.expert_review if page.current_html else PageStatus.pending
+                db.commit()
+            job.progress = {
+                "done": done,
+                "total": total,
+                "current_page": page.page_no if page else None,
+                "last_error": str(exc)[:500],
+                "open_only": open_only,
+                "scope": "translate_all",
+            }
+            db.commit()
+        done += 1
+        job.progress = {
+            "done": done,
+            "total": total,
+            "current_page": None,
+            "open_only": open_only,
+            "scope": "translate_all",
+        }
+        db.commit()
+
+    project.status = "in_progress"
+    job.status = JobStatus.done
+    job.progress = {
+        "done": done,
+        "total": total,
+        "current_page": None,
+        "open_only": open_only,
+        "scope": "translate_all",
+    }
+    db.commit()

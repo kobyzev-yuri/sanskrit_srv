@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
+from app.services.html_chunks import chunk_page_html, merge_translated_chunks, unwrap_article
 from app.services.llm_draft import (
     _openai_message_text,
     _require_keys_for_plan,
@@ -31,6 +32,17 @@ def validate_translation_html(html: str, *, source_html: str | None = None) -> s
     return cleaned
 
 
+def _sum_usage(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    if not parts:
+        return {}
+    out: dict[str, Any] = dict(parts[-1])
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens"):
+        vals = [int(p.get(key) or 0) for p in parts]
+        if any(vals):
+            out[key] = sum(vals)
+    return out
+
+
 def translate_from_source(
     *,
     source_html: str,
@@ -43,15 +55,40 @@ def translate_from_source(
     # Previous draft may already have corrupted figure UUIDs / blob: — repair before sending.
     if current_html:
         current_html = preserve_figure_srcs(source_html, current_html)
-    prompt = build_translate_prompt(
-        source_html=source_html,
-        cfg=cfg,
-        current_html=current_html,
-        directive=directive,
-    )
-    raw, model, usage = run_text_prompt(prompt)
-    html = validate_translation_html(raw, source_html=source_html)
-    return html, model, usage
+
+    chunks = chunk_page_html(source_html)
+    if len(chunks) <= 1:
+        prompt = build_translate_prompt(
+            source_html=source_html,
+            cfg=cfg,
+            current_html=current_html,
+            directive=directive,
+        )
+        raw, model, usage = run_text_prompt(prompt)
+        html = validate_translation_html(raw, source_html=source_html)
+        return html, model, usage
+
+    # Large page: translate block packs separately, then merge (no previous draft — avoids mixing).
+    article_open, _, _ = unwrap_article(source_html)
+    parts_html: list[str] = []
+    usages: list[dict[str, Any]] = []
+    model = ""
+    total = len(chunks)
+    for i, chunk_src in enumerate(chunks, start=1):
+        prompt = build_translate_prompt(
+            source_html=chunk_src,
+            cfg=cfg,
+            current_html=None,
+            directive=directive if i == 1 else None,
+            chunk_index=i,
+            chunk_total=total,
+        )
+        raw, model, usage = run_text_prompt(prompt)
+        parts_html.append(extract_html_only(raw))
+        usages.append(usage)
+    merged = merge_translated_chunks(parts_html, article_open=article_open or None)
+    html = validate_translation_html(merged, source_html=source_html)
+    return html, model, _sum_usage(usages)
 
 
 def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:

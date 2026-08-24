@@ -110,6 +110,8 @@ def build_translate_prompt(
     cfg: dict[str, Any],
     current_html: str | None = None,
     directive: str | None = None,
+    chunk_index: int | None = None,
+    chunk_total: int | None = None,
 ) -> str:
     style = str(cfg.get("style") or STYLE_INTERLINEAR)
     policy = str(cfg.get("english_comments") or ENGLISH_REPLACE)
@@ -127,6 +129,17 @@ def build_translate_prompt(
         _style_prompt(style),
         _english_prompt(policy),
     ]
+    if (
+        chunk_index is not None
+        and chunk_total is not None
+        and chunk_total > 1
+        and chunk_index >= 1
+    ):
+        parts.append(
+            f"CHUNK {chunk_index} of {chunk_total} of ONE printed page. "
+            "Translate ONLY this SOURCE fragment. Do not invent content from other chunks. "
+            "Output one <article>…</article> covering just this part; parts will be concatenated."
+        )
     if notes:
         parts.append("EXPERT NOTES (binding):\n" + notes[:4000])
     if (directive or "").strip():
@@ -136,5 +149,6 @@ def build_translate_prompt(
             "PREVIOUS TRANSLATION DRAFT (revise it; do not start from scratch unless the directive says so):\n"
             + current_html.strip()[:20000]
         )
+    # Per-chunk source is already sized; keep a hard ceiling for single-shot pages.
     parts.append("SOURCE HTML:\n" + (source_html or "").strip()[:40000])
     return "\n\n".join(parts)

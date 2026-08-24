@@ -263,13 +263,26 @@ function sourceKindLabel(p) {
 function pipelineLabel(p) {
   const task = p.task || p.settings?.task || "digitize";
   const total = prTotal(p);
+  const pipe = p.pipeline;
   if (task === "translate") {
     const tr = p.translation || p.settings?.translation || {};
     const agreed = tr.agreed ? "шаблон согласован" : "шаблон не согласован";
+    if (pipe && (pipe.status === "running" || pipe.status === "queued")) {
+      const pr = pipe.progress || {};
+      const scope = pr.open_only ? "несогласованные" : "все";
+      return `перевод на русский · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
+    }
+    if (pipe?.status === "failed") {
+      const err = pipe.progress?.last_error || pipe.error || "";
+      return `перевод на русский · ошибка — ${String(err).slice(0, 80)}`;
+    }
+    if (pipe?.status === "done") {
+      const pr = pipe.progress || {};
+      return `перевод на русский · ${agreed} · готово ${pr.done ?? total}/${pr.total ?? total}`;
+    }
     return `перевод на русский · ${agreed} · ${total} стр.`;
   }
   const kind = sourceKindLabel(p);
-  const pipe = p.pipeline;
   if (p.manual_pages && !pipe) {
     return `${kind} · ${total} стр. · постранично (автоперевод всей книги не запускался)`;
   }
@@ -280,7 +293,8 @@ function pipelineLabel(p) {
   const pr = pipe.progress || {};
   if (pipe.status === "running" || pipe.status === "queued") {
     const mode = (pr.source_kind || p.source_kind) === "text" ? "текст всей книги" : "перевод всей книги";
-    return `${kind} · ${mode}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
+    const scope = pr.open_only ? "несогласованные" : mode;
+    return `${kind} · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
   }
   if (pipe.status === "done") return `${kind} · вся книга готова (${pr.total ?? total} стр.)`;
   if (pipe.status === "failed") {
@@ -415,16 +429,27 @@ function updatePipelineBar() {
   $("#pipeline-info").textContent = pipelineLabel(p);
   const btn = $("#btn-start-pipeline");
   const tr = isTranslate();
+  const busy = p.pipeline && ["queued", "running"].includes(p.pipeline.status);
+  const role = state.user?.role;
+
   if (tr) {
+    const agreed = !!translationCfg().agreed;
+    const can = ["admin", "expert", "scholar"].includes(role) && agreed;
+    btn.hidden = !can;
+    btn.disabled = !!busy || !agreed;
+    btn.textContent = busy ? "Идёт перевод…" : "Перевести все";
+    syncTaskUi();
+    return;
+  }
+
+  if (state.user?.role !== "admin") {
     btn.hidden = true;
     syncTaskUi();
     return;
   }
-  const busy = p.pipeline && ["queued", "running"].includes(p.pipeline.status);
-  btn.hidden = state.user?.role !== "admin";
+  btn.hidden = false;
   btn.disabled = !!busy;
   if (p.confirm_required || p.status === "awaiting_confirm") {
-    btn.hidden = state.user?.role !== "admin";
     btn.disabled = false;
     btn.textContent = "Подтвердить перевод всей книги";
     syncTaskUi();
@@ -487,13 +512,14 @@ async function openProject(id) {
   $("#page-jump").max = String(state.pages.length || 1);
   renderThumbList();
   showView("editor");
-  if (isTranslate()) {
-    if (pipelineTimer) {
-      clearInterval(pipelineTimer);
-      pipelineTimer = null;
-    }
-  } else {
+  const pipeBusy =
+    state.project.pipeline &&
+    ["queued", "running"].includes(state.project.pipeline.status);
+  if (pipeBusy || !isTranslate()) {
     startPipelinePoll();
+  } else if (pipelineTimer) {
+    clearInterval(pipelineTimer);
+    pipelineTimer = null;
   }
   if (state.pages.length) {
     const keep =
@@ -650,7 +676,6 @@ function updateEditMode() {
 let pipelineTimer = null;
 function startPipelinePoll() {
   if (pipelineTimer) clearInterval(pipelineTimer);
-  if (isTranslate()) return;
   pipelineTimer = setInterval(async () => {
     if (!state.project) return;
     try {
@@ -1611,9 +1636,37 @@ function setProofSelection(all) {
 
 async function startPipeline() {
   if (!state.project) return;
+  const openOnly = state.thumbFilter === "open";
+  const openCount = state.pages.filter((p) => p.status !== "expert_done").length;
+  const total = state.pages.length;
+  const n = openOnly ? openCount : total;
+  if (!n) {
+    toast(openOnly ? "Нет несогласованных страниц" : "Нет страниц", true);
+    return;
+  }
+  const tr = isTranslate();
+  let msg;
+  if (tr) {
+    msg = openOnly
+      ? `Перевести ${n} несогласованных страниц?`
+      : `Перевести все ${n} страниц, включая согласованные? Черновики будут перезаписаны.`;
+  } else if (state.project.confirm_required || state.project.status === "awaiting_confirm") {
+    msg = `Подтвердить перевод всей книги (${n} стр.)?`;
+  } else {
+    msg = openOnly
+      ? `Перезапустить конвейер для ${n} несогласованных страниц?`
+      : `Перезапустить конвейер для всех ${n} страниц, включая согласованные? Черновики будут перезаписаны.`;
+  }
+  if (!confirm(msg)) return;
+
+  const params = new URLSearchParams();
+  params.set("open_only", openOnly ? "true" : "false");
+  if (!openOnly) params.set("force", "true");
   try {
-    state.project = await api(`/projects/${state.project.id}/pipeline`, { method: "POST" });
-    toast("Запущен перевод всей книги");
+    state.project = await api(`/projects/${state.project.id}/pipeline?${params}`, {
+      method: "POST",
+    });
+    toast(tr ? "Запущен перевод страниц" : "Запущен перевод всей книги");
     updatePipelineBar();
     startPipelinePoll();
   } catch (e) {
