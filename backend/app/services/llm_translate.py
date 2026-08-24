@@ -29,8 +29,7 @@ from app.services.translation_style import build_translate_prompt
 
 
 def validate_translation_html(html: str, *, source_html: str | None = None) -> str:
-    if GARBAGE_ANYWHERE.search(html or ""):
-        raise ValueError("response looks like reasoning, not HTML")
+    # Extract first: ox-alpha often writes a short plan, then the real <article>.
     cleaned = extract_html_only(html)
     if GARBAGE_ANYWHERE.search(cleaned):
         raise ValueError("response looks like reasoning, not HTML")
