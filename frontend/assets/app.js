@@ -496,7 +496,7 @@ function formatTokens(n) {
   return String(n);
 }
 
-function usageLabel(u) {
+function usageLabel(u, llm) {
   if (!u || !u.totals) return "Расход LLM: —";
   const t = u.totals;
   const nets = (u.by_network || [])
@@ -504,9 +504,13 @@ function usageLabel(u) {
     .join(" · ");
   const usd =
     u.est_usd_total != null ? ` · ≈ $${Number(u.est_usd_total).toFixed(4)}` : "";
-  return `Расход LLM: ${formatTokens(t.total_tokens)} ток. / ${t.calls} вызов.` +
+  const live = llm?.message ? `Сейчас: ${llm.message}. ` : "";
+  return (
+    live +
+    `Расход проекта: ${formatTokens(t.total_tokens)} ток. / ${t.calls} вызов.` +
     (nets ? ` · ${nets}` : "") +
-    usd;
+    usd
+  );
 }
 
 async function loadUsage() {
@@ -519,8 +523,12 @@ async function loadUsage() {
     return;
   }
   try {
-    state.usage = await api(`/projects/${state.project.id}/usage`);
-    info.textContent = usageLabel(state.usage);
+    const [usage, llm] = await Promise.all([
+      api(`/projects/${state.project.id}/usage`),
+      api("/system/llm-status").catch(() => null),
+    ]);
+    state.usage = usage;
+    info.textContent = usageLabel(state.usage, llm);
     bar.hidden = false;
   } catch (_) {
     info.textContent = "Расход LLM: не удалось загрузить";
@@ -717,10 +725,10 @@ function startPipelinePoll() {
       const curDone = state.project.pipeline?.progress?.done;
       const curPage = state.project.pipeline?.progress?.current_page;
       const curStatus = state.project.pipeline?.status;
-      if (curDone !== prevDone) await loadUsage();
       const changed =
         curDone !== prevDone || curPage !== prevPage || curStatus !== prevStatus;
       if (changed || ["queued", "running"].includes(curStatus)) {
+        await loadUsage();
         const pageId = state.page?.id;
         const pageNo = state.page?.page_no;
         state.pages = await api(`/projects/${state.project.id}/pages`);
@@ -728,14 +736,8 @@ function startPipelinePoll() {
         renderThumbList();
         if (pageId) {
           const fresh = state.pages.find((p) => p.id === pageId);
-          // Reload open page when its status/scan catches up.
-          if (
-            changed ||
-            (fresh &&
-              (fresh.status !== state.page.status ||
-                fresh.has_scan !== Boolean(state.page.scan_url) ||
-                curPage === pageNo))
-          ) {
+          // Reload open page only when this page's status actually changed (avoid blink).
+          if (fresh && fresh.status !== state.page.status) {
             await loadPage(pageId);
           }
         }
