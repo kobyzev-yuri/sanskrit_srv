@@ -69,3 +69,5 @@ def test_openai_message_text_reasoning_fallback():
     assert _openai_message_text({"content": "<article></article>"}) == "<article></article>"
     assert _openai_message_text({"content": "", "reasoning": "<article class='x'>"}) == "<article class='x'>"
     assert "hi" in _openai_message_text({"content": [{"type": "text", "text": "hi"}]})
+    cot = "Let me analyze the source HTML.\nKeep Devanagari exactly as in source"
+    assert _openai_message_text({"content": "", "reasoning": cot}) == ""

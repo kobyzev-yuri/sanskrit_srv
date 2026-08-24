@@ -49,7 +49,9 @@ class Settings(BaseSettings):
     openrouter_model: str = "stealth/ox-alpha"
     openrouter_http_referer: str = "https://sanskrit-srv.local"
     openrouter_app_title: str = "sanskrit_srv"
-    openrouter_max_tokens: int = 32768
+    # Ceiling only; ox-alpha uses smaller per-task caps (see openrouter_ox.py).
+    # A 32k budget lets default effort=max dump chain-of-thought for 10+ minutes.
+    openrouter_max_tokens: int = 16384
 
     # Legacy: unused for upload (whole book is default). Kept for manual extract helpers.
     default_extract_max_pages: int = 0

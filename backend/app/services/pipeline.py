@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from pathlib import Path
 
@@ -14,8 +15,8 @@ from app.models import Job, JobStatus, Page, PageStatus, PageVersion, Project, V
 from app.services import storage
 from app.services.layout_assets import extract_embedded_figures, finalize_page_html
 from app.services.llm_draft import revise_from_scan
-from app.services.llm_status import LlmQuotaError, set_quota_alert
-from app.services.llm_translate import translate_from_source
+from app.services.llm_status import LlmQuotaError, LlmRateLimitError, set_quota_alert
+from app.services.llm_translate import looks_like_translation_html, translate_from_source
 from app.services.llm_usage import record_usage
 from app.services.pdf_extract import (
     classify_pdf,
@@ -213,6 +214,7 @@ def process_one_translate_page(
             and job.created_at
             and page.updated_at >= job.created_at
             and page.status in (PageStatus.expert_review, PageStatus.expert_done)
+            and looks_like_translation_html(page.current_html or "")
         ):
             return "skip_already_this_job"
 
@@ -520,6 +522,7 @@ def _run_translate_pipeline(
     total = len(pages)
     job.progress = {
         "done": 0,
+        "skipped": 0,
         "total": total,
         "current_page": None,
         "open_only": open_only,
@@ -528,12 +531,18 @@ def _run_translate_pipeline(
     db.commit()
 
     done = 0
-    for page in pages:
-        page = db.get(Page, page.id)
+    skipped = 0
+    idx = 0
+    rate_tries = 0
+    while idx < len(pages):
+        page = db.get(Page, pages[idx].id)
         if page is None:
+            idx += 1
+            rate_tries = 0
             continue
         job.progress = {
             "done": done,
+            "skipped": skipped,
             "total": total,
             "current_page": page.page_no,
             "open_only": open_only,
@@ -543,6 +552,9 @@ def _run_translate_pipeline(
         try:
             note = process_one_translate_page(db, page, job_id=job.id)
             log.info("translate page %s/%s: %s", page.page_no, total, note)
+            done += 1
+            idx += 1
+            rate_tries = 0
         except LlmQuotaError as exc:
             msg = str(exc)
             set_quota_alert(msg)
@@ -551,6 +563,7 @@ def _run_translate_pipeline(
             job.error = f"llm_quota at page {page.page_no}: {msg}"
             job.progress = {
                 "done": done,
+                "skipped": skipped,
                 "total": total,
                 "current_page": page.page_no,
                 "last_error": job.error,
@@ -560,14 +573,52 @@ def _run_translate_pipeline(
             project.status = "in_progress"
             db.commit()
             return
+        except LlmRateLimitError as exc:
+            rate_tries += 1
+            wait = min(30 * (2 ** (rate_tries - 1)), 180)
+            log.warning(
+                "translate page %s rate-limited try %s/%s, sleep %ss: %s",
+                page.page_no,
+                rate_tries,
+                4,
+                wait,
+                exc,
+            )
+            page = db.get(Page, page.id)
+            if page is not None and page.status == PageStatus.llm_draft:
+                page.status = PageStatus.pending
+            job.progress = {
+                "done": done,
+                "skipped": skipped,
+                "total": total,
+                "current_page": page.page_no if page else None,
+                "last_error": str(exc)[:500],
+                "rate_limited": True,
+                "open_only": open_only,
+                "scope": "translate_all",
+            }
+            db.commit()
+            if rate_tries >= 4:
+                log.error("translate page %s still rate-limited, leave pending", page.page_no if page else "?")
+                skipped += 1
+                idx += 1
+                rate_tries = 0
+            else:
+                time.sleep(wait)
+            continue
         except Exception as exc:  # noqa: BLE001
             log.exception("translate page %s failed", page.page_no)
             page = db.get(Page, page.id)
             if page is not None and page.status == PageStatus.llm_draft:
-                page.status = PageStatus.expert_review if page.current_html else PageStatus.pending
+                page.status = (
+                    PageStatus.expert_review
+                    if looks_like_translation_html(page.current_html or "")
+                    else PageStatus.pending
+                )
                 db.commit()
             job.progress = {
                 "done": done,
+                "skipped": skipped,
                 "total": total,
                 "current_page": page.page_no if page else None,
                 "last_error": str(exc)[:500],
@@ -575,9 +626,12 @@ def _run_translate_pipeline(
                 "scope": "translate_all",
             }
             db.commit()
-        done += 1
+            skipped += 1
+            idx += 1
+            rate_tries = 0
         job.progress = {
             "done": done,
+            "skipped": skipped,
             "total": total,
             "current_page": None,
             "open_only": open_only,
@@ -589,6 +643,7 @@ def _run_translate_pipeline(
     job.status = JobStatus.done
     job.progress = {
         "done": done,
+        "skipped": skipped,
         "total": total,
         "current_page": None,
         "open_only": open_only,

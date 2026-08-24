@@ -25,6 +25,12 @@ class LlmQuotaError(RuntimeError):
     code = "llm_quota"
 
 
+class LlmRateLimitError(RuntimeError):
+    """OpenRouter / upstream 429 after retries (ox-alpha shared free pool)."""
+
+    code = "llm_rate_limit"
+
+
 def is_quota_response(status_code: int, body: str) -> bool:
     if status_code == 402:
         return True

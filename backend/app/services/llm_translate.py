@@ -1,6 +1,7 @@
 """Translate verified Sanskrit HTML → Russian HTML (text LLM, no scan)."""
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 import httpx
@@ -8,28 +9,54 @@ import httpx
 from app.config import get_settings
 from app.services.html_chunks import chunk_page_html, merge_translated_chunks, unwrap_article
 from app.services.llm_draft import (
+    GARBAGE_ANYWHERE,
     _openai_message_text,
     _require_keys_for_plan,
     _uniq,
     extract_html_only,
 )
 from app.services.llm_route import model_plan_primary_only
-from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
+from app.services.llm_status import LlmQuotaError, LlmRateLimitError, is_quota_response, set_quota_alert
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 from app.services.layout_assets import preserve_figure_srcs
+from app.services.openrouter_ox import (
+    TASK_TRANSLATE,
+    apply_ox_chat_options,
+    openrouter_headers,
+    post_openrouter_chat,
+)
 from app.services.translation_style import build_translate_prompt
 
 
 def validate_translation_html(html: str, *, source_html: str | None = None) -> str:
+    if GARBAGE_ANYWHERE.search(html or ""):
+        raise ValueError("response looks like reasoning, not HTML")
     cleaned = extract_html_only(html)
+    if GARBAGE_ANYWHERE.search(cleaned):
+        raise ValueError("response looks like reasoning, not HTML")
     if cleaned.count("<") < 2:
         raise ValueError("response has too few HTML tags")
     low = cleaned.lower()
     if "<article" not in low and cleaned.count("<p") < 2:
         raise ValueError("response is not a page HTML fragment")
+    visible = re.sub(r"<[^>]+>", " ", cleaned)
+    visible = re.sub(r"\s+", " ", visible).strip()
+    if len(visible) < 12:
+        raise ValueError("empty translation body")
+    cyr = sum(1 for c in cleaned if "\u0400" <= c <= "\u04ff")
+    if cyr < 8 and 'class="ru"' not in low and "class='ru'" not in low:
+        raise ValueError("response lacks Russian translation")
     if source_html:
         cleaned = preserve_figure_srcs(source_html, cleaned)
     return cleaned
+
+
+def looks_like_translation_html(html: str) -> bool:
+    try:
+        validate_translation_html(html)
+        return True
+    except ValueError:
+        return False
 
 
 def _sum_usage(parts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -109,7 +136,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
             )
             usage = {**usage, "network": "openrouter", "model": model}
             return text, f"openrouter:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"openrouter:{model}: {exc}")
@@ -121,7 +148,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
             )
             usage = {**usage, "network": "anthropic", "model": model}
             return text, f"anthropic:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"anthropic:{model}: {exc}")
@@ -133,7 +160,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
             )
             usage = {**usage, "network": "gemini", "model": model}
             return text, f"gemini:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"gemini:{model}: {exc}")
@@ -145,7 +172,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
             )
             usage = {**usage, "network": "openai", "model": model}
             return text, f"openai:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"openai:{model}: {exc}")
@@ -154,39 +181,15 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
 
 
 def _call_openrouter_text(api_key: str, base_url: str, model: str, user_text: str):
-    settings = get_settings()
     url = f"{base_url.rstrip('/')}/chat/completions"
-    limit = max(1024, int(settings.openrouter_max_tokens or 32768))
     payload: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
     }
-    mid = (model or "").lower()
-    if "ox-alpha" in mid or mid.startswith("stealth/"):
-        payload["max_completion_tokens"] = limit
-        payload["reasoning"] = {"enabled": True}
-    else:
-        payload["temperature"] = 0
-        payload["max_tokens"] = limit
-    resp = httpx.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": (settings.openrouter_http_referer or "https://sanskrit-srv.local"),
-            "X-Title": (settings.openrouter_app_title or "sanskrit_srv"),
-        },
-        json=payload,
-        timeout=300,
+    apply_ox_chat_options(payload, model, task=TASK_TRANSLATE)
+    data = post_openrouter_chat(
+        url, headers=openrouter_headers(api_key), payload=payload, timeout=180
     )
-    if resp.status_code != 200:
-        body = resp.text[:400]
-        if is_quota_response(resp.status_code, body):
-            msg = "Лимит OpenRouter / оплата (HTTP 402)."
-            set_quota_alert(msg)
-            raise LlmQuotaError(msg)
-        raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
-    data = resp.json()
     choices = data.get("choices") or []
     if not choices:
         raise RuntimeError("empty choices")

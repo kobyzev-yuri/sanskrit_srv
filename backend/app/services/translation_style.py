@@ -119,6 +119,7 @@ def build_translate_prompt(
     parts = [
         "You produce a Russian translation HTML fragment of a Sanskrit page already restored as HTML.",
         "The SOURCE HTML is diplomatic text (Devanagari). Do NOT 'correct' Vedic/old spellings.",
+        "Start the reply with <article. Output ONLY the HTML fragment — no analysis, plans, or English commentary.",
         "Output ONLY an HTML fragment: <article class=\"page-style\" lang=\"ru\"> … </article>. No markdown, no preface.",
         "Keep Devanagari exactly as in the source. Russian is literary, not a word-for-word crib unless the template asks for glosses.",
         "Layout only via classes (sa, shloka, ru, tr, note, indent, centered, running-head, page-num). No inline style=, flex, float.",

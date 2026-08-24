@@ -11,7 +11,13 @@ import httpx
 from PIL import Image
 
 from app.config import get_settings
-from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
+from app.services.llm_status import LlmQuotaError, LlmRateLimitError, is_quota_response, set_quota_alert
+from app.services.openrouter_ox import (
+    TASK_DRAFT,
+    apply_ox_chat_options,
+    openrouter_headers,
+    post_openrouter_chat,
+)
 from app.services.llm_route import model_plan, model_plan_primary_only
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 
@@ -116,7 +122,9 @@ GARBAGE_ANYWHERE = re.compile(
     r"Let's look at the image|Wait, the|No markdown|```html|"
     r"\bthinking\b|The user wants me to|I need to follow these steps|"
     r"Judge the scan|Address specific constraints|silently judge|"
-    r"Conflict with the horizontal header|strict interpretation",
+    r"Conflict with the horizontal header|strict interpretation|"
+    r"Let me analyze the source|Keep Devanagari exactly as in source|"
+    r"TEMPLATE interlinear|SOURCE HTML:",
     re.I,
 )
 AVAGRAHA_RUN = re.compile(r"ऽ{4,}")
@@ -298,7 +306,7 @@ def revise_from_scan(
             )
             usage = {**usage, "network": "openrouter", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"openrouter:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"openrouter:{model}: {exc}")
@@ -314,7 +322,7 @@ def revise_from_scan(
             )
             usage = {**usage, "network": "anthropic", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"anthropic:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"anthropic:{model}: {exc}")
@@ -326,7 +334,7 @@ def revise_from_scan(
             )
             usage = {**usage, "network": "gemini", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"gemini:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"gemini:{model}: {exc}")
@@ -338,7 +346,7 @@ def revise_from_scan(
             )
             usage = {**usage, "network": "openai", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"openai:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"openai:{model}: {exc}")
@@ -384,7 +392,7 @@ def run_vision_prompt(
             )
             usage = {**usage, "network": "openrouter", "model": model}
             return text, f"openrouter:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"openrouter:{model}: {exc}")
@@ -400,7 +408,7 @@ def run_vision_prompt(
             )
             usage = {**usage, "network": "anthropic", "model": model}
             return text, f"anthropic:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"anthropic:{model}: {exc}")
@@ -418,7 +426,7 @@ def run_vision_prompt(
             )
             usage = {**usage, "network": "gemini", "model": model}
             return text, f"gemini:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"gemini:{model}: {exc}")
@@ -430,7 +438,7 @@ def run_vision_prompt(
             )
             usage = {**usage, "network": "openai", "model": model}
             return text, f"openai:{model}", usage
-        except LlmQuotaError:
+        except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception as exc:  # noqa: BLE001
             errors.append(f"openai:{model}: {exc}")
@@ -448,6 +456,7 @@ def _require_keys_for_plan(settings: Any, plan: dict[str, list[str]]) -> None:
 
 
 def _openai_message_text(message: dict[str, Any] | None) -> str:
+    """Prefer `content`. If empty, take HTML from `reasoning` — never raw chain-of-thought."""
     msg = message or {}
     content = msg.get("content")
     if isinstance(content, str) and content.strip():
@@ -463,16 +472,18 @@ def _openai_message_text(message: dict[str, Any] | None) -> str:
             return joined
     reasoning = msg.get("reasoning")
     if isinstance(reasoning, str) and reasoning.strip():
-        return reasoning
+        extracted = extract_html_only(reasoning)
+        if looks_like_page_html(extracted):
+            return extracted
+        if "<article" in extracted.lower() and not GARBAGE_ANYWHERE.search(extracted):
+            return extracted
     return ""
 
 
 def _call_openrouter(
     api_key: str, base_url: str, model: str, user_text: str, image_b64: str
 ) -> tuple[str, dict[str, Any]]:
-    settings = get_settings()
     url = f"{base_url.rstrip('/')}/chat/completions"
-    limit = max(1024, int(settings.openrouter_max_tokens or 32768))
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -488,32 +499,10 @@ def _call_openrouter(
             }
         ],
     }
-    mid = (model or "").lower()
-    if "ox-alpha" in mid or mid.startswith("stealth/"):
-        payload["max_completion_tokens"] = limit
-        payload["reasoning"] = {"enabled": True}
-    else:
-        payload["temperature"] = 0
-        payload["max_tokens"] = limit
-    resp = httpx.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": (settings.openrouter_http_referer or "https://sanskrit-srv.local"),
-            "X-Title": (settings.openrouter_app_title or "sanskrit_srv"),
-        },
-        json=payload,
-        timeout=300,
+    apply_ox_chat_options(payload, model, task=TASK_DRAFT)
+    data = post_openrouter_chat(
+        url, headers=openrouter_headers(api_key), payload=payload, timeout=300
     )
-    if resp.status_code != 200:
-        body = resp.text[:400]
-        if is_quota_response(resp.status_code, body):
-            msg = "Лимит OpenRouter / оплата (HTTP 402)."
-            set_quota_alert(msg)
-            raise LlmQuotaError(msg)
-        raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
-    data = resp.json()
     choices = data.get("choices") or []
     if not choices:
         raise RuntimeError("empty choices")
