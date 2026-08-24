@@ -244,6 +244,24 @@ class ProjectUsageOut(BaseModel):
     route_model: str | None = None
 
 
+class AdminUsageProjectOut(BaseModel):
+    project_id: str
+    slug: str
+    title: str
+    task: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    calls: int = 0
+    by_network: list[LlmUsageNetworkOut] = []
+
+
+class AdminUsageOut(BaseModel):
+    projects: list[AdminUsageProjectOut]
+    totals: LlmUsageTotalsOut
+    by_network: list[LlmUsageNetworkOut] = []
+
+
 class LlmCatalogOut(BaseModel):
     models: list[dict[str, str]]
     note: str

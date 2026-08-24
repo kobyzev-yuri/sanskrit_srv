@@ -1813,6 +1813,70 @@ async function loadAdmin() {
     .join("");
   $("#llm-note").textContent = cat.note;
   await loadLlmRoute();
+  await loadAdminUsage();
+}
+
+function taskLabel(task) {
+  return task === "translate" ? "перевод" : "оцифровка";
+}
+
+function networkLabel(net) {
+  const id = String(net || "");
+  const names = {
+    openrouter: "OpenRouter",
+    gemini: "Gemini",
+    anthropic: "Anthropic",
+    openai: "OpenAI",
+  };
+  return names[id] || id || "—";
+}
+
+async function loadAdminUsage() {
+  const body = $("#usage-table");
+  const foot = $("#usage-tfoot");
+  if (!body) return;
+  try {
+    const data = await api("/admin/usage");
+    const rows = [];
+    for (const p of data.projects || []) {
+      const nets = (p.by_network || []).filter((n) => n.calls);
+      if (!nets.length) continue;
+      for (const n of nets) {
+        rows.push(`<tr>
+          <td><strong>${escapeHtml(p.slug)}</strong><div class="muted">${escapeHtml(p.title || "")}</div></td>
+          <td>${taskLabel(p.task)}</td>
+          <td>${escapeHtml(networkLabel(n.network))}</td>
+          <td class="num">${formatTokens(n.prompt_tokens)}</td>
+          <td class="num">${formatTokens(n.completion_tokens)}</td>
+          <td class="num">${formatTokens(n.total_tokens)}</td>
+          <td class="num">${n.calls || 0}</td>
+        </tr>`);
+      }
+    }
+    body.innerHTML = rows.join("") || `<tr><td colspan="7" class="muted">Пока нет вызовов LLM</td></tr>`;
+    const footRows = [];
+    for (const n of data.by_network || []) {
+      footRows.push(`<tr>
+        <td colspan="2">Итого</td>
+        <td>${escapeHtml(networkLabel(n.network))}</td>
+        <td class="num">${formatTokens(n.prompt_tokens)}</td>
+        <td class="num">${formatTokens(n.completion_tokens)}</td>
+        <td class="num">${formatTokens(n.total_tokens)}</td>
+        <td class="num">${n.calls || 0}</td>
+      </tr>`);
+    }
+    const t = data.totals || {};
+    footRows.push(`<tr>
+      <td colspan="3">Все сети</td>
+      <td class="num">${formatTokens(t.prompt_tokens)}</td>
+      <td class="num">${formatTokens(t.completion_tokens)}</td>
+      <td class="num">${formatTokens(t.total_tokens)}</td>
+      <td class="num">${t.calls || 0}</td>
+    </tr>`);
+    if (foot) foot.innerHTML = footRows.join("");
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(e.message || "не удалось загрузить")}</td></tr>`;
+  }
 }
 
 async function loadLlmRoute() {

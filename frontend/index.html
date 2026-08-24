@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260823wy3" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260824usage1" />
 </head>
 <body>
   <div class="app-shell">
@@ -241,6 +241,27 @@
             </form>
           </div>
           <div class="admin-section">
+            <h2>Расход токенов</h2>
+            <p class="muted">Строка = проект × сеть. Входящие — промпт в модель, исходящие — ответ. «Всего» у Gemini может быть больше суммы из‑за thinking.</p>
+            <div class="table-wrap">
+              <table class="usage-table">
+                <thead>
+                  <tr>
+                    <th>Проект</th>
+                    <th>Задача</th>
+                    <th>Сеть</th>
+                    <th class="num">Входящие</th>
+                    <th class="num">Исходящие</th>
+                    <th class="num">Всего</th>
+                    <th class="num">Вызовы</th>
+                  </tr>
+                </thead>
+                <tbody id="usage-table"></tbody>
+                <tfoot id="usage-tfoot"></tfoot>
+              </table>
+            </div>
+          </div>
+          <div class="admin-section">
             <h2>Маршрут LLM</h2>
             <p class="muted">Это и есть выбранная сеть для перевода, заданий и проверки — не путать со списком вариантов. Сейчас активна та радиокнопка, что отмечена ниже (файл на сервере, его читает воркер).</p>
             <div id="llm-route-box" class="llm-route-box"></div>
@@ -287,6 +308,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260824route2"></script>
+  <script src="/assets/app.js?v=20260824usage1"></script>
 </body>
 </html>

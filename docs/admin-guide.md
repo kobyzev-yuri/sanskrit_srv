@@ -165,13 +165,14 @@ python -m app.cli user-reset-password --email u@x --password '...'
 Роль **admin** → пункт **Бэкофис**:
 
 1. Пользователи (создание / роли).
-2. **Маршрут LLM** — переключатель в бэкофисе (список строится с сервера):
+2. **Расход токенов** — по проектам и сетям (OpenRouter / Gemini / Anthropic / OpenAI): входящие (промпт) / исходящие (ответ) / всего / вызовы.
+3. **Маршрут LLM** — переключатель в бэкофисе (список строится с сервера):
    - **Ox Alpha (OpenRouter, бесплатно)** — по умолчанию; скан уходит картинкой, ProxyAPI не вызывается;
    - **Gemini (ProxyAPI)** — Flash, запасной OpenAI;
    - **Claude Opus (ProxyAPI)** — Opus, запасные Gemini и OpenAI.
    Выбор пишется в `data/llm_route.json` и действует сразу (без правки `.env` / без рестарта) на перевод, пересмотр и смысловую проверку.
    Если на сервере уже сохранён старый `gemini`/`opus`, переключите радио на Ox Alpha один раз.
-3. Каталог моделей (OpenRouter + ProxyAPI, справочник id).
+4. Каталог моделей (OpenRouter + ProxyAPI, справочник id).
 
 Конкретные id задаются в `.env`: `OPENROUTER_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`.
 

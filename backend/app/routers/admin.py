@@ -11,6 +11,7 @@ from app.db import get_db
 from app.deps import require_roles
 from app.models import Role, User
 from app.schemas import (
+    AdminUsageOut,
     LlmCatalogOut,
     LlmRouteIn,
     LlmRouteOut,
@@ -19,6 +20,7 @@ from app.schemas import (
     UserUpdateIn,
 )
 from app.services.llm_route import ROUTES, describe_route, set_route
+from app.services.llm_usage import all_projects_usage_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 AdminUser = Depends(require_roles(Role.admin))
@@ -118,3 +120,9 @@ def put_llm_route(body: LlmRouteIn, user: User = AdminUser):
             detail="route must be 'openrouter', 'gemini' or 'opus'",
         )
     return set_route(route, updated_by=user.email)  # type: ignore[arg-type]
+
+
+@router.get("/usage", response_model=AdminUsageOut)
+def admin_usage(_: User = AdminUser, db: Session = Depends(get_db)):
+    """Token spend by project: prompt (in) / completion (out)."""
+    return AdminUsageOut.model_validate(all_projects_usage_summary(db))

@@ -203,8 +203,87 @@ def project_usage_summary(db: Session, project_id: uuid.UUID) -> dict[str, Any]:
         "route": desc.get("route"),
         "route_label": desc.get("label"),
         "route_model": (
-            f"{(desc.get('primary') or {}).get('provider')}:{(desc.get('primary') or {}).get('model')}"
-            if desc.get("primary")
+            f"{primary.get('provider')}:{primary.get('model')}"
+            if primary
             else None
         ),
+    }
+
+
+def all_projects_usage_summary(db: Session) -> dict[str, Any]:
+    """Admin billing table: prompt (in) / completion (out) per project and network."""
+    from app.models import Project
+    from app.services.translation_style import project_task
+
+    projects = list(db.scalars(select(Project).order_by(Project.created_at)).all())
+    events = list(
+        db.scalars(select(LlmUsageEvent).where(LlmUsageEvent.ok.is_(True))).all()
+    )
+    by_proj: dict[uuid.UUID, dict[str, Any]] = {}
+    for p in projects:
+        by_proj[p.id] = {
+            "project_id": str(p.id),
+            "slug": p.slug,
+            "title": p.title,
+            "task": project_task(p),
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "calls": 0,
+            "by_network": {},
+        }
+    for e in events:
+        row = by_proj.get(e.project_id)
+        if row is None:
+            continue
+        row["prompt_tokens"] += int(e.prompt_tokens or 0)
+        row["completion_tokens"] += int(e.completion_tokens or 0)
+        row["total_tokens"] += int(e.total_tokens or 0)
+        row["calls"] += 1
+        net = row["by_network"].setdefault(
+            e.network or "?",
+            {
+                "network": e.network or "?",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "calls": 0,
+            },
+        )
+        net["prompt_tokens"] += int(e.prompt_tokens or 0)
+        net["completion_tokens"] += int(e.completion_tokens or 0)
+        net["total_tokens"] += int(e.total_tokens or 0)
+        net["calls"] += 1
+
+    projects_out = []
+    tot = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
+    by_net_tot: dict[str, dict[str, Any]] = {}
+    for p in projects:
+        row = by_proj[p.id]
+        nets = [row["by_network"][k] for k in sorted(row["by_network"])]
+        projects_out.append({**{k: row[k] for k in row if k != "by_network"}, "by_network": nets})
+        tot["prompt_tokens"] += row["prompt_tokens"]
+        tot["completion_tokens"] += row["completion_tokens"]
+        tot["total_tokens"] += row["total_tokens"]
+        tot["calls"] += row["calls"]
+        for n in nets:
+            acc = by_net_tot.setdefault(
+                n["network"],
+                {
+                    "network": n["network"],
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "calls": 0,
+                },
+            )
+            acc["prompt_tokens"] += n["prompt_tokens"]
+            acc["completion_tokens"] += n["completion_tokens"]
+            acc["total_tokens"] += n["total_tokens"]
+            acc["calls"] += n["calls"]
+
+    return {
+        "projects": projects_out,
+        "totals": tot,
+        "by_network": [by_net_tot[k] for k in sorted(by_net_tot)],
     }
