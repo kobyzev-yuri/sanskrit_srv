@@ -120,6 +120,10 @@ def build_translate_prompt(
         "Output ONLY an HTML fragment: <article class=\"page-style\" lang=\"ru\"> … </article>. No markdown, no preface.",
         "Keep Devanagari exactly as in the source. Russian is literary, not a word-for-word crib unless the template asks for glosses.",
         "Layout only via classes (sa, shloka, ru, tr, note, indent, centered, running-head, page-num). No inline style=, flex, float.",
+        "FIGURES / IMAGES: copy every <img …> and <figure …> from the SOURCE HTML with the src= URL "
+        "CHARACTER-FOR-CHARACTER identical (full /api/v1/pages/<uuid>/figures/crop-NN.png or emb-NN.png). "
+        "Do not invent, shorten, or 'fix' UUIDs. Do not translate alt into a reason to change src. "
+        "Do not use blob: URLs.",
         _style_prompt(style),
         _english_prompt(policy),
     ]

@@ -147,6 +147,72 @@ def rewrite_embedded_fig_srcs(html: str, page_id: uuid.UUID) -> str:
     return FIG_IMG_RE.sub(repl, html)
 
 
+# /api/v1/pages/<uuid>/figures/crop-01.png  (or emb-01.png)
+# UUID group is loose: translate LLM often drops one hex digit.
+_FIG_URL_RE = re.compile(
+    r"""(/api/v1/pages/)([0-9a-fA-F-]{20,48})(/figures/)((?:emb|crop)-\d{2}\.png)""",
+    re.I,
+)
+_FIG_SRC_ATTR_RE = re.compile(
+    r"""src=["'](/api/v1/pages/[0-9a-fA-F-]{20,48}/figures/(?:emb|crop)-\d{2}\.png)["']""",
+    re.I,
+)
+_BLOB_SRC_RE = re.compile(r"""src=["']blob:[^"']+["']""", re.I)
+
+
+def _figure_urls_from_html(html: str) -> dict[str, str]:
+    """Map figure filename → full /api/.../figures/name URL (first wins)."""
+    out: dict[str, str] = {}
+    for m in _FIG_URL_RE.finditer(html or ""):
+        name = m.group(4).lower()
+        if name not in out:
+            out[name] = f"/api/v1/pages/{m.group(2)}/figures/{m.group(4)}"
+    return out
+
+
+def preserve_figure_srcs(source_html: str, html: str) -> str:
+    """Restore correct figure URLs from Sanskrit source into translated/draft HTML.
+
+    The translate LLM often corrupts page UUIDs in <img src> (one missing hex → 404)
+    while the left-pane source_html still has working links. Also strips accidental blob: URLs.
+    """
+    src_map = _figure_urls_from_html(source_html or "")
+    if not src_map and not _BLOB_SRC_RE.search(html or ""):
+        return html or ""
+
+    out = html or ""
+
+    if src_map:
+
+        def fix_src_attr(m: re.Match) -> str:
+            url = m.group(1)
+            name_m = re.search(r"/figures/((?:emb|crop)-\d{2}\.png)", url, re.I)
+            if not name_m:
+                return m.group(0)
+            good = src_map.get(name_m.group(1).lower())
+            if not good:
+                return m.group(0)
+            return f'src="{good}"'
+
+        out = _FIG_SRC_ATTR_RE.sub(fix_src_attr, out)
+
+    if src_map and _BLOB_SRC_RE.search(out):
+        names = list(src_map.keys())
+        i = 0
+
+        def repl_blob(m: re.Match) -> str:
+            nonlocal i
+            if i < len(names):
+                url = src_map[names[i]]
+                i += 1
+                return f'src="{url}"'
+            return 'src=""'
+
+        out = _BLOB_SRC_RE.sub(repl_blob, out)
+
+    return out
+
+
 def finalize_page_html(
     html: str,
     *,

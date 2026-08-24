@@ -15,16 +15,19 @@ from app.services.llm_draft import (
 from app.services.llm_route import model_plan
 from app.services.llm_status import LlmQuotaError, is_quota_response, set_quota_alert
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
+from app.services.layout_assets import preserve_figure_srcs
 from app.services.translation_style import build_translate_prompt
 
 
-def validate_translation_html(html: str) -> str:
+def validate_translation_html(html: str, *, source_html: str | None = None) -> str:
     cleaned = extract_html_only(html)
     if cleaned.count("<") < 2:
         raise ValueError("response has too few HTML tags")
     low = cleaned.lower()
     if "<article" not in low and cleaned.count("<p") < 2:
         raise ValueError("response is not a page HTML fragment")
+    if source_html:
+        cleaned = preserve_figure_srcs(source_html, cleaned)
     return cleaned
 
 
@@ -37,6 +40,9 @@ def translate_from_source(
 ) -> tuple[str, str, dict[str, Any]]:
     if not (source_html or "").strip():
         raise ValueError("empty Sanskrit source")
+    # Previous draft may already have corrupted figure UUIDs / blob: — repair before sending.
+    if current_html:
+        current_html = preserve_figure_srcs(source_html, current_html)
     prompt = build_translate_prompt(
         source_html=source_html,
         cfg=cfg,
@@ -44,7 +50,7 @@ def translate_from_source(
         directive=directive,
     )
     raw, model, usage = run_text_prompt(prompt)
-    html = validate_translation_html(raw)
+    html = validate_translation_html(raw, source_html=source_html)
     return html, model, usage
 
 

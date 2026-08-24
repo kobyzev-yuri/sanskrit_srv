@@ -725,6 +725,9 @@ async function hydratePreviewFigures(box) {
           return;
         }
         const blob = await res.blob();
+        if (!img.getAttribute("data-orig-src")) {
+          img.setAttribute("data-orig-src", url);
+        }
         img.src = URL.createObjectURL(blob);
       } catch (_) {
         /* leave broken img / alt */
@@ -760,6 +763,17 @@ function serializeWysiwyg(box) {
     if (!parent) return;
     while (el.firstChild) parent.insertBefore(el.firstChild, el);
     parent.removeChild(el);
+  });
+  // Never persist blob: URLs from hydratePreviewFigures — restore API paths.
+  clone.querySelectorAll("img").forEach((img) => {
+    const orig = img.getAttribute("data-orig-src");
+    const src = img.getAttribute("src") || "";
+    if (orig) {
+      img.setAttribute("src", orig);
+      img.removeAttribute("data-orig-src");
+    } else if (src.startsWith("blob:")) {
+      img.removeAttribute("src");
+    }
   });
   return clone.innerHTML;
 }

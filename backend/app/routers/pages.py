@@ -22,7 +22,12 @@ from app.schemas import (
     ProofreadSuggestion,
 )
 from app.services.directive_fix import apply_directive_replacements
-from app.services.layout_assets import extract_embedded_figures, finalize_page_html, figure_file
+from app.services.layout_assets import (
+    extract_embedded_figures,
+    finalize_page_html,
+    figure_file,
+    preserve_figure_srcs,
+)
 from app.services.llm_draft import revise_from_scan
 from app.services.llm_proofread import apply_proofread_suggestions, proofread_from_scan
 from app.services.llm_status import LlmQuotaError
@@ -77,6 +82,18 @@ def get_page(page_id: str, user: User = Depends(get_current_user), db: Session =
     if project is not None and project_task(project) != "translate":
         ensure_page_scan(db, page)
         db.refresh(page)
+    # Translate drafts: LLM often corrupts figure UUIDs — restore from source_html.
+    if (
+        project is not None
+        and project_task(project) == "translate"
+        and (page.source_html or "").strip()
+        and (page.current_html or "").strip()
+    ):
+        fixed = preserve_figure_srcs(page.source_html or "", page.current_html or "")
+        if fixed != (page.current_html or ""):
+            page.current_html = fixed
+            db.commit()
+            db.refresh(page)
     scan_url = f"/api/v1/pages/{page.id}/scan" if page.scan_path and Path(page.scan_path).exists() else None
     return PageDetailOut(
         id=page.id,
@@ -134,6 +151,13 @@ def save_html(
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Readers cannot edit")
 
     page.current_html = body.html
+    project = db.get(Project, page.project_id)
+    if (
+        project is not None
+        and project_task(project) == "translate"
+        and (page.source_html or "").strip()
+    ):
+        page.current_html = preserve_figure_srcs(page.source_html or "", page.current_html or "")
     if page.status in (PageStatus.pending, PageStatus.llm_draft, PageStatus.ocr):
         page.status = PageStatus.expert_review
 
@@ -145,7 +169,7 @@ def save_html(
         PageVersion(
             page_id=page.id,
             version=next_ver,
-            html=body.html,
+            html=page.current_html or body.html,
             source=source,
             created_by=user.id,
             note=body.note,
