@@ -32,6 +32,7 @@ from app.services.export_docx import build_project_docx
 from app.services.export_pdf import build_project_pdf
 from app.services.export_xlsx import build_project_xlsx
 from app.services.html_pages import split_html_pages
+from app.services.layout_assets import preserve_figure_srcs
 from app.services.llm_usage import project_usage_summary
 from app.services.pdf_extract import classify_pdf, extract_page_text_html, extract_pages, pdf_page_count
 from app.services.pipeline import enqueue_project_pipeline, ensure_page_stubs
@@ -655,7 +656,11 @@ def export_pdf(
         db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
     )
     payload = [
-        (p.page_no, p.current_html or "", p.scan_path)
+        (
+            p.page_no,
+            preserve_figure_srcs(p.source_html or "", p.current_html or ""),
+            p.scan_path,
+        )
         for p in pages
         if (p.current_html and p.current_html.strip()) or (mode_n == "interleave" and p.scan_path)
     ]
@@ -703,7 +708,11 @@ def export_docx(
             db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
         )
         payload = [
-            (p.page_no, p.current_html or "", p.scan_path)
+            (
+                p.page_no,
+                preserve_figure_srcs(p.source_html or "", p.current_html or ""),
+                p.scan_path,
+            )
             for p in pages
             if (p.current_html and p.current_html.strip()) or (mode_n == "interleave" and p.scan_path)
         ]

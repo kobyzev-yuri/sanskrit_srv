@@ -76,14 +76,47 @@ def test_bind_images_uses_source_project_figs(monkeypatch, tmp_path: Path):
         f'<img src="/api/v1/pages/{uuid.uuid4()}/figures/crop-01.png" alt="illustration" />'
         f"</figure>"
     )
-    dest = tmp_path / "bind"
-    chrome, story, used = _bind_images(
-        html, tr_pid, 3, source_project_id=src_pid, dest=dest
+    bound = _bind_images(html, tr_pid, 3, source_project_id=src_pid)
+    assert "data:image/png;base64," in bound
+    assert "/api/v1/pages/" not in bound
+    assert "[image]" not in bound
+
+
+def test_story_pdf_embeds_figure(monkeypatch, tmp_path: Path):
+    _storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
+    monkeypatch.setenv("SANSKRIT_PDF_COPYFIX", "0")
+    import fitz
+    from PIL import Image
+
+    from app.services.export_pdf import build_project_pdf
+    from app.services.layout_assets import figures_dir
+
+    src_pid = uuid.uuid4()
+    tr_pid = uuid.uuid4()
+    png = figures_dir(src_pid, 1) / "crop-01.png"
+    Image.new("RGB", (48, 48), "red").save(png)
+    html = (
+        "<article class='page-style'>"
+        f'<figure class="page-figure">'
+        f'<img src="/api/v1/pages/{uuid.uuid4()}/figures/crop-01.png" alt="illustration" />'
+        f"</figure>"
+        "<p class='ru'>подпись</p>"
+        "</article>"
     )
-    assert used is not None
-    assert "file://" in chrome
-    assert "[image]" not in chrome
-    names = [p.name for p in dest.glob("*.png")]
-    assert names
-    assert any(n in story for n in names)
+    path = build_project_pdf(
+        tr_pid,
+        "book-ru",
+        "Mantra Pushpam",
+        [(1, html, None)],
+        source_project_id=src_pid,
+    )
+    doc = fitz.open(path.as_posix())
+    try:
+        images = [img for i in range(doc.page_count) for img in doc[i].get_images()]
+        blob = "".join(page.get_text() for page in doc)
+    finally:
+        doc.close()
+    assert images, "figure PNG must be embedded, not left as [image]"
+    assert "[image]" not in blob.lower()
 

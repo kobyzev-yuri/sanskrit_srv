@@ -10,6 +10,7 @@ Falls back to PyMuPDF Story if Chromium is missing.
 """
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import re
@@ -168,29 +169,17 @@ def build_project_pdf(
             body_n += 1
 
         if frag:
-            img_dir = _work_dir() / f"img-{uuid.uuid4().hex}"
-            html_chrome, html_story, img_dir_n = _bind_images(
+            frag = _bind_images(
                 frag,
                 project_id,
                 page_no,
                 source_project_id=source_project_id,
-                dest=img_dir,
             )
-            text_chrome = f"<section class='page' data-page='{page_no}'>{html_chrome}</section>"
-            text_story = f"<section class='page' data-page='{page_no}'>{html_story}</section>"
-            try:
-                text_doc = _html_to_doc(
-                    text_chrome,
-                    mediabox,
-                    story_html=text_story,
-                    image_dir=img_dir_n,
-                )
-                doc.insert_pdf(text_doc)
-                text_doc.close()
-                body_n += 1
-            finally:
-                if img_dir.is_dir():
-                    shutil.rmtree(img_dir, ignore_errors=True)
+            text_html = f"<section class='page' data-page='{page_no}'>{frag}</section>"
+            text_doc = _html_to_doc(text_html, mediabox)
+            doc.insert_pdf(text_doc)
+            text_doc.close()
+            body_n += 1
 
     if body_n == 0:
         empty = _html_to_doc(
@@ -448,13 +437,7 @@ def _font_face_css() -> str:
     return "\n".join(parts)
 
 
-def _html_to_doc(
-    body_html: str,
-    mediabox: fitz.Rect,
-    *,
-    story_html: str | None = None,
-    image_dir: Path | None = None,
-) -> fitz.Document:
+def _html_to_doc(body_html: str, mediabox: fitz.Rect) -> fitz.Document:
     chrome = _chrome_bin()
     if chrome:
         with _CHROME_LOCK:
@@ -464,7 +447,7 @@ def _html_to_doc(
                 log.warning("chromium PDF failed (%s); falling back to Story", exc)
     else:
         log.warning("chromium not found; PDF text uses Story fallback")
-    return _html_to_doc_story(story_html or body_html, mediabox, image_dir=image_dir)
+    return _html_to_doc_story(body_html, mediabox)
 
 
 def _html_to_doc_chrome(
@@ -527,26 +510,19 @@ def _html_to_doc_chrome(
         pdf_path.unlink(missing_ok=True)
 
 
-def _font_archive(image_dir: Path | None = None) -> fitz.Archive:
+def _font_archive() -> fitz.Archive:
     roots = [d for d in _FONT_DIRS if Path(d).is_dir()]
-    if image_dir is not None and Path(image_dir).is_dir():
-        roots.append(Path(image_dir).as_posix())
     return fitz.Archive(*roots) if roots else fitz.Archive()
 
 
-def _html_to_doc_story(
-    body_html: str,
-    mediabox: fitz.Rect,
-    *,
-    image_dir: Path | None = None,
-) -> fitz.Document:
+def _html_to_doc_story(body_html: str, mediabox: fitz.Rect) -> fitz.Document:
     """Fallback: Story via DocumentWriter device (shaped glyphs; weaker ToUnicode)."""
     doc_html = (
         "<html><head><meta charset='utf-8'></head>"
         f"<body>{body_html}</body></html>"
     )
     where = mediabox + (_MARGIN, _MARGIN, -_MARGIN, -_MARGIN)
-    story = fitz.Story(html=doc_html, user_css=CSS, archive=_font_archive(image_dir))
+    story = fitz.Story(html=doc_html, user_css=CSS, archive=_font_archive())
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
@@ -599,39 +575,28 @@ def _bind_images(
     page_no: int,
     *,
     source_project_id: uuid.UUID | None = None,
-    dest: Path,
-) -> tuple[str, str, Path | None]:
-    """Copy figures next to the page HTML. Chrome gets file://; Story gets archive names.
+) -> str:
+    """Inline crop/emb figures as data URIs.
 
-    Translation HTML keeps /api/v1/pages/<source-page-uuid>/figures/... so we
-    resolve via that UUID / the digitize project, not only the translation id.
+    Translation HTML points at the digitize page UUID. Mixing figure files into
+    the font Archive makes Story emit [image]; data URIs work with fonts.
     """
     from app.services.layout_assets import resolve_figure_path
 
-    dest.mkdir(parents=True, exist_ok=True)
-    copies: list[Path] = []
-
     def repl(m: re.Match) -> str:
-        src = m.group(0)
         path = resolve_figure_path(
-            src,
+            m.group(0),
             project_id=project_id,
             page_no=page_no,
             source_project_id=source_project_id,
         )
         if path is None or not path.is_file():
-            return src
-        fname = f"{len(copies) + 1:03d}-{path.name}"
-        target = dest / fname
-        shutil.copy2(path, target)
-        copies.append(target)
-        return f'src="{target.resolve().as_uri()}"'
+            return m.group(0)
+        mime = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f'src="data:{mime};base64,{b64}"'
 
-    html_chrome = _API_IMG_RE.sub(repl, html)
-    html_story = html_chrome
-    for path in copies:
-        html_story = html_story.replace(path.resolve().as_uri(), path.name)
-    return html_chrome, html_story, dest if copies else None
+    return _API_IMG_RE.sub(repl, html)
 
 
 def _cover_html(title: str, title_sa: str | None) -> str:
