@@ -51,6 +51,9 @@ p { margin: 0.14em 0; }
   font-size: 10pt; color: #5c3d2e; margin: 0.1em 0 0.45em;
 }
 .cover-brand { font-size: 7pt; color: #6b6560; margin-top: 1em; }
+.cover { page-break-after: always; break-after: page; }
+.page { page-break-after: always; break-after: page; }
+.page:last-of-type { page-break-after: auto; break-after: auto; }
 .page, .page-style { margin: 0 auto; max-width: 98%; }
 .narrow { max-width: 94%; margin-left: auto; margin-right: auto; }
 .type-sm { font-size: 6.5pt; }
@@ -154,6 +157,20 @@ def build_project_pdf(
         bool(_chrome_bin()),
     )
     mediabox = _mediabox_for_pages(pages)
+    if mode == "text" and _chrome_bin():
+        try:
+            return _build_pdf_chrome_book(
+                out_path,
+                title,
+                pages,
+                mediabox,
+                title_sa=title_sa,
+                project_id=project_id,
+                source_project_id=source_project_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chromium book PDF failed (%s); falling back to Story", exc)
+
     doc = fitz.open()
     body_n = 0
 
@@ -206,6 +223,54 @@ def build_project_pdf(
     doc.save(tmp_out.as_posix(), garbage=3, deflate=True)
     doc.close()
     tmp_out.replace(out_path)
+    return out_path
+
+
+def _build_pdf_chrome_book(
+    out_path: Path,
+    title: str,
+    pages: list[tuple[int, str, str | None]],
+    mediabox: fitz.Rect,
+    *,
+    title_sa: str | None,
+    project_id: uuid.UUID,
+    source_project_id: uuid.UUID | None,
+) -> Path:
+    """One Chromium print of the whole book so selection matches the glyphs."""
+    chrome = _chrome_bin()
+    if not chrome:
+        raise RuntimeError("chromium not available")
+    parts = [_cover_html(title, title_sa)]
+    body_n = 0
+    for page_no, html, _scan in pages:
+        frag = (html or "").strip()
+        if not frag:
+            continue
+        frag = _bind_images(
+            frag,
+            project_id,
+            page_no,
+            source_project_id=source_project_id,
+        )
+        parts.append(f"<section class='page' data-page='{page_no}'>{frag}</section>")
+        body_n += 1
+    if body_n == 0:
+        parts.append("<p class='centered'>(нет страниц с текстом для выгрузки)</p>")
+    timeout = max(180, 60 + body_n * 2)
+    with _CHROME_LOCK:
+        doc = _html_to_doc_chrome(chrome, "".join(parts), mediabox, timeout=timeout)
+    doc.set_metadata(
+        {
+            "producer": "sanskrit_srv/chromium",
+            "creator": "Sanskrit SRV",
+            "title": title or out_path.stem,
+        }
+    )
+    tmp_out = out_path.with_suffix(f".{uuid.uuid4().hex}.tmp.pdf")
+    doc.save(tmp_out.as_posix(), garbage=3, deflate=True)
+    doc.close()
+    tmp_out.replace(out_path)
+    log.info("chromium book PDF pages=%s path=%s", body_n + 1, out_path)
     return out_path
 
 
@@ -482,11 +547,9 @@ def _use_chromium() -> bool:
 
 
 def _copy_fix_enabled() -> bool:
-    """Per-page path-outline + HTML overlay. Cheap enough inside the API cgroup."""
+    """HTML overlay is opt-in: it desyncs mouse selection, clipboard, and glyphs."""
     flag = _env_flag("SANSKRIT_PDF_COPYFIX")
-    if flag in ("0", "no", "false", "off"):
-        return False
-    return True
+    return flag in ("1", "yes", "true", "on")
 
 
 def _chrome_bin() -> str | None:
@@ -581,9 +644,13 @@ def _html_to_doc(
 
 
 def _html_to_doc_chrome(
-    chrome: str, body_html: str, mediabox: fitz.Rect
+    chrome: str,
+    body_html: str,
+    mediabox: fitz.Rect,
+    *,
+    timeout: int = 180,
 ) -> fitz.Document:
-    """Chromium print-to-PDF: shaped Devanagari + correct copy/paste."""
+    """Chromium print-to-PDF: shaped Devanagari + selection that matches glyphs."""
     page_css = (
         f"@page{{size:{mediabox.width:.3f}pt {mediabox.height:.3f}pt;"
         f"margin:{_MARGIN}pt;}}\n"
@@ -614,7 +681,7 @@ def _html_to_doc_chrome(
                 html_path.resolve().as_uri(),
             ],
             check=False,
-            timeout=180,
+            timeout=timeout,
             capture_output=True,
         )
         if proc.returncode != 0 and not pdf_path.is_file():
@@ -623,14 +690,15 @@ def _html_to_doc_chrome(
         if not pdf_path.is_file() or pdf_path.stat().st_size < 100:
             raise RuntimeError("chromium produced no PDF")
         src = fitz.open(pdf_path.as_posix())
-        # Refuse Latin-fallback junk: Devanagari pages must embed a Deva face.
-        fonts = " ".join(f[3] or "" for f in src[0].get_fonts())
-        if src.page_count > 0 and not re.search(r"Devanagari|Noto|FreeSerif|lohit|Nakula", fonts, re.I):
-            # Allow empty/cover-like pages; only warn when body looks Devanagari-heavy.
-            sample = src[0].get_text()
-            if sum(1 for c in sample if "\u0900" <= c <= "\u097f") >= 8:
+        for i in range(src.page_count):
+            sample = src[i].get_text()
+            if sum(1 for c in sample if "\u0900" <= c <= "\u097f") < 8:
+                continue
+            fonts = " ".join(f[3] or "" for f in src[i].get_fonts())
+            if not re.search(r"Devanagari|Noto|FreeSerif|lohit|Nakula", fonts, re.I):
                 src.close()
                 raise RuntimeError(f"chromium PDF missing Devanagari font (got: {fonts!r})")
+            break
         mem = fitz.open()
         mem.insert_pdf(src)
         src.close()

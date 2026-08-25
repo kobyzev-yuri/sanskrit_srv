@@ -124,7 +124,7 @@ def test_story_pdf_embeds_figure(monkeypatch, tmp_path: Path):
 def test_story_pdf_copy_keeps_conjuncts(monkeypatch, tmp_path: Path):
     _storage(monkeypatch, tmp_path)
     monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
-    monkeypatch.delenv("SANSKRIT_PDF_COPYFIX", raising=False)
+    monkeypatch.setenv("SANSKRIT_PDF_COPYFIX", "1")
     import fitz
 
     from app.services.export_pdf import build_project_pdf
