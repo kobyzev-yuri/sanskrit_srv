@@ -338,13 +338,13 @@ function syncExportButtons() {
   const docx = $("#btn-export-docx");
   const docxI = $("#btn-export-docx-interleave");
   const trPdf = $("#btn-export-tr-pdf");
-  const trXlsx = $("#btn-export-tr-xlsx");
+  const trDocx = $("#btn-export-tr-docx");
   if (pdf) pdf.hidden = tr;
   if (pdfI) pdfI.hidden = tr;
   if (docx) docx.hidden = tr;
   if (docxI) docxI.hidden = tr;
   if (trPdf) trPdf.hidden = !tr;
-  if (trXlsx) trXlsx.hidden = !tr;
+  if (trDocx) trDocx.hidden = !tr;
 }
 
 function syncTaskUi() {
@@ -1767,33 +1767,6 @@ async function exportDocx(mode = "text", opts = {}) {
   return exportDocument("docx", mode, opts);
 }
 
-async function exportXlsx({ rebuild = false } = {}) {
-  if (!state.project) return;
-  try {
-    toast(rebuild ? "Собираем XLSX перевода…" : "Скачиваем XLSX перевода…");
-    const q = rebuild ? "?rebuild=1" : "";
-    const res = await fetch(`${API}/projects/${state.project.id}/export.xlsx${q}`, {
-      headers: { Authorization: `Bearer ${state.token}` },
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      const detail = j.detail;
-      throw new Error(
-        typeof detail === "string" ? detail : detail?.message || res.statusText
-      );
-    }
-    const blob = await res.blob();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${state.project.slug}-translation.xlsx`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast("XLSX скачан");
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
 async function loadAdmin() {
   if (state.user?.role !== "admin") return;
   const users = await api("/admin/users");
@@ -2012,10 +1985,10 @@ function wire() {
     btnTrPdf.onclick = (e) => exportPdf("text", { rebuild: e.shiftKey });
     btnTrPdf.title = "PDF русской версии. Shift+клик — пересобрать заново.";
   }
-  const btnTrXlsx = $("#btn-export-tr-xlsx");
-  if (btnTrXlsx) {
-    btnTrXlsx.onclick = (e) => exportXlsx({ rebuild: e.shiftKey });
-    btnTrXlsx.title = "Таблица: страница, санскрит, русский. Shift+клик — пересобрать.";
+  const btnTrDocx = $("#btn-export-tr-docx");
+  if (btnTrDocx) {
+    btnTrDocx.onclick = (e) => exportDocx("text", { rebuild: e.shiftKey });
+    btnTrDocx.title = "Word (.docx): санскрит + русский. Shift+клик — пересобрать.";
   }
   const thumbFilter = $("#thumb-filter-open");
   if (thumbFilter) {

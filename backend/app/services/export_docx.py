@@ -186,8 +186,10 @@ def _set_sz_cs(rpr, size: float) -> None:
     sz_cs.set(qn("w:val"), str(int(size * 2)))
 
 
-def _set_run(run, *, size: float = _BODY_PT, bold: bool = False):
-    run.font.name = _FONT
+def _set_run(run, *, size: float = _BODY_PT, bold: bool = False, latin: bool = False):
+    body = _LATIN_FONT if latin else _FONT
+    cs = _LATIN_FONT if latin else _CS_FONT
+    run.font.name = body
     run.font.size = Pt(size)
     run.bold = bold
     r = run._element
@@ -195,7 +197,7 @@ def _set_run(run, *, size: float = _BODY_PT, bold: bool = False):
     rfonts = rpr.get_or_add_rFonts()
     rfonts.set(qn("w:ascii"), _LATIN_FONT)
     rfonts.set(qn("w:hAnsi"), _LATIN_FONT)
-    rfonts.set(qn("w:cs"), _CS_FONT)
+    rfonts.set(qn("w:cs"), cs)
     rfonts.set(qn("w:eastAsia"), _FALLBACK_FONT)
     _set_sz_cs(rpr, size)
     return run
@@ -238,6 +240,7 @@ class _HtmlToDocx(HTMLParser):
         self._in_td = False
         self._classes: list[str] = []
         self._pending_text: list[str] = []
+        self._latin = False
 
     def flush(self) -> None:
         self._end_para()
@@ -288,6 +291,7 @@ class _HtmlToDocx(HTMLParser):
             self._align = WD_ALIGN_PARAGRAPH.LEFT
             self._size = _BODY_PT
             self._bold = False
+            self._latin = "ru" in classes or "tr" in classes or ad.get("lang") == "ru"
             if tag == "h1" or "type-lg" in classes:
                 self._size = _H1_PT
                 self._bold = True
@@ -361,7 +365,7 @@ class _HtmlToDocx(HTMLParser):
         if not data:
             return
         run = self._para.add_run(data)
-        _set_run(run, size=self._size, bold=self._bold)
+        _set_run(run, size=self._size, bold=self._bold, latin=self._latin)
 
     def _end_para(self) -> None:
         self._para = None

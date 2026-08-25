@@ -11,6 +11,7 @@ Falls back to PyMuPDF Story if Chromium is missing.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -139,6 +140,13 @@ def build_project_pdf(
     suffix = "-interleave" if mode == "interleave" else ""
     out_path = out_dir / f"{slug}{suffix}.pdf"
 
+    log.info(
+        "PDF build slug=%s mode=%s pages=%s chromium=%s",
+        slug,
+        mode,
+        len(pages),
+        bool(_chrome_bin()),
+    )
     mediabox = _mediabox_for_pages(pages)
     doc = fitz.open()
     body_n = 0
@@ -172,6 +180,8 @@ def build_project_pdf(
         empty.close()
 
     try:
+        if not _allow_copy_fix(doc.page_count):
+            raise RuntimeError("copy-fix skipped (low RAM or large book)")
         fixed = _fix_indic_copy(doc)
         doc.close()
         doc = fixed
@@ -287,7 +297,62 @@ def _mediabox_for_pages(pages: list[tuple[int, str, str | None]]) -> fitz.Rect:
     return fitz.Rect(0, 0, _PAGE_W, _PAGE_H)
 
 
+def _cgroup_memory_max() -> int | None:
+    """Bytes allowed by the current cgroup, or None if unlimited / unknown."""
+    for path in (
+        Path("/sys/fs/cgroup/memory.max"),
+        Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+    ):
+        try:
+            raw = path.read_text().strip()
+        except OSError:
+            continue
+        if not raw or raw == "max":
+            return None
+        try:
+            n = int(raw)
+        except ValueError:
+            return None
+        # Legacy cgroup v1 "no limit" sentinel.
+        if n >= 1 << 62:
+            return None
+        return n
+    return None
+
+
+def _pdf_low_ram() -> bool:
+    cap = _cgroup_memory_max()
+    return cap is not None and cap < 800 * 1024 * 1024
+
+
+def _env_flag(name: str) -> str:
+    return (os.environ.get(name) or "").strip().lower()
+
+
+def _use_chromium() -> bool:
+    """Snap Chromium inside a 400MB API cgroup OOMs uvicorn; skip on small VPS."""
+    flag = _env_flag("SANSKRIT_PDF_CHROMIUM")
+    if flag in ("0", "no", "false", "off"):
+        return False
+    if flag in ("1", "yes", "true", "on"):
+        return True
+    return not _pdf_low_ram()
+
+
+def _allow_copy_fix(page_count: int) -> bool:
+    flag = _env_flag("SANSKRIT_PDF_COPYFIX")
+    if flag in ("0", "no", "false", "off"):
+        return False
+    if flag in ("1", "yes", "true", "on"):
+        return True
+    if _pdf_low_ram():
+        return False
+    return page_count <= 60
+
+
 def _chrome_bin() -> str | None:
+    if not _use_chromium():
+        return None
     for cand in _CHROME_CANDIDATES:
         if Path(cand).is_file():
             return cand
