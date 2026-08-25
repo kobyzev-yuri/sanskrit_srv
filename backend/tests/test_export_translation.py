@@ -149,3 +149,32 @@ def test_story_pdf_copy_keeps_conjuncts(monkeypatch, tmp_path: Path):
     assert "ę" not in blob
     assert "Ĕ" not in blob
 
+
+def test_story_pdf_copy_covers_wrapped_lines(monkeypatch, tmp_path: Path):
+    _storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
+    monkeypatch.delenv("SANSKRIT_PDF_COPYFIX", raising=False)
+    import fitz
+
+    from app.services.export_pdf import build_project_pdf
+
+    body = " ".join(f"слово{i:02d}" for i in range(1, 61))
+    html = f"<article class='page-style'><p class='ru'>{body}</p></article>"
+    path = build_project_pdf(uuid.uuid4(), "book-ru", "Wrap", [(1, html, None)])
+    doc = fitz.open(path.as_posix())
+    try:
+        page = doc[-1]
+        n_copy = len(
+            [
+                ln
+                for b in page.get_text("dict").get("blocks", [])
+                if b.get("type") == 0
+                for ln in b.get("lines", [])
+            ]
+        )
+        blob = page.get_text()
+    finally:
+        doc.close()
+    assert n_copy >= 4, n_copy
+    assert "слово01" in blob and "слово60" in blob
+

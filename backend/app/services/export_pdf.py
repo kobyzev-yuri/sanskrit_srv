@@ -275,29 +275,94 @@ def _html_copy_lines(html: str) -> list[str]:
     return [line for line in lines if line]
 
 
+def _html_copy_words(copy_lines: list[str]) -> list[str]:
+    """Word stream with paragraph breaks as '\\n' so wrapping can fill PDF lines."""
+    words: list[str] = []
+    for line in copy_lines:
+        parts = (line or "").split()
+        if not parts:
+            continue
+        words.extend(parts)
+        words.append("\n")
+    return words
+
+
+def _text_width(font: fitz.Font, text: str, size: float) -> float:
+    try:
+        return float(font.text_length(text, fontsize=size))
+    except Exception:  # noqa: BLE001
+        return len(text) * size * 0.5
+
+
+def _pack_overlay_slots(
+    font: fitz.Font,
+    words: list[str],
+    start: int,
+    slots: list[tuple[str, fitz.Rect, float]],
+) -> tuple[list[tuple[str, fitz.Rect, float]], int]:
+    """Fill each visual PDF line with HTML words that fit its width."""
+    i = start
+    n = len(words)
+    overlay: list[tuple[str, fitz.Rect, float]] = []
+    for _raw, bbox, size in slots:
+        width = max(float(bbox.width), 1.0)
+        chunk: list[str] = []
+        while i < n:
+            tok = words[i]
+            if tok == "\n":
+                i += 1
+                if chunk:
+                    break
+                continue
+            trial = tok if not chunk else " ".join(chunk + [tok])
+            w = _text_width(font, trial, size)
+            if chunk and w > width * 1.03:
+                break
+            chunk.append(tok)
+            i += 1
+            if w > width * 1.03:
+                break
+        if not chunk:
+            continue
+        text = " ".join(chunk)
+        use_size = size
+        tw = _text_width(font, text, use_size)
+        if tw > width > 8:
+            use_size = max(4.0, use_size * width / tw)
+        overlay.append((text, bbox, use_size))
+    return overlay, i
+
+
+def _overlay_baseline(font: fitz.Font, bbox: fitz.Rect, size: float) -> fitz.Point:
+    asc = float(getattr(font, "ascender", 0.8) or 0.8)
+    if asc <= 0.2 or asc > 1.5:
+        asc = 0.8
+    return fitz.Point(bbox.x0, bbox.y0 + size * asc)
+
+
 def _fix_indic_copy(
     src: fitz.Document,
     copy_lines: list[str] | None = None,
 ) -> fitz.Document:
-    """Path-outline glyphs + invisible HTML Unicode so copy/paste is not ę/Ĕ."""
+    """Path-outline glyphs + invisible HTML Unicode so copy/paste is not ę/Ĕ.
+
+    Overlay is packed into each visual line box so mouse selection covers the
+    whole page and does not sit on the wrong line.
+    """
     font_path = _deva_fontfile()
     if not font_path:
         raise RuntimeError("no Devanagari font for copy-fix overlay")
     font = fitz.Font(fontfile=font_path)
-    html_iter = iter(copy_lines or [])
-    use_html = bool(copy_lines)
+    words = _html_copy_words(copy_lines or [])
+    use_html = bool(words)
+    idx = 0
     out = fitz.open()
     for page in src:
         sample = page.get_text()
         n_deva = sum(1 for c in sample if "\u0900" <= c <= "\u097f")
         slots = _page_text_lines(page)
-        overlay: list[tuple[str, fitz.Rect, float]] = []
         if use_html:
-            for _text, bbox, size in slots:
-                nxt = next(html_iter, None)
-                if nxt is None:
-                    break
-                overlay.append((nxt, bbox, size))
+            overlay, idx = _pack_overlay_slots(font, words, idx, slots)
         else:
             overlay = [(text, bbox, size) for text, bbox, size in slots]
         if not use_html and n_deva < 4:
@@ -319,16 +384,15 @@ def _fix_indic_copy(
         if overlay:
             tw = fitz.TextWriter(dest.rect)
             for text, bbox, size in overlay:
-                pos = fitz.Point(bbox.x0, bbox.y1 - 0.12 * size)
-                tw.append(pos, text, font=font, fontsize=size)
+                tw.append(_overlay_baseline(font, bbox, size), text, font=font, fontsize=size)
             tw.write_text(dest, render_mode=3)
-    leftover = list(html_iter)
+    leftover = [w for w in words[idx:] if w != "\n"]
     if leftover and out.page_count:
         last = out[-1]
         tw = fitz.TextWriter(last.rect)
         tw.append(
             fitz.Point(_MARGIN, last.rect.y1 - _MARGIN),
-            "\n".join(leftover),
+            " ".join(leftover),
             font=font,
             fontsize=7.5,
         )
