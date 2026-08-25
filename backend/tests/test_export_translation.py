@@ -78,8 +78,32 @@ def test_bind_images_uses_source_project_figs(monkeypatch, tmp_path: Path):
     )
     bound = _bind_images(html, tr_pid, 3, source_project_id=src_pid)
     assert "data:image/png;base64," in bound
+    assert 'width="24"' in bound and 'height="24"' in bound
     assert "/api/v1/pages/" not in bound
     assert "[image]" not in bound
+
+
+def test_reembed_pdf_images_uses_device_rgb_jpeg(tmp_path: Path):
+    import fitz
+    from PIL import Image
+
+    from app.services.export_pdf import _reembed_pdf_images
+
+    png = tmp_path / "fig.png"
+    Image.new("RGB", (80, 40), (200, 30, 30)).save(png)
+    doc = fitz.open()
+    page = doc.new_page(width=200, height=200)
+    page.insert_image(fitz.Rect(10, 10, 90, 50), filename=png.as_posix())
+    _reembed_pdf_images(doc)
+    images = page.get_images(full=True)
+    assert images
+    xref, width, height, cspace = images[0][0], images[0][2], images[0][3], images[0][5]
+    assert width >= 40 and height >= 20
+    assert cspace == "DeviceRGB"
+    obj = doc.xref_object(xref)
+    assert "/DCTDecode" in obj
+    assert "ICCBased" not in obj
+    doc.close()
 
 
 def test_story_pdf_embeds_figure(monkeypatch, tmp_path: Path):

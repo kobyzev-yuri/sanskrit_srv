@@ -753,53 +753,45 @@ def _append_scan_page(doc: fitz.Document, mediabox: fitz.Rect, scan_path: Path) 
         page.insert_image(rect, filename=scan_path.as_posix(), keep_proportion=True)
 
 
-def _figure_jpeg_bytes(path: Path) -> bytes | None:
-    """sRGB JPEG without ICC — Chrome otherwise stores ICCBased images some viewers cannot paint."""
+def _pixmap_jpeg(doc: fitz.Document, xref: int) -> bytes | None:
+    """DeviceRGB JPEG with no ICC — Word/Preview cannot paint Chrome's ICCBased XObjects."""
     try:
         from io import BytesIO
 
         from PIL import Image
 
-        with Image.open(path) as img:
-            img = img.convert("RGB")
-            buf = BytesIO()
-            img.save(buf, format="JPEG", quality=88, optimize=True, icc_profile=b"")
-            return buf.getvalue()
+        pix = fitz.Pixmap(doc, xref)
+        if pix.alpha or pix.n != 3:
+            pix = fitz.Pixmap(fitz.csRGB, pix)
+        img = Image.open(BytesIO(pix.tobytes("png"))).convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=88, optimize=True)
+        return buf.getvalue()
     except Exception:  # noqa: BLE001
         return None
 
 
 def _reembed_pdf_images(doc: fitz.Document) -> None:
-    """Replace Chromium image XObjects with DeviceRGB JPEGs at the same boxes."""
+    """Replace Chromium image streams in place so CTM/boxes stay; ColorSpace becomes DeviceRGB."""
+    seen: set[int] = set()
     for page in doc:
-        planned: list[tuple[int, list[fitz.Rect], bytes]] = []
-        seen: set[int] = set()
         for img in page.get_images(full=True):
-            xref = img[0]
-            if xref in seen:
+            xref, width, height = img[0], img[2], img[3]
+            if xref in seen or width < 2 or height < 2:
                 continue
             seen.add(xref)
-            rects = [r for r in page.get_image_rects(xref) if abs(r.width) >= 2 and abs(r.height) >= 2]
-            if not rects:
+            jpeg = _pixmap_jpeg(doc, xref)
+            if not jpeg:
                 continue
             try:
-                pix = fitz.Pixmap(doc, xref)
-                if pix.alpha or pix.n != 3:
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                jpeg = pix.tobytes("jpeg")
+                doc.update_stream(xref, jpeg, new=1, compress=0)
+                doc.xref_set_key(xref, "Filter", "/DCTDecode")
+                doc.xref_set_key(xref, "ColorSpace", "/DeviceRGB")
+                doc.xref_set_key(xref, "BitsPerComponent", "8")
+                for key in ("SMask", "DecodeParms", "ColorTransform", "Decode"):
+                    doc.xref_set_key(xref, key, "null")
             except Exception:  # noqa: BLE001
-                continue
-            planned.append((xref, rects, jpeg))
-        done: set[int] = set()
-        for xref, rects, jpeg in planned:
-            if xref not in done:
-                try:
-                    page.delete_image(xref)
-                except Exception:  # noqa: BLE001
-                    pass
-                done.add(xref)
-            for rect in rects:
-                page.insert_image(rect, stream=jpeg, keep_proportion=False)
+                log.warning("PDF image re-embed failed xref=%s", xref)
 
 
 def _scan_jpeg_bytes(scan_path: Path) -> bytes | None:
@@ -841,13 +833,25 @@ def _bind_images(
         )
         if path is None or not path.is_file():
             return m.group(0)
-        jpeg = _figure_jpeg_bytes(path)
-        if jpeg is None:
-            mime = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
-            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-            return f'src="data:{mime};base64,{b64}"'
-        b64 = base64.b64encode(jpeg).decode("ascii")
-        return f'src="data:image/jpeg;base64,{b64}"'
+        suffix = path.suffix.lower()
+        if suffix in {".jpg", ".jpeg"}:
+            mime = "image/jpeg"
+        elif suffix == ".webp":
+            mime = "image/webp"
+        else:
+            mime = "image/png"
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        dims = ""
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                w, h = img.size
+            if w >= 2 and h >= 2:
+                dims = f' width="{w}" height="{h}"'
+        except Exception:  # noqa: BLE001
+            pass
+        return f'src="data:{mime};base64,{b64}"{dims}'
 
     return _API_IMG_RE.sub(repl, html)
 
