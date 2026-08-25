@@ -44,6 +44,7 @@ def build_project_docx(
     *,
     title_sa: str | None = None,
     mode: str = "text",
+    source_project_id: uuid.UUID | None = None,
 ) -> Path:
     """pages: list of (page_no, html_fragment, scan_path|None).
 
@@ -84,7 +85,9 @@ def build_project_docx(
             if kind == "scan":
                 _add_scan_image(doc, payload)  # type: ignore[arg-type]
             else:
-                _html_to_docx(doc, str(payload), project_id, page_no)
+                _html_to_docx(
+                    doc, str(payload), project_id, page_no, source_project_id
+                )
             body_n += 1
 
     if body_n == 0:
@@ -170,9 +173,13 @@ def _scan_jpeg_bytes(scan_path: Path) -> bytes | None:
 
 
 def _html_to_docx(
-    doc: Document, html: str, project_id: uuid.UUID, page_no: int
+    doc: Document,
+    html: str,
+    project_id: uuid.UUID,
+    page_no: int,
+    source_project_id: uuid.UUID | None = None,
 ) -> None:
-    parser = _HtmlToDocx(doc, project_id, page_no)
+    parser = _HtmlToDocx(doc, project_id, page_no, source_project_id)
     parser.feed(html)
     parser.close()
     parser.flush()
@@ -204,17 +211,19 @@ def _set_run(run, *, size: float = _BODY_PT, bold: bool = False, latin: bool = F
 
 
 def _resolve_figure_path(
-    src: str, project_id: uuid.UUID, page_no: int
+    src: str,
+    project_id: uuid.UUID,
+    page_no: int,
+    source_project_id: uuid.UUID | None = None,
 ) -> Path | None:
-    from app.services.layout_assets import figure_file
+    from app.services.layout_assets import resolve_figure_path
 
-    if not src:
-        return None
-    m = _API_IMG_RE.search(src)
-    name = m.group(2) if m else Path(src.split("?")[0]).name
-    if re.fullmatch(r"(emb|crop)-\d{2}\.png", name or ""):
-        return figure_file(project_id, page_no, name)
-    return None
+    return resolve_figure_path(
+        src,
+        project_id=project_id,
+        page_no=page_no,
+        source_project_id=source_project_id,
+    )
 
 
 class _HtmlToDocx(HTMLParser):
@@ -224,11 +233,18 @@ class _HtmlToDocx(HTMLParser):
         {"p", "h1", "h2", "h3", "footer", "li", "div", "section", "article", "figcaption"}
     )
 
-    def __init__(self, doc: Document, project_id: uuid.UUID, page_no: int):
+    def __init__(
+        self,
+        doc: Document,
+        project_id: uuid.UUID,
+        page_no: int,
+        source_project_id: uuid.UUID | None = None,
+    ):
         super().__init__(convert_charrefs=True)
         self.doc = doc
         self.project_id = project_id
         self.page_no = page_no
+        self.source_project_id = source_project_id
         self._para = None
         self._align = WD_ALIGN_PARAGRAPH.LEFT
         self._size = _BODY_PT
@@ -263,7 +279,12 @@ class _HtmlToDocx(HTMLParser):
 
         if tag == "img":
             self._end_para()
-            path = _resolve_figure_path(ad.get("src", ""), self.project_id, self.page_no)
+            path = _resolve_figure_path(
+                ad.get("src", ""),
+                self.project_id,
+                self.page_no,
+                self.source_project_id,
+            )
             if path and path.is_file():
                 try:
                     self.doc.add_picture(path.as_posix(), width=Inches(4.2))

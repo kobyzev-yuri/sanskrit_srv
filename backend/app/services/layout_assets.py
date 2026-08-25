@@ -236,3 +236,49 @@ def figure_file(project_id: uuid.UUID, page_no: int, name: str) -> Path | None:
         return None
     path = figures_dir(project_id, page_no) / name
     return path if path.is_file() else None
+
+
+def figure_file_from_page_id(page_id: uuid.UUID, name: str) -> Path | None:
+    """Resolve a figure via the page UUID in /api/v1/pages/<id>/figures/name."""
+    from app.db import get_session_factory
+    from app.models import Page
+
+    Session = get_session_factory()
+    with Session() as db:
+        page = db.get(Page, page_id)
+        if page is None:
+            return None
+        return figure_file(page.project_id, page.page_no, name)
+
+
+def resolve_figure_path(
+    src: str,
+    *,
+    project_id: uuid.UUID,
+    page_no: int,
+    source_project_id: uuid.UUID | None = None,
+) -> Path | None:
+    """Find a crop/emb PNG for export. Translation HTML keeps the source page UUID."""
+    if not src:
+        return None
+    m = re.search(
+        r"/api/v1/pages/([0-9a-fA-F-]{32,48})/figures/((?:emb|crop)-\d{2}\.png)",
+        src,
+        re.I,
+    )
+    name = m.group(2) if m else Path(src.split("?")[0]).name
+    if not re.fullmatch(r"(emb|crop)-\d{2}\.png", name or ""):
+        return None
+    for pid in (project_id, source_project_id):
+        if pid is None:
+            continue
+        path = figure_file(pid, page_no, name)
+        if path is not None:
+            return path
+    if m:
+        try:
+            page_id = uuid.UUID(m.group(1))
+        except ValueError:
+            return None
+        return figure_file_from_page_id(page_id, name)
+    return None

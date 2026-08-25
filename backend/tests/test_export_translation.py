@@ -58,3 +58,32 @@ def test_translation_pdf_story_without_chromium(monkeypatch, tmp_path: Path):
     data = path.read_bytes()
     assert data.startswith(b"%PDF")
     assert len(data) > 500
+
+
+def test_bind_images_uses_source_project_figs(monkeypatch, tmp_path: Path):
+    _storage(monkeypatch, tmp_path)
+    from PIL import Image
+
+    from app.services.export_pdf import _bind_images
+    from app.services.layout_assets import figures_dir
+
+    src_pid = uuid.uuid4()
+    tr_pid = uuid.uuid4()
+    png = figures_dir(src_pid, 3) / "crop-01.png"
+    Image.new("RGB", (24, 24), "red").save(png)
+    html = (
+        f'<figure class="page-figure">'
+        f'<img src="/api/v1/pages/{uuid.uuid4()}/figures/crop-01.png" alt="illustration" />'
+        f"</figure>"
+    )
+    dest = tmp_path / "bind"
+    chrome, story, used = _bind_images(
+        html, tr_pid, 3, source_project_id=src_pid, dest=dest
+    )
+    assert used is not None
+    assert "file://" in chrome
+    assert "[image]" not in chrome
+    names = [p.name for p in dest.glob("*.png")]
+    assert names
+    assert any(n in story for n in names)
+

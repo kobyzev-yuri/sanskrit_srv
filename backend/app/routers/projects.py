@@ -537,6 +537,17 @@ def update_settings(
     return _project_out(db, project)
 
 
+def _source_project_uuid(project: Project) -> uuid.UUID | None:
+    settings = project.settings if isinstance(project.settings, dict) else {}
+    raw = settings.get("source_project_id")
+    if not raw:
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except ValueError:
+        return None
+
+
 def _pdf_error_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + ".error")
 
@@ -560,6 +571,7 @@ def _start_pdf_build(
     payload: list[tuple[int, str, str | None]],
     title_sa: str | None,
     mode_n: str,
+    source_project_id: uuid.UUID | None = None,
 ) -> None:
     key = str(path)
     building = path.with_name(path.name + ".building")
@@ -581,6 +593,7 @@ def _start_pdf_build(
                 payload,
                 title_sa=title_sa,
                 mode=mode_n,
+                source_project_id=source_project_id,
             )
         except Exception as exc:  # noqa: BLE001
             log.exception("PDF build failed for %s", slug)
@@ -657,6 +670,7 @@ def export_pdf(
         payload,
         project.title_sa,
         mode_n,
+        source_project_id=_source_project_uuid(project),
     )
     return JSONResponse({"status": "building"}, status_code=status.HTTP_202_ACCEPTED)
 
@@ -703,6 +717,7 @@ def export_docx(
                 payload,
                 title_sa=project.title_sa,
                 mode=mode_n,
+                source_project_id=_source_project_uuid(project),
             )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(

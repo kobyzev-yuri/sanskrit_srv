@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -95,7 +96,7 @@ _PAGE_H = 612.0
 _MARGIN = 12
 
 _API_IMG_RE = re.compile(
-    r'src=["\']/api/v1/pages/([0-9a-fA-F-]{36})/figures/([^"\']+)["\']',
+    r'src=["\']/api/v1/pages/([0-9a-fA-F-]{32,48})/figures/([^"\']+)["\']',
     re.I,
 )
 
@@ -112,6 +113,7 @@ _FONT_FILES = (
 _SCAN_MAX_PX = 1400
 _SCAN_JPEG_Q = 78
 
+_CHROME_LOCK = threading.Lock()
 _CHROME_CANDIDATES = (
     "/snap/bin/chromium",
     "chromium",
@@ -129,6 +131,7 @@ def build_project_pdf(
     *,
     title_sa: str | None = None,
     mode: str = "text",
+    source_project_id: uuid.UUID | None = None,
 ) -> Path:
     """pages: list of (page_no, html_fragment, scan_path|None)."""
     mode = (mode or "text").strip().lower()
@@ -165,12 +168,29 @@ def build_project_pdf(
             body_n += 1
 
         if frag:
-            frag = _rewrite_img_srcs_for_pdf(frag, project_id, page_no)
-            text_html = f"<section class='page' data-page='{page_no}'>{frag}</section>"
-            text_doc = _html_to_doc(text_html, mediabox)
-            doc.insert_pdf(text_doc)
-            text_doc.close()
-            body_n += 1
+            img_dir = _work_dir() / f"img-{uuid.uuid4().hex}"
+            html_chrome, html_story, img_dir_n = _bind_images(
+                frag,
+                project_id,
+                page_no,
+                source_project_id=source_project_id,
+                dest=img_dir,
+            )
+            text_chrome = f"<section class='page' data-page='{page_no}'>{html_chrome}</section>"
+            text_story = f"<section class='page' data-page='{page_no}'>{html_story}</section>"
+            try:
+                text_doc = _html_to_doc(
+                    text_chrome,
+                    mediabox,
+                    story_html=text_story,
+                    image_dir=img_dir_n,
+                )
+                doc.insert_pdf(text_doc)
+                text_doc.close()
+                body_n += 1
+            finally:
+                if img_dir.is_dir():
+                    shutil.rmtree(img_dir, ignore_errors=True)
 
     if body_n == 0:
         empty = _html_to_doc(
@@ -347,11 +367,13 @@ def _env_flag(name: str) -> str:
 
 
 def _use_chromium() -> bool:
-    """Snap Chromium from the API cgroup OOMs this 1GB VPS. Opt in only."""
+    """HTML→PDF uses Chromium like digitize. Skip inside the 400MB API cgroup unless forced."""
     flag = _env_flag("SANSKRIT_PDF_CHROMIUM")
+    if flag in ("0", "no", "false", "off"):
+        return False
     if flag in ("1", "yes", "true", "on"):
         return True
-    return False
+    return not _pdf_low_ram()
 
 
 def _allow_copy_fix(page_count: int) -> bool:
@@ -426,16 +448,23 @@ def _font_face_css() -> str:
     return "\n".join(parts)
 
 
-def _html_to_doc(body_html: str, mediabox: fitz.Rect) -> fitz.Document:
+def _html_to_doc(
+    body_html: str,
+    mediabox: fitz.Rect,
+    *,
+    story_html: str | None = None,
+    image_dir: Path | None = None,
+) -> fitz.Document:
     chrome = _chrome_bin()
     if chrome:
-        try:
-            return _html_to_doc_chrome(chrome, body_html, mediabox)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("chromium PDF failed (%s); falling back to Story", exc)
+        with _CHROME_LOCK:
+            try:
+                return _html_to_doc_chrome(chrome, body_html, mediabox)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("chromium PDF failed (%s); falling back to Story", exc)
     else:
         log.warning("chromium not found; PDF text uses Story fallback")
-    return _html_to_doc_story(body_html, mediabox)
+    return _html_to_doc_story(story_html or body_html, mediabox, image_dir=image_dir)
 
 
 def _html_to_doc_chrome(
@@ -498,19 +527,26 @@ def _html_to_doc_chrome(
         pdf_path.unlink(missing_ok=True)
 
 
-def _font_archive() -> fitz.Archive:
+def _font_archive(image_dir: Path | None = None) -> fitz.Archive:
     roots = [d for d in _FONT_DIRS if Path(d).is_dir()]
+    if image_dir is not None and Path(image_dir).is_dir():
+        roots.append(Path(image_dir).as_posix())
     return fitz.Archive(*roots) if roots else fitz.Archive()
 
 
-def _html_to_doc_story(body_html: str, mediabox: fitz.Rect) -> fitz.Document:
+def _html_to_doc_story(
+    body_html: str,
+    mediabox: fitz.Rect,
+    *,
+    image_dir: Path | None = None,
+) -> fitz.Document:
     """Fallback: Story via DocumentWriter device (shaped glyphs; weaker ToUnicode)."""
     doc_html = (
         "<html><head><meta charset='utf-8'></head>"
         f"<body>{body_html}</body></html>"
     )
     where = mediabox + (_MARGIN, _MARGIN, -_MARGIN, -_MARGIN)
-    story = fitz.Story(html=doc_html, user_css=CSS, archive=_font_archive())
+    story = fitz.Story(html=doc_html, user_css=CSS, archive=_font_archive(image_dir))
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
@@ -557,20 +593,45 @@ def _scan_jpeg_bytes(scan_path: Path) -> bytes | None:
         return None
 
 
-def _rewrite_img_srcs_for_pdf(
-    html: str, project_id: uuid.UUID, page_no: int
-) -> str:
-    """Map /api/.../figures/name to file:// URLs Chromium can load."""
-    from app.services.layout_assets import figure_file
+def _bind_images(
+    html: str,
+    project_id: uuid.UUID,
+    page_no: int,
+    *,
+    source_project_id: uuid.UUID | None = None,
+    dest: Path,
+) -> tuple[str, str, Path | None]:
+    """Copy figures next to the page HTML. Chrome gets file://; Story gets archive names.
+
+    Translation HTML keeps /api/v1/pages/<source-page-uuid>/figures/... so we
+    resolve via that UUID / the digitize project, not only the translation id.
+    """
+    from app.services.layout_assets import resolve_figure_path
+
+    dest.mkdir(parents=True, exist_ok=True)
+    copies: list[Path] = []
 
     def repl(m: re.Match) -> str:
-        name = m.group(2)
-        path = figure_file(project_id, page_no, name)
+        src = m.group(0)
+        path = resolve_figure_path(
+            src,
+            project_id=project_id,
+            page_no=page_no,
+            source_project_id=source_project_id,
+        )
         if path is None or not path.is_file():
-            return m.group(0)
-        return f'src="{path.resolve().as_uri()}"'
+            return src
+        fname = f"{len(copies) + 1:03d}-{path.name}"
+        target = dest / fname
+        shutil.copy2(path, target)
+        copies.append(target)
+        return f'src="{target.resolve().as_uri()}"'
 
-    return _API_IMG_RE.sub(repl, html)
+    html_chrome = _API_IMG_RE.sub(repl, html)
+    html_story = html_chrome
+    for path in copies:
+        html_story = html_story.replace(path.resolve().as_uri(), path.name)
+    return html_chrome, html_story, dest if copies else None
 
 
 def _cover_html(title: str, title_sa: str | None) -> str:
