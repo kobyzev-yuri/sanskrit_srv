@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
+import time
 import uuid
 from pathlib import Path
 
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -42,6 +45,9 @@ from app.services.translation_style import (
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+log = logging.getLogger("sanskrit.projects")
+_pdf_builds_lock = threading.Lock()
+_pdf_builds: set[str] = set()
 
 
 def _uid(value: str) -> uuid.UUID:
@@ -531,6 +537,62 @@ def update_settings(
     return _project_out(db, project)
 
 
+def _pdf_error_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".error")
+
+
+def _pdf_is_building(path: Path) -> bool:
+    key = str(path)
+    with _pdf_builds_lock:
+        if key in _pdf_builds:
+            return True
+    building = path.with_name(path.name + ".building")
+    if building.is_file() and time.time() - building.stat().st_mtime < 45 * 60:
+        return True
+    return False
+
+
+def _start_pdf_build(
+    path: Path,
+    project_id: uuid.UUID,
+    slug: str,
+    title: str,
+    payload: list[tuple[int, str, str | None]],
+    title_sa: str | None,
+    mode_n: str,
+) -> None:
+    key = str(path)
+    building = path.with_name(path.name + ".building")
+    err = _pdf_error_path(path)
+    with _pdf_builds_lock:
+        if key in _pdf_builds:
+            return
+        _pdf_builds.add(key)
+    building.parent.mkdir(parents=True, exist_ok=True)
+    building.write_text("1", encoding="utf-8")
+    err.unlink(missing_ok=True)
+
+    def run() -> None:
+        try:
+            build_project_pdf(
+                project_id,
+                slug,
+                title,
+                payload,
+                title_sa=title_sa,
+                mode=mode_n,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("PDF build failed for %s", slug)
+            err.write_text(f"PDF failed: {exc}", encoding="utf-8")
+        finally:
+            building.unlink(missing_ok=True)
+            with _pdf_builds_lock:
+                _pdf_builds.discard(key)
+
+    threading.Thread(target=run, name=f"pdf-export-{slug}", daemon=True).start()
+
+
 @router.get("/{project_id}/export.pdf")
 def export_pdf(
     project_id: str,
@@ -541,11 +603,10 @@ def export_pdf(
 ):
     """Build or download PDF. mode=text | interleave.
 
-    By default serves the last built file (fast). Pass rebuild=1 to regenerate
-    (can take minutes on a full book — avoid browser timeouts).
+    First request starts a background build and returns 202. Poll until the
+    file is ready (avoids browser timeouts on a full book). Pass rebuild=1
+    to regenerate.
     """
-    from pathlib import Path
-
     from app.services.storage import ensure_dirs
 
     project = db.get(Project, _uid(project_id))
@@ -557,37 +618,47 @@ def export_pdf(
     suffix = "-interleave" if mode_n == "interleave" else ""
     filename = f"{project.slug}{suffix}.pdf"
     path = ensure_dirs() / "exports" / str(project.id) / filename
+    err = _pdf_error_path(path)
 
-    if rebuild or not path.is_file() or path.stat().st_size < 1024:
-        pages = list(
-            db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+    ready = path.is_file() and path.stat().st_size >= 1024
+    if _pdf_is_building(path):
+        return JSONResponse({"status": "building"}, status_code=status.HTTP_202_ACCEPTED)
+    if rebuild:
+        path.unlink(missing_ok=True)
+        err.unlink(missing_ok=True)
+        ready = False
+    if ready:
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=filename,
         )
-        payload = [
-            (p.page_no, p.current_html or "", p.scan_path)
-            for p in pages
-            if (p.current_html and p.current_html.strip()) or (mode_n == "interleave" and p.scan_path)
-        ]
-        if not payload:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No page text to export yet")
-        try:
-            path = build_project_pdf(
-                project.id,
-                project.slug,
-                project.title,
-                payload,
-                title_sa=project.title_sa,
-                mode=mode_n,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"PDF failed: {exc}"
-            ) from exc
 
-    return FileResponse(
-        path,
-        media_type="application/pdf",
-        filename=filename,
+    if err.is_file():
+        detail = err.read_text(encoding="utf-8").strip() or "PDF failed"
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
+
+    pages = list(
+        db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
     )
+    payload = [
+        (p.page_no, p.current_html or "", p.scan_path)
+        for p in pages
+        if (p.current_html and p.current_html.strip()) or (mode_n == "interleave" and p.scan_path)
+    ]
+    if not payload:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No page text to export yet")
+
+    _start_pdf_build(
+        path,
+        project.id,
+        project.slug,
+        project.title,
+        payload,
+        project.title_sa,
+        mode_n,
+    )
+    return JSONResponse({"status": "building"}, status_code=status.HTTP_202_ACCEPTED)
 
 
 @router.get("/{project_id}/export.docx")

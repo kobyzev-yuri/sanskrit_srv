@@ -1722,14 +1722,28 @@ async function exportDocument(fmt = "pdf", mode = "text", { rebuild = false } = 
         ? `Собираем ${label} (может занять 1–2 мин)…`
         : `Скачиваем ${label}…`
     );
-    const params = new URLSearchParams();
-    if (mode === "interleave") params.set("mode", "interleave");
-    if (rebuild) params.set("rebuild", "1");
-    const q = params.toString() ? `?${params}` : "";
-    const res = await fetch(
-      `${API}/projects/${state.project.id}/export.${ext}${q}`,
-      { headers: { Authorization: `Bearer ${state.token}` } }
-    );
+    let askRebuild = rebuild;
+    let res;
+    for (let i = 0; i < 180; i++) {
+      const params = new URLSearchParams();
+      if (mode === "interleave") params.set("mode", "interleave");
+      if (askRebuild) params.set("rebuild", "1");
+      askRebuild = false;
+      const q = params.toString() ? `?${params}` : "";
+      res = await fetch(`${API}/projects/${state.project.id}/export.${ext}${q}`, {
+        headers: { Authorization: `Bearer ${state.token}` },
+      });
+      if (res.status === 202) {
+        toast(`Собираем ${label}…`);
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      break;
+    }
+    if (!res) throw new Error(`Не удалось начать сборку ${kind}`);
+    if (res.status === 202) {
+      throw new Error(`${kind} всё ещё собирается — нажмите ещё раз через минуту`);
+    }
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       const detail = j.detail;
@@ -1983,7 +1997,7 @@ function wire() {
   const btnTrPdf = $("#btn-export-tr-pdf");
   if (btnTrPdf) {
     btnTrPdf.onclick = (e) => exportPdf("text", { rebuild: e.shiftKey });
-    btnTrPdf.title = "PDF русской версии. Shift+клик — пересобрать заново.";
+    btnTrPdf.title = "PDF русской версии. Первый клик собирает файл (дождитесь скачивания). Shift+клик — пересобрать.";
   }
   const btnTrDocx = $("#btn-export-tr-docx");
   if (btnTrDocx) {

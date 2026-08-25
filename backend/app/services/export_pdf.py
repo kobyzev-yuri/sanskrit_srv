@@ -298,24 +298,41 @@ def _mediabox_for_pages(pages: list[tuple[int, str, str | None]]) -> fitz.Rect:
 
 
 def _cgroup_memory_max() -> int | None:
-    """Bytes allowed by the current cgroup, or None if unlimited / unknown."""
-    for path in (
-        Path("/sys/fs/cgroup/memory.max"),
-        Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
-    ):
+    """Bytes allowed by this process's cgroup, or None if unlimited / unknown."""
+    rel = ""
+    try:
+        for line in Path("/proc/self/cgroup").read_text().splitlines():
+            if line.startswith("0::"):
+                rel = line.split(":", 2)[-1].lstrip("/")
+                break
+            if ":memory:" in line:
+                rel = line.split(":")[-1].lstrip("/")
+                break
+    except OSError:
+        rel = ""
+    candidates: list[Path] = []
+    if rel:
+        candidates.append(Path("/sys/fs/cgroup") / rel / "memory.max")
+        candidates.append(Path("/sys/fs/cgroup/memory") / rel / "memory.limit_in_bytes")
+    candidates.extend(
+        (
+            Path("/sys/fs/cgroup/memory.max"),
+            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+        )
+    )
+    for path in candidates:
         try:
             raw = path.read_text().strip()
         except OSError:
             continue
         if not raw or raw == "max":
-            return None
+            continue
         try:
             n = int(raw)
         except ValueError:
-            return None
-        # Legacy cgroup v1 "no limit" sentinel.
+            continue
         if n >= 1 << 62:
-            return None
+            continue
         return n
     return None
 
@@ -330,13 +347,11 @@ def _env_flag(name: str) -> str:
 
 
 def _use_chromium() -> bool:
-    """Snap Chromium inside a 400MB API cgroup OOMs uvicorn; skip on small VPS."""
+    """Snap Chromium from the API cgroup OOMs this 1GB VPS. Opt in only."""
     flag = _env_flag("SANSKRIT_PDF_CHROMIUM")
-    if flag in ("0", "no", "false", "off"):
-        return False
     if flag in ("1", "yes", "true", "on"):
         return True
-    return not _pdf_low_ram()
+    return False
 
 
 def _allow_copy_fix(page_count: int) -> bool:

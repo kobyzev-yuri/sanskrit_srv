@@ -43,8 +43,9 @@ def test_translation_pdf_story_without_chromium(monkeypatch, tmp_path: Path):
     _storage(monkeypatch, tmp_path)
     monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
     monkeypatch.setenv("SANSKRIT_PDF_COPYFIX", "0")
-    from app.services.export_pdf import build_project_pdf, _chrome_bin
+    from app.services.export_pdf import build_project_pdf, _chrome_bin, _use_chromium
 
+    assert _use_chromium() is False
     assert _chrome_bin() is None
     pid = uuid.uuid4()
     path = build_project_pdf(
