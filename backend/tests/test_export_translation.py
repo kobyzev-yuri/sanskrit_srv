@@ -120,3 +120,32 @@ def test_story_pdf_embeds_figure(monkeypatch, tmp_path: Path):
     assert images, "figure PNG must be embedded, not left as [image]"
     assert "[image]" not in blob.lower()
 
+
+def test_story_pdf_copy_keeps_conjuncts(monkeypatch, tmp_path: Path):
+    _storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
+    monkeypatch.delenv("SANSKRIT_PDF_COPYFIX", raising=False)
+    import fitz
+
+    from app.services.export_pdf import build_project_pdf
+
+    html = """
+<article class="page-style">
+  <p class="sa" lang="sa">मन्त्रपुष्पम्</p>
+  <p class="ru">Мантрапушпам</p>
+  <p class="sa" lang="sa">रामकृष्ण मठ, खार, मुम्बई</p>
+  <p class="ru">Рамакришна Матх, Кхар, Мумбаи</p>
+</article>
+"""
+    path = build_project_pdf(uuid.uuid4(), "book-ru", "Mantra Pushpam", [(1, html, None)])
+    doc = fitz.open(path.as_posix())
+    try:
+        blob = "".join(page.get_text() for page in doc)
+    finally:
+        doc.close()
+    assert "रामकृष्ण" in blob
+    assert "मुम्बई" in blob
+    assert "मन्त्रपुष्पम्" in blob
+    assert "ę" not in blob
+    assert "Ĕ" not in blob
+

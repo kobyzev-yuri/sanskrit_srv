@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+from html.parser import HTMLParser
 from pathlib import Path
 
 import fitz
@@ -115,6 +116,7 @@ _SCAN_MAX_PX = 1400
 _SCAN_JPEG_Q = 78
 
 _CHROME_LOCK = threading.Lock()
+_NO_CHROME_LOGGED = False
 _CHROME_CANDIDATES = (
     "/snap/bin/chromium",
     "chromium",
@@ -155,7 +157,8 @@ def build_project_pdf(
     doc = fitz.open()
     body_n = 0
 
-    cover_doc = _html_to_doc(_cover_html(title, title_sa), mediabox)
+    cover_html = _cover_html(title, title_sa)
+    cover_doc = _html_to_doc(cover_html, mediabox, copy_html=cover_html)
     doc.insert_pdf(cover_doc)
     cover_doc.close()
 
@@ -169,6 +172,7 @@ def build_project_pdf(
             body_n += 1
 
         if frag:
+            copy_html = frag
             frag = _bind_images(
                 frag,
                 project_id,
@@ -176,28 +180,20 @@ def build_project_pdf(
                 source_project_id=source_project_id,
             )
             text_html = f"<section class='page' data-page='{page_no}'>{frag}</section>"
-            text_doc = _html_to_doc(text_html, mediabox)
+            text_doc = _html_to_doc(text_html, mediabox, copy_html=copy_html)
             doc.insert_pdf(text_doc)
             text_doc.close()
             body_n += 1
 
     if body_n == 0:
-        empty = _html_to_doc(
-            "<p class='centered'>(нет страниц с текстом для выгрузки)</p>", mediabox
-        )
+        empty_html = "<p class='centered'>(нет страниц с текстом для выгрузки)</p>"
+        empty = _html_to_doc(empty_html, mediabox, copy_html=empty_html)
         doc.insert_pdf(empty)
         empty.close()
 
-    try:
-        if not _allow_copy_fix(doc.page_count):
-            raise RuntimeError("copy-fix skipped (low RAM or large book)")
-        fixed = _fix_indic_copy(doc)
-        doc.close()
-        doc = fixed
-        engine = ("chromium" if _chrome_bin() else "story") + "+copyfix"
-    except Exception as exc:  # noqa: BLE001
-        log.warning("indic copy-fix skipped (%s)", exc)
-        engine = "chromium" if _chrome_bin() else "story"
+    engine = "chromium" if _chrome_bin() else "story"
+    if _copy_fix_enabled():
+        engine += "+copyfix"
 
     doc.set_metadata(
         {
@@ -248,20 +244,65 @@ def _page_text_lines(page: fitz.Page) -> list[tuple[str, fitz.Rect, float]]:
     return lines
 
 
-def _fix_indic_copy(src: fitz.Document) -> fitz.Document:
-    """Path-outline Devanagari pages + invisible clean Unicode for copy/paste."""
+def _html_copy_lines(html: str) -> list[str]:
+    """Plain text lines from page HTML — the Unicode we want Word to paste."""
+
+    class Parser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.parts: list[str] = []
+            self.skip = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            t = tag.lower()
+            if t in ("script", "style"):
+                self.skip += 1
+            if t in ("p", "h1", "h2", "h3", "br", "div", "li", "tr", "footer", "blockquote"):
+                self.parts.append("\n")
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() in ("script", "style") and self.skip:
+                self.skip -= 1
+
+        def handle_data(self, data: str) -> None:
+            if not self.skip:
+                self.parts.append(data)
+
+    parser = Parser()
+    parser.feed(html or "")
+    parser.close()
+    lines = [re.sub(r"\s+", " ", part).strip() for part in "".join(parser.parts).splitlines()]
+    return [line for line in lines if line]
+
+
+def _fix_indic_copy(
+    src: fitz.Document,
+    copy_lines: list[str] | None = None,
+) -> fitz.Document:
+    """Path-outline glyphs + invisible HTML Unicode so copy/paste is not ę/Ĕ."""
     font_path = _deva_fontfile()
     if not font_path:
         raise RuntimeError("no Devanagari font for copy-fix overlay")
     font = fitz.Font(fontfile=font_path)
+    html_iter = iter(copy_lines or [])
+    use_html = bool(copy_lines)
     out = fitz.open()
     for page in src:
         sample = page.get_text()
         n_deva = sum(1 for c in sample if "\u0900" <= c <= "\u097f")
-        if n_deva < 4:
+        slots = _page_text_lines(page)
+        overlay: list[tuple[str, fitz.Rect, float]] = []
+        if use_html:
+            for _text, bbox, size in slots:
+                nxt = next(html_iter, None)
+                if nxt is None:
+                    break
+                overlay.append((nxt, bbox, size))
+        else:
+            overlay = [(text, bbox, size) for text, bbox, size in slots]
+        if not use_html and n_deva < 4:
             out.insert_pdf(src, from_page=page.number, to_page=page.number)
             continue
-        lines = _page_text_lines(page)
         try:
             svg = page.get_svg_image(text_as_path=True)
             svg_doc = fitz.open("svg", svg.encode("utf-8"))
@@ -275,12 +316,23 @@ def _fix_indic_copy(src: fitz.Document) -> fitz.Document:
         dest = out.new_page(width=page.rect.width, height=page.rect.height)
         dest.show_pdf_page(dest.rect, one, 0)
         one.close()
-        if lines:
+        if overlay:
             tw = fitz.TextWriter(dest.rect)
-            for text, bbox, size in lines:
+            for text, bbox, size in overlay:
                 pos = fitz.Point(bbox.x0, bbox.y1 - 0.12 * size)
                 tw.append(pos, text, font=font, fontsize=size)
             tw.write_text(dest, render_mode=3)
+    leftover = list(html_iter)
+    if leftover and out.page_count:
+        last = out[-1]
+        tw = fitz.TextWriter(last.rect)
+        tw.append(
+            fitz.Point(_MARGIN, last.rect.y1 - _MARGIN),
+            "\n".join(leftover),
+            font=font,
+            fontsize=7.5,
+        )
+        tw.write_text(last, render_mode=3)
     return out
 
 
@@ -365,15 +417,12 @@ def _use_chromium() -> bool:
     return not _pdf_low_ram()
 
 
-def _allow_copy_fix(page_count: int) -> bool:
+def _copy_fix_enabled() -> bool:
+    """Per-page path-outline + HTML overlay. Cheap enough inside the API cgroup."""
     flag = _env_flag("SANSKRIT_PDF_COPYFIX")
     if flag in ("0", "no", "false", "off"):
         return False
-    if flag in ("1", "yes", "true", "on"):
-        return True
-    if _pdf_low_ram():
-        return False
-    return page_count <= 60
+    return True
 
 
 def _chrome_bin() -> str | None:
@@ -437,17 +486,34 @@ def _font_face_css() -> str:
     return "\n".join(parts)
 
 
-def _html_to_doc(body_html: str, mediabox: fitz.Rect) -> fitz.Document:
+def _html_to_doc(
+    body_html: str,
+    mediabox: fitz.Rect,
+    *,
+    copy_html: str | None = None,
+) -> fitz.Document:
+    global _NO_CHROME_LOGGED
     chrome = _chrome_bin()
     if chrome:
         with _CHROME_LOCK:
             try:
-                return _html_to_doc_chrome(chrome, body_html, mediabox)
+                doc = _html_to_doc_chrome(chrome, body_html, mediabox)
             except Exception as exc:  # noqa: BLE001
                 log.warning("chromium PDF failed (%s); falling back to Story", exc)
+                doc = _html_to_doc_story(body_html, mediabox)
     else:
-        log.warning("chromium not found; PDF text uses Story fallback")
-    return _html_to_doc_story(body_html, mediabox)
+        if not _NO_CHROME_LOGGED:
+            log.warning("chromium not used; PDF text uses Story fallback")
+            _NO_CHROME_LOGGED = True
+        doc = _html_to_doc_story(body_html, mediabox)
+    if copy_html is not None and _copy_fix_enabled():
+        try:
+            fixed = _fix_indic_copy(doc, _html_copy_lines(copy_html))
+            doc.close()
+            return fixed
+        except Exception as exc:  # noqa: BLE001
+            log.warning("indic copy-fix skipped (%s)", exc)
+    return doc
 
 
 def _html_to_doc_chrome(
