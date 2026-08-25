@@ -339,12 +339,12 @@ function syncExportButtons() {
   const docxI = $("#btn-export-docx-interleave");
   const trPdf = $("#btn-export-tr-pdf");
   const trDocx = $("#btn-export-tr-docx");
-  if (pdf) pdf.hidden = tr;
+  if (pdf) pdf.hidden = false;
+  if (docx) docx.hidden = false;
   if (pdfI) pdfI.hidden = tr;
-  if (docx) docx.hidden = tr;
   if (docxI) docxI.hidden = tr;
-  if (trPdf) trPdf.hidden = !tr;
-  if (trDocx) trDocx.hidden = !tr;
+  if (trPdf) trPdf.hidden = true;
+  if (trDocx) trDocx.hidden = true;
 }
 
 function syncTaskUi() {
