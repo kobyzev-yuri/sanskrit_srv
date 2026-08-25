@@ -88,7 +88,7 @@ h1.sa, .sa, span.sa, p.sa, footer.sa {
 footer, .footer {
   text-align: center; margin-top: 0.5em; font-size: 7.5pt; color: #6b6560;
 }
-img { max-width: 88%; max-height: 280pt; }
+img { max-width: 88%; max-height: 280pt; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 figure.page-figure { text-align: center; margin: 0.3em 0; }
 figure.page-figure img { max-width: 85%; max-height: 260pt; }
 table { width: 100%; border-collapse: collapse; margin: 0.3em 0; font-size: inherit; }
@@ -259,6 +259,7 @@ def _build_pdf_chrome_book(
     timeout = max(180, 60 + body_n * 2)
     with _CHROME_LOCK:
         doc = _html_to_doc_chrome(chrome, "".join(parts), mediabox, timeout=timeout)
+    _reembed_pdf_images(doc)
     doc.set_metadata(
         {
             "producer": "sanskrit_srv/chromium",
@@ -625,6 +626,7 @@ def _html_to_doc(
         with _CHROME_LOCK:
             try:
                 doc = _html_to_doc_chrome(chrome, body_html, mediabox)
+                _reembed_pdf_images(doc)
             except Exception as exc:  # noqa: BLE001
                 log.warning("chromium PDF failed (%s); falling back to Story", exc)
                 doc = _html_to_doc_story(body_html, mediabox)
@@ -751,6 +753,55 @@ def _append_scan_page(doc: fitz.Document, mediabox: fitz.Rect, scan_path: Path) 
         page.insert_image(rect, filename=scan_path.as_posix(), keep_proportion=True)
 
 
+def _figure_jpeg_bytes(path: Path) -> bytes | None:
+    """sRGB JPEG without ICC — Chrome otherwise stores ICCBased images some viewers cannot paint."""
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=88, optimize=True, icc_profile=b"")
+            return buf.getvalue()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _reembed_pdf_images(doc: fitz.Document) -> None:
+    """Replace Chromium image XObjects with DeviceRGB JPEGs at the same boxes."""
+    for page in doc:
+        planned: list[tuple[int, list[fitz.Rect], bytes]] = []
+        seen: set[int] = set()
+        for img in page.get_images(full=True):
+            xref = img[0]
+            if xref in seen:
+                continue
+            seen.add(xref)
+            rects = [r for r in page.get_image_rects(xref) if abs(r.width) >= 2 and abs(r.height) >= 2]
+            if not rects:
+                continue
+            try:
+                pix = fitz.Pixmap(doc, xref)
+                if pix.alpha or pix.n != 3:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                jpeg = pix.tobytes("jpeg")
+            except Exception:  # noqa: BLE001
+                continue
+            planned.append((xref, rects, jpeg))
+        done: set[int] = set()
+        for xref, rects, jpeg in planned:
+            if xref not in done:
+                try:
+                    page.delete_image(xref)
+                except Exception:  # noqa: BLE001
+                    pass
+                done.add(xref)
+            for rect in rects:
+                page.insert_image(rect, stream=jpeg, keep_proportion=False)
+
+
 def _scan_jpeg_bytes(scan_path: Path) -> bytes | None:
     try:
         from io import BytesIO
@@ -790,9 +841,13 @@ def _bind_images(
         )
         if path is None or not path.is_file():
             return m.group(0)
-        mime = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
-        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-        return f'src="data:{mime};base64,{b64}"'
+        jpeg = _figure_jpeg_bytes(path)
+        if jpeg is None:
+            mime = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+            return f'src="data:{mime};base64,{b64}"'
+        b64 = base64.b64encode(jpeg).decode("ascii")
+        return f'src="data:image/jpeg;base64,{b64}"'
 
     return _API_IMG_RE.sub(repl, html)
 
