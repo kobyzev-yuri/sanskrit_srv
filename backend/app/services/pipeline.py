@@ -13,8 +13,16 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Job, JobStatus, Page, PageStatus, PageVersion, Project, VersionSource, utcnow
 from app.services import storage
-from app.services.layout_assets import extract_embedded_figures, finalize_page_html
+from app.services.layout_assets import extract_embedded_figures, finalize_page_html, preserve_figure_srcs
 from app.services.llm_draft import revise_from_scan
+from app.services.llm_proofread import (
+    apply_proofread_suggestions,
+    gross_draft_items,
+    neighbor_html,
+    proofread_translation,
+    remaining_after_apply,
+    save_page_proofread,
+)
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, set_quota_alert
 from app.services.llm_translate import looks_like_translation_html, translate_from_source
 from app.services.llm_usage import record_usage
@@ -67,6 +75,7 @@ def enqueue_project_pipeline(
     force_llm: bool = False,
     open_only: bool = False,
     translate: bool = False,
+    proofread: bool = False,
 ) -> Job:
     job = Job(
         kind="pipeline_project",
@@ -76,7 +85,8 @@ def enqueue_project_pipeline(
             "force": force,
             "force_llm": force_llm,
             "open_only": open_only,
-            "translate": translate,
+            "translate": bool(translate) and not proofread,
+            "proofread": bool(proofread),
         },
         progress={"done": 0, "total": 0, "current_page": None},
     )
@@ -278,6 +288,80 @@ def process_one_translate_page(
     return f"translate:{model}"
 
 
+def process_one_translate_proofread(
+    db: Session,
+    page: Page,
+    *,
+    job_id: uuid.UUID | None = None,
+) -> str:
+    """Sense-check one translation page; auto-apply high-severity draft holes on open pages."""
+    project = db.get(Project, page.project_id)
+    if project is None or project_task(project) != "translate":
+        raise RuntimeError("not a translate project")
+    draft = (page.current_html or "").strip()
+    source = (page.source_html or "").strip()
+    if not draft:
+        return "skip_no_draft"
+    if not source:
+        return "skip_no_source"
+
+    nb = neighbor_html(db, page)
+    cfg = translation_cfg(project)
+    suggestions, model, usage = proofread_translation(
+        page_no=page.page_no,
+        source_html=source,
+        current_html=draft,
+        prev_draft=nb["prev_draft"],
+        prev_source=nb["prev_source"],
+        next_draft=nb["next_draft"],
+        next_source=nb["next_source"],
+        style=str(cfg.get("style") or "interlinear"),
+    )
+    record_usage(
+        db,
+        project_id=project.id,
+        page_id=page.id,
+        job_id=job_id,
+        network=str(usage.get("network") or "openrouter"),
+        model=str(usage.get("model") or model.split(":", 1)[-1]),
+        usage=usage,
+        operation="proofread",
+    )
+
+    applied: list[dict[str, str]] = []
+    html = page.current_html or ""
+    auto = gross_draft_items(suggestions)
+    if auto and not page_is_agreed(page):
+        html, applied = apply_proofread_suggestions(html, auto)
+        if applied:
+            html = preserve_figure_srcs(page.source_html or "", html)
+            bits = "; ".join(f"{a['wrong'][:40]}→…" for a in applied)
+            _save_version(
+                db,
+                page,
+                html,
+                VersionSource.llm,
+                f"proofread auto high | {model} | {bits}"[:500],
+                status=PageStatus.expert_review,
+            )
+
+    leftover = remaining_after_apply(suggestions, applied)
+    note = (
+        f"Автоправок грубых: {len(applied)}. Осталось предложений: {len(leftover)}."
+        if applied or leftover
+        else "Подозрительных мест не найдено."
+    )
+    save_page_proofread(
+        page.project_id,
+        page.id,
+        suggestions=leftover,
+        model=model,
+        note=note,
+        job_id=str(job_id) if job_id else None,
+    )
+    return f"proofread:{model}:high={len(applied)}:left={len(leftover)}"
+
+
 def process_one_page(
     db: Session,
     page: Page,
@@ -370,9 +454,13 @@ def run_pipeline_job(db: Session, job: Job) -> None:
     force = bool(payload.get("force"))
     force_llm = bool(payload.get("force_llm"))
     open_only = bool(payload.get("open_only"))
-    translate = bool(payload.get("translate")) or project_task(project) == "translate"
+    proofread = bool(payload.get("proofread"))
+    translate = (bool(payload.get("translate")) or project_task(project) == "translate") and not proofread
 
     try:
+        if proofread:
+            _run_translate_proofread(db, job, project, open_only=open_only)
+            return
         if translate:
             _run_translate_pipeline(db, job, project, open_only=open_only)
             return
@@ -650,3 +738,178 @@ def _run_translate_pipeline(
         "scope": "translate_all",
     }
     db.commit()
+
+
+def _run_translate_proofread(
+    db: Session,
+    job: Job,
+    project: Project,
+    *,
+    open_only: bool,
+) -> None:
+    if project_task(project) != "translate":
+        job.status = JobStatus.failed
+        job.error = "proofread-all is for translation projects"
+        db.commit()
+        return
+
+    pages = list(
+        db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+    )
+    if open_only:
+        pages = [p for p in pages if not page_is_agreed(p)]
+    pages = [p for p in pages if (p.current_html or "").strip() and (p.source_html or "").strip()]
+    total = len(pages)
+    set_job_progress(
+        db,
+        job,
+        done=0,
+        skipped=0,
+        applied_high=0,
+        flagged=0,
+        total=total,
+        current_page=None,
+        open_only=open_only,
+        scope="translate_proofread",
+        checked=[],
+    )
+
+    done = 0
+    skipped = 0
+    applied_high = 0
+    flagged = 0
+    checked: list[int] = []
+    idx = 0
+    rate_tries = 0
+    while idx < len(pages):
+        page = db.get(Page, pages[idx].id)
+        if page is None:
+            idx += 1
+            rate_tries = 0
+            continue
+        if page.page_no in checked:
+            idx += 1
+            continue
+        set_job_progress(
+            db,
+            job,
+            done=done,
+            skipped=skipped,
+            applied_high=applied_high,
+            flagged=flagged,
+            total=total,
+            current_page=page.page_no,
+            open_only=open_only,
+            scope="translate_proofread",
+            checked=checked,
+        )
+        try:
+            note = process_one_translate_proofread(db, page, job_id=job.id)
+            log.info("proofread translate page %s/%s: %s", page.page_no, total, note)
+            if note.startswith("skip_"):
+                skipped += 1
+            else:
+                done += 1
+                # Re-read leftover count from note: proofread:...:high=N:left=M
+                if ":high=" in note:
+                    try:
+                        applied_high += int(note.split(":high=")[1].split(":")[0])
+                        flagged += int(note.split(":left=")[1])
+                    except (IndexError, ValueError):
+                        pass
+            checked.append(page.page_no)
+            idx += 1
+            rate_tries = 0
+        except LlmQuotaError as exc:
+            msg = str(exc)
+            set_quota_alert(msg)
+            log.error("quota exhausted at proofread page %s: %s", page.page_no, msg)
+            job.status = JobStatus.failed
+            job.error = f"llm_quota at page {page.page_no}: {msg}"
+            set_job_progress(
+                db,
+                job,
+                done=done,
+                skipped=skipped,
+                applied_high=applied_high,
+                flagged=flagged,
+                total=total,
+                current_page=page.page_no,
+                last_error=job.error,
+                open_only=open_only,
+                scope="translate_proofread",
+                checked=checked,
+            )
+            project.status = "in_progress"
+            db.commit()
+            return
+        except LlmRateLimitError as exc:
+            rate_tries += 1
+            wait = min(30 * (2 ** (rate_tries - 1)), 180)
+            log.warning(
+                "proofread page %s rate-limited try %s/%s, sleep %ss: %s",
+                page.page_no,
+                rate_tries,
+                4,
+                wait,
+                exc,
+            )
+            set_job_progress(
+                db,
+                job,
+                done=done,
+                skipped=skipped,
+                applied_high=applied_high,
+                flagged=flagged,
+                total=total,
+                current_page=page.page_no,
+                last_error=str(exc)[:500],
+                rate_limited=True,
+                open_only=open_only,
+                scope="translate_proofread",
+                checked=checked,
+            )
+            if rate_tries >= 4:
+                skipped += 1
+                checked.append(page.page_no)
+                idx += 1
+                rate_tries = 0
+            else:
+                time.sleep(wait)
+            continue
+        except Exception as exc:  # noqa: BLE001
+            log.exception("proofread translate page %s failed", page.page_no)
+            set_job_progress(
+                db,
+                job,
+                done=done,
+                skipped=skipped,
+                applied_high=applied_high,
+                flagged=flagged,
+                total=total,
+                current_page=page.page_no,
+                last_error=str(exc)[:500],
+                open_only=open_only,
+                scope="translate_proofread",
+                checked=checked,
+            )
+            skipped += 1
+            checked.append(page.page_no)
+            idx += 1
+            rate_tries = 0
+
+    project.status = "in_progress"
+    job.status = JobStatus.done
+    set_job_progress(
+        db,
+        job,
+        done=done,
+        skipped=skipped,
+        applied_high=applied_high,
+        flagged=flagged,
+        total=total,
+        current_page=None,
+        open_only=open_only,
+        scope="translate_proofread",
+        checked=checked,
+    )

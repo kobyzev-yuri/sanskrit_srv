@@ -114,6 +114,27 @@ class ProjectSettingsIn(BaseModel):
     settings: dict[str, Any]
 
 
+class ProofreadSuggestion(BaseModel):
+    id: str
+    wrong: str
+    right: str
+    reason: str = ""
+    severity: str = "medium"
+    kind: str = ""  # incomplete | join | sanskrit | sense
+    target: str = "draft"  # draft | source | both
+
+
+class ProofreadOut(BaseModel):
+    suggestions: list[ProofreadSuggestion]
+    model: str = ""
+    note: str = ""
+
+
+class ProofreadApplyIn(BaseModel):
+    """Expert-accepted subset of proofread suggestions."""
+    accepted: list[ProofreadSuggestion] = Field(default_factory=list)
+
+
 class PageOut(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
@@ -122,6 +143,7 @@ class PageOut(BaseModel):
     has_scan: bool
     has_html: bool
     has_source_html: bool = False
+    proof_n: int = 0
     updated_at: datetime
 
     model_config = {"from_attributes": True}
@@ -135,6 +157,7 @@ class PageDetailOut(BaseModel):
     current_html: str | None
     source_html: str | None = None
     scan_url: str | None
+    proofread: ProofreadOut | None = None
     updated_at: datetime
 
 
@@ -151,25 +174,6 @@ class PageReviseIn(BaseModel):
 class PageReviewAgainIn(BaseModel):
     """Optional note; empty → default «пересмотри страницу»."""
     directive: str | None = Field(default=None, max_length=4000)
-
-
-class ProofreadSuggestion(BaseModel):
-    id: str
-    wrong: str
-    right: str
-    reason: str = ""
-    severity: str = "medium"
-
-
-class ProofreadOut(BaseModel):
-    suggestions: list[ProofreadSuggestion]
-    model: str
-    note: str = ""
-
-
-class ProofreadApplyIn(BaseModel):
-    """Expert-accepted subset of proofread suggestions."""
-    accepted: list[ProofreadSuggestion] = Field(default_factory=list)
 
 
 class PageVersionOut(BaseModel):

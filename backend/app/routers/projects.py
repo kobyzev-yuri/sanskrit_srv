@@ -466,6 +466,7 @@ def start_pipeline(
     force: bool = False,
     force_llm: bool = False,
     open_only: bool = False,
+    proofread: bool = False,
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
@@ -473,6 +474,7 @@ def start_pipeline(
 
     Digitize: extract + LLM draft (admin only).
     Translate: batch Russian translation (admin/expert/scholar; style must be agreed).
+    proofread=true (translate only): sense-check existing drafts; auto-fix high-severity holes.
 
     open_only=true → only pages that are not expert_done / scholar_review / published.
     open_only=false + force → all pages (including agreed; drafts overwritten).
@@ -482,7 +484,13 @@ def start_pipeline(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
 
     is_translate = project_task(project) == "translate"
-    if is_translate:
+    if proofread:
+        if not is_translate:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Смысловая проверка всего документа — только для проекта перевода",
+            )
+    elif is_translate:
         if not translation_agreed(project):
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -517,7 +525,8 @@ def start_pipeline(
         force=page_force,
         force_llm=force_llm,
         open_only=open_only,
-        translate=is_translate,
+        translate=is_translate and not proofread,
+        proofread=proofread,
     )
     return _project_out(db, project)
 

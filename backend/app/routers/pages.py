@@ -29,7 +29,16 @@ from app.services.layout_assets import (
     preserve_figure_srcs,
 )
 from app.services.llm_draft import revise_from_scan
-from app.services.llm_proofread import apply_proofread_suggestions, proofread_from_scan
+from app.services.llm_proofread import (
+    apply_proofread_suggestions,
+    load_page_proofread,
+    neighbor_html,
+    proofread_counts,
+    proofread_from_scan,
+    proofread_translation,
+    save_page_proofread,
+    split_by_target,
+)
 from app.services.llm_status import LlmQuotaError
 from app.services.llm_translate import translate_from_source
 from app.services.llm_usage import record_usage
@@ -46,7 +55,28 @@ def _uid(value: str) -> uuid.UUID:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found") from exc
 
 
-def _page_out(page: Page) -> PageOut:
+def _proofread_out(stored: dict | None) -> ProofreadOut | None:
+    if not stored:
+        return None
+    items = stored.get("suggestions") or []
+    suggestions = []
+    for s in items:
+        if not isinstance(s, dict):
+            continue
+        try:
+            suggestions.append(ProofreadSuggestion(**s))
+        except Exception:  # noqa: BLE001
+            continue
+    if not suggestions:
+        return None
+    return ProofreadOut(
+        suggestions=suggestions,
+        model=str(stored.get("model") or ""),
+        note=str(stored.get("note") or ""),
+    )
+
+
+def _page_out(page: Page, *, proof_n: int = 0) -> PageOut:
     return PageOut(
         id=page.id,
         project_id=page.project_id,
@@ -55,6 +85,7 @@ def _page_out(page: Page) -> PageOut:
         has_scan=bool(page.scan_path and Path(page.scan_path).exists()),
         has_html=bool(page.current_html),
         has_source_html=bool((page.source_html or "").strip()),
+        proof_n=proof_n,
         updated_at=page.updated_at,
     )
 
@@ -70,7 +101,8 @@ def list_pages(
     q = select(Page).where(Page.project_id == pid).order_by(Page.page_no)
     if status_filter:
         q = q.where(Page.status == status_filter)
-    return [_page_out(p) for p in db.scalars(q).all()]
+    counts = proofread_counts(pid)
+    return [_page_out(p, proof_n=counts.get(str(p.id), 0)) for p in db.scalars(q).all()]
 
 
 @router.get("/pages/{page_id}", response_model=PageDetailOut)
@@ -95,6 +127,7 @@ def get_page(page_id: str, user: User = Depends(get_current_user), db: Session =
             db.commit()
             db.refresh(page)
     scan_url = f"/api/v1/pages/{page.id}/scan" if page.scan_path and Path(page.scan_path).exists() else None
+    stored = load_page_proofread(page.project_id, page.id)
     return PageDetailOut(
         id=page.id,
         project_id=page.project_id,
@@ -103,6 +136,7 @@ def get_page(page_id: str, user: User = Depends(get_current_user), db: Session =
         current_html=page.current_html,
         source_html=page.source_html,
         scan_url=scan_url,
+        proofread=_proofread_out(stored),
         updated_at=page.updated_at,
     )
 
@@ -479,13 +513,30 @@ def review_again(
     return get_page(str(page.id), user, db)
 
 
+def _proofread_note(suggestions: list[dict], *, translate: bool) -> str:
+    n = len(suggestions)
+    if not n:
+        return "Подозрительных мест не найдено (или модель не уверена)."
+    extra = ""
+    if translate:
+        extra = (
+            " Грубые (high / незавершённый перевод, стык страниц) лучше принять; "
+            "тонкие (санскрит, смысл) — сверить и снять галочку, если это ложная тревога."
+        )
+    return (
+        f"Найдено предложений: {n}. "
+        "Отметьте нужные и нажмите «Применить выбранные» — остальное можно отклонить."
+        + extra
+    )
+
+
 @router.post("/pages/{page_id}/proofread", response_model=ProofreadOut)
 def proofread_page(
     page_id: str,
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Sense-check draft vs scan; return suggestions — does not change HTML."""
+    """Sense-check: digitize vs scan, or translation vs Sanskrit + neighbouring pages."""
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
@@ -494,16 +545,40 @@ def proofread_page(
             status.HTTP_400_BAD_REQUEST,
             detail="Page is accepted — revoke consent before proofread",
         )
-    if not page.scan_path or not Path(page.scan_path).exists():
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet")
     if not (page.current_html or "").strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no HTML draft")
+
+    project = db.get(Project, page.project_id)
+    is_translate = project is not None and project_task(project) == "translate"
     try:
-        suggestions, model, usage = proofread_from_scan(
-            Path(page.scan_path),
-            page_no=page.page_no,
-            current_html=page.current_html or "",
-        )
+        if is_translate:
+            if not (page.source_html or "").strip():
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail="Нет выверенного санскрита на этой странице",
+                )
+            nb = neighbor_html(db, page)
+            cfg = translation_cfg(project)
+            suggestions, model, usage = proofread_translation(
+                page_no=page.page_no,
+                source_html=page.source_html or "",
+                current_html=page.current_html or "",
+                prev_draft=nb["prev_draft"],
+                prev_source=nb["prev_source"],
+                next_draft=nb["next_draft"],
+                next_source=nb["next_source"],
+                style=str(cfg.get("style") or "interlinear"),
+            )
+        else:
+            if not page.scan_path or not Path(page.scan_path).exists():
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet")
+            suggestions, model, usage = proofread_from_scan(
+                Path(page.scan_path),
+                page_no=page.page_no,
+                current_html=page.current_html or "",
+            )
+    except HTTPException:
+        raise
     except LlmQuotaError as exc:
         raise HTTPException(
             status.HTTP_402_PAYMENT_REQUIRED,
@@ -516,17 +591,20 @@ def proofread_page(
         db,
         project_id=page.project_id,
         page_id=page.id,
-        network=str(usage.get("network") or "gemini"),
+        network=str(usage.get("network") or ("openrouter" if is_translate else "gemini")),
         model=str(usage.get("model") or model.split(":", 1)[-1]),
         usage=usage,
         operation="proofread",
     )
-    note = (
-        f"Найдено предложений: {len(suggestions)}. "
-        "Отметьте нужные и нажмите «Применить выбранные» — остальное можно отклонить."
-        if suggestions
-        else "Подозрительных мест не найдено (или модель не уверена)."
-    )
+    note = _proofread_note(suggestions, translate=is_translate)
+    if is_translate:
+        save_page_proofread(
+            page.project_id,
+            page.id,
+            suggestions=suggestions,
+            model=model,
+            note=note,
+        )
     return ProofreadOut(
         suggestions=[ProofreadSuggestion(**s) for s in suggestions],
         model=model,
@@ -541,7 +619,7 @@ def apply_proofread(
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Apply only the accepted proofread suggestions to current HTML."""
+    """Apply only the accepted proofread suggestions to current HTML (and source if asked)."""
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
@@ -554,14 +632,25 @@ def apply_proofread(
     if not accepted:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Nothing selected to apply")
 
-    html, applied = apply_proofread_suggestions(page.current_html or "", accepted)
-    if not applied:
+    draft_items, source_items = split_by_target(accepted)
+    html, applied = apply_proofread_suggestions(page.current_html or "", draft_items)
+    source_html = page.source_html or ""
+    applied_src: list[dict[str, str]] = []
+    if source_items and source_html:
+        source_html, applied_src = apply_proofread_suggestions(source_html, source_items)
+    if not applied and not applied_src:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail="Selected strings not found in current HTML (already changed?)",
         )
 
-    if page.scan_path and Path(page.scan_path).exists():
+    project = db.get(Project, page.project_id)
+    is_translate = project is not None and project_task(project) == "translate"
+    if is_translate and (page.source_html or "").strip():
+        html = preserve_figure_srcs(page.source_html or "", html)
+        if applied_src:
+            page.source_html = source_html
+    elif page.scan_path and Path(page.scan_path).exists():
         html = finalize_page_html(
             html,
             scan_path=Path(page.scan_path),
@@ -575,7 +664,9 @@ def apply_proofread(
     next_ver = (
         db.scalar(select(func.max(PageVersion.version)).where(PageVersion.page_id == page.id)) or 0
     ) + 1
-    note = "proofread-apply | " + "; ".join(f"{a['wrong']}→{a['right']}" for a in applied)
+    bits = [f"{a['wrong']}→{a['right']}" for a in applied]
+    bits += [f"src:{a['wrong']}→{a['right']}" for a in applied_src]
+    note = "proofread-apply | " + "; ".join(bits)
     db.add(
         PageVersion(
             page_id=page.id,
@@ -586,6 +677,33 @@ def apply_proofread(
             note=note[:500],
         )
     )
+    if is_translate:
+        leftover = [s.model_dump() for s in (body.accepted or [])]
+        # Keep stored items that were not in this apply payload (user left them unchecked).
+        stored = load_page_proofread(page.project_id, page.id)
+        prev_items = (stored or {}).get("suggestions") or []
+        applied_keys = {
+            (a.get("wrong"), a.get("right"), a.get("target") or "draft")
+            for a in (applied + applied_src)
+        }
+        selected_keys = {
+            (s.get("wrong"), s.get("right"), s.get("target") or "draft") for s in leftover
+        }
+        keep = []
+        for s in prev_items:
+            if not isinstance(s, dict):
+                continue
+            key = (s.get("wrong"), s.get("right"), s.get("target") or "draft")
+            if key in applied_keys or key in selected_keys:
+                continue
+            keep.append(s)
+        save_page_proofread(
+            page.project_id,
+            page.id,
+            suggestions=keep,
+            model=str((stored or {}).get("model") or ""),
+            note=str((stored or {}).get("note") or ""),
+        )
     db.commit()
     db.refresh(page)
     return get_page(str(page.id), user, db)

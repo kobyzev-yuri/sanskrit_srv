@@ -270,14 +270,23 @@ function pipelineLabel(p) {
     if (pipe && (pipe.status === "running" || pipe.status === "queued")) {
       const pr = pipe.progress || {};
       const scope = pr.open_only ? "несогласованные" : "все";
+      if (pr.scope === "translate_proofread") {
+        return `смысловая проверка перевода · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
+      }
       return `перевод на русский · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
     }
     if (pipe?.status === "failed") {
       const err = pipe.progress?.last_error || pipe.error || "";
-      return `перевод на русский · ошибка — ${String(err).slice(0, 80)}`;
+      const kind = pipe.progress?.scope === "translate_proofread" ? "смысловая проверка" : "перевод на русский";
+      return `${kind} · ошибка — ${String(err).slice(0, 80)}`;
     }
     if (pipe?.status === "done") {
       const pr = pipe.progress || {};
+      if (pr.scope === "translate_proofread") {
+        const flags = pr.flagged != null ? ` · замечаний ${pr.flagged}` : "";
+        const high = pr.applied_high != null ? ` · грубых правок ${pr.applied_high}` : "";
+        return `смысловая проверка перевода · готово ${pr.done ?? 0}/${pr.total ?? total}${high}${flags}`;
+      }
       return `перевод на русский · ${agreed} · готово ${pr.done ?? total}/${pr.total ?? total}`;
     }
     return `перевод на русский · ${agreed} · ${total} стр.`;
@@ -394,7 +403,12 @@ function syncTaskUi() {
       : "С чем не согласны — или: пересмотри страницу.";
   }
   const proof = $("#btn-proofread");
-  if (proof) proof.hidden = tr;
+  if (proof) {
+    proof.hidden = false;
+    proof.title = tr
+      ? "Смысловая проверка перевода: обрывы, стык страниц, санскрит, смысл"
+      : "Второй проход: смысловая проверка со сканом";
+  }
   const review = $("#btn-review-again");
   if (review) review.hidden = tr;
   const trPage = $("#btn-translate-page");
@@ -404,6 +418,7 @@ function syncTaskUi() {
     trPage.title = agreed ? "LLM переводит эту страницу по согласованному шаблону" : "Сначала согласуйте шаблон";
   }
   syncTranslateAllButtons();
+  syncProofreadAllButtons();
 
   const openTr = $("#btn-open-translate");
   const back = $("#btn-back-source");
@@ -428,15 +443,25 @@ function canRunTranslateAll() {
   return ["admin", "expert", "scholar"].includes(state.user?.role);
 }
 
+function pipelineBusy() {
+  return (
+    !!state.project?.pipeline &&
+    ["queued", "running"].includes(state.project.pipeline.status)
+  );
+}
+
+function isProofreadJob() {
+  return state.project?.pipeline?.progress?.scope === "translate_proofread";
+}
+
 function syncTranslateAllButtons() {
   const tr = isTranslate();
   const agreed = Boolean(translationCfg().agreed);
   const can = canRunTranslateAll();
-  const busy =
-    !!state.project?.pipeline &&
-    ["queued", "running"].includes(state.project.pipeline.status);
+  const busy = pipelineBusy();
+  const proofBusy = busy && isProofreadJob();
   const openOnly = state.thumbFilter === "open";
-  const label = busy
+  const label = busy && !proofBusy
     ? "Идёт перевод…"
     : openOnly
       ? "Перевести несогласованные"
@@ -458,6 +483,29 @@ function syncTranslateAllButtons() {
   }
 }
 
+function syncProofreadAllButtons() {
+  const tr = isTranslate();
+  const busy = pipelineBusy();
+  const proofBusy = busy && isProofreadJob();
+  const openOnly = state.thumbFilter === "open";
+  const label = proofBusy
+    ? "Идёт проверка…"
+    : openOnly
+      ? "Проверить несогласованные"
+      : "Смысловая проверка всех";
+  const title = openOnly
+    ? "Смысловая проверка страниц без согласия (фильтр включён)"
+    : "Пройти весь перевод: грубые обрывы исправить, тонкие — пометить";
+  for (const id of ["btn-proofread-all", "btn-proofread-all-page"]) {
+    const el = $(`#${id}`);
+    if (!el) continue;
+    el.hidden = !tr;
+    el.disabled = busy;
+    el.textContent = label;
+    el.title = title;
+  }
+}
+
 function updatePipelineBar() {
   const p = state.project;
   if (!p) return;
@@ -468,6 +516,7 @@ function updatePipelineBar() {
 
   if (tr) {
     syncTranslateAllButtons();
+    syncProofreadAllButtons();
     syncTaskUi();
     return;
   }
@@ -615,7 +664,11 @@ function renderThumbList() {
   list.innerHTML = shown
     .map(
       (p) => `
-    <button type="button" class="thumb-item" data-id="${p.id}" data-no="${p.page_no}" title="Стр. ${p.page_no}">
+    <button type="button" class="thumb-item${p.proof_n ? " has-proof" : ""}" data-id="${p.id}" data-no="${p.page_no}" title="${
+        p.proof_n
+          ? `Стр. ${p.page_no} · замечаний смысловой проверки: ${p.proof_n}`
+          : `Стр. ${p.page_no}`
+      }">
       <div class="thumb-frame ${p.has_scan ? "" : "pending"}">
         ${
           p.has_scan
@@ -626,7 +679,7 @@ function renderThumbList() {
         }
       </div>
       <div class="thumb-meta">
-        <span>${p.page_no}</span>
+        <span>${p.page_no}${p.proof_n ? ` · ${p.proof_n}` : ""}</span>
         <span class="thumb-badge ${statusBadgeClass(p.status)}" title="${p.status}"></span>
       </div>
     </button>`
@@ -704,6 +757,10 @@ function updateEditMode() {
     markWysiwygEditable(wyBox, !(accepted || pendingDraft));
   }
   const agreed = Boolean(translationCfg().agreed);
+  const proofBtn = $("#btn-proofread");
+  if (proofBtn) {
+    proofBtn.disabled = accepted || pendingDraft || !hasHtml;
+  }
   if (isTranslate()) {
     const trPage = $("#btn-translate-page");
     if (trPage) trPage.disabled = !agreed || accepted;
@@ -740,8 +797,9 @@ function startPipelinePoll() {
         renderThumbList();
         if (pageId) {
           const fresh = state.pages.find((p) => p.id === pageId);
-          // Reload open page only when this page's status actually changed (avoid blink).
-          if (fresh && fresh.status !== state.page.status) {
+          const proofScope = state.project.pipeline?.progress?.scope === "translate_proofread";
+          const proofTouch = proofScope && (curPage === pageNo || curStatus === "done");
+          if (fresh && (fresh.status !== state.page.status || (proofTouch && changed))) {
             await loadPage(pageId);
           }
         }
@@ -1181,6 +1239,22 @@ async function loadPage(pageId) {
   switchTab(accepted ? "preview" : draftTab());
   updateEditMode();
   await renderLeftPane();
+  const pendingNote = $("#proof-pending-note");
+  const stored = state.page.proofread;
+  if (accepted) {
+    if (pendingNote) {
+      const n = stored?.suggestions?.length || 0;
+      pendingNote.hidden = !n;
+      pendingNote.textContent = n
+        ? `Есть замечания смысловой проверки (${n}). Отзовите согласие, чтобы просмотреть и применить.`
+        : "";
+    }
+  } else if (stored?.suggestions?.length) {
+    if (pendingNote) pendingNote.hidden = true;
+    renderProofreadPanel(stored);
+  } else if (pendingNote) {
+    pendingNote.hidden = true;
+  }
 }
 
 async function renderLeftPane() {
@@ -1582,6 +1656,26 @@ function highlightFirstTextMatch(root, needle, id, isOn, title) {
   return true;
 }
 
+function proofKindLabel(kind) {
+  return (
+    {
+      incomplete: "обрыв",
+      join: "стык стр.",
+      sanskrit: "санскрит",
+      sense: "смысл",
+    }[kind] || ""
+  );
+}
+
+function proofTargetLabel(target) {
+  return (
+    {
+      source: "слева",
+      both: "оба",
+    }[target] || ""
+  );
+}
+
 function renderProofreadPanel(result) {
   const box = $("#proofread-box");
   const list = $("#proofread-list");
@@ -1596,16 +1690,21 @@ function renderProofreadPanel(result) {
     return;
   }
   list.innerHTML = state.proofSuggestions
-    .map(
-      (s) => `<label class="proof-item">
+    .map((s) => {
+      const kind = proofKindLabel(s.kind);
+      const tgt = proofTargetLabel(s.target);
+      const tags = [kind, tgt].filter(Boolean)
+        .map((t) => `<span class="kind">${escapeHtml(t)}</span>`)
+        .join("");
+      return `<label class="proof-item">
       <input type="checkbox" checked data-id="${escapeHtml(s.id)}" />
       <span>
-        <span class="sev">${escapeHtml(s.severity || "medium")}</span>
+        <span class="sev">${escapeHtml(s.severity || "medium")}</span>${tags}
         <div class="sa-pair"><span class="sa">${escapeHtml(s.wrong)}</span> → <span class="sa">${escapeHtml(s.right)}</span></div>
         <div class="reason">${escapeHtml(s.reason || "")}</div>
       </span>
-    </label>`
-    )
+    </label>`;
+    })
     .join("");
   list.querySelectorAll("input[type=checkbox]").forEach((cb) => {
     cb.onchange = () => syncProofHighlightClasses();
@@ -1613,6 +1712,13 @@ function renderProofreadPanel(result) {
   box.hidden = false;
   switchTab("preview");
   renderPreview($("#html-editor").value);
+  const left = $("#left-source-html");
+  if (left && isTranslate()) {
+    const srcItems = state.proofSuggestions.filter(
+      (s) => s.target === "source" || s.target === "both"
+    );
+    if (srcItems.length) highlightProofSuggestions(left, srcItems);
+  }
 }
 
 async function runProofread() {
@@ -1622,7 +1728,9 @@ async function runProofread() {
   $("#btn-revise").disabled = true;
   $("#btn-review-again").disabled = true;
   if (btn) btn.disabled = true;
-  st.textContent = "Смысловая проверка… до 1–2 мин";
+  st.textContent = isTranslate()
+    ? "Смысловая проверка перевода… до 1–2 мин"
+    : "Смысловая проверка… до 1–2 мин";
   try {
     const result = await api(`/pages/${state.page.id}/proofread`, { method: "POST" });
     renderProofreadPanel(result);
@@ -1632,6 +1740,10 @@ async function runProofread() {
         : "Подозрительных мест не найдено"
     );
     st.textContent = "проверка готова";
+    if (state.project?.id) {
+      state.pages = await api(`/projects/${state.project.id}/pages`);
+      renderThumbList();
+    }
   } catch (e) {
     toast(e.message, true);
     st.textContent = "";
@@ -1656,8 +1768,16 @@ async function applySelectedProofs() {
     });
     clearProofread();
     setDraftHtml(state.page.current_html || "");
+    if (isTranslate()) await renderLeftPane();
     switchTab("preview");
     toast(`Применено правок: ${accepted.length}`);
+    if (state.page.proofread?.suggestions?.length) {
+      renderProofreadPanel(state.page.proofread);
+    }
+    if (state.project?.id) {
+      state.pages = await api(`/projects/${state.project.id}/pages`);
+      renderThumbList();
+    }
   } catch (e) {
     toast(e.message, true);
   }
@@ -1703,6 +1823,35 @@ async function startPipeline() {
       method: "POST",
     });
     toast(tr ? "Запущен перевод страниц" : "Запущен перевод всей книги");
+    updatePipelineBar();
+    startPipelinePoll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function startProofreadAll() {
+  if (!state.project || !isTranslate()) return;
+  const openOnly = state.thumbFilter === "open";
+  const n = openOnly
+    ? state.pages.filter((p) => p.status !== "expert_done" && p.has_html).length
+    : state.pages.filter((p) => p.has_html).length;
+  if (!n) {
+    toast(openOnly ? "Нет несогласованных страниц с переводом" : "Нет страниц с переводом", true);
+    return;
+  }
+  const msg = openOnly
+    ? `Смысловая проверка ${n} несогласованных страниц?\nГрубые обрывы перевода будут исправлены; тонкие замечания появятся в списке на странице.`
+    : `Проверить все ${n} страниц (включая согласованные)?\nНа согласованных правки не применятся сами — только пометки. Грубые обрывы на несогласованных исправятся.`;
+  if (!confirm(msg)) return;
+  const params = new URLSearchParams();
+  params.set("proofread", "true");
+  params.set("open_only", openOnly ? "true" : "false");
+  try {
+    state.project = await api(`/projects/${state.project.id}/pipeline?${params}`, {
+      method: "POST",
+    });
+    toast("Запущена смысловая проверка перевода");
     updatePipelineBar();
     startPipelinePoll();
   } catch (e) {
@@ -1965,6 +2114,10 @@ function wire() {
   if (btnTrAll) btnTrAll.onclick = startPipeline;
   const btnTrAllPage = $("#btn-translate-all-page");
   if (btnTrAllPage) btnTrAllPage.onclick = startPipeline;
+  const btnProofreadAll = $("#btn-proofread-all");
+  if (btnProofreadAll) btnProofreadAll.onclick = startProofreadAll;
+  const btnProofreadAllPage = $("#btn-proofread-all-page");
+  if (btnProofreadAllPage) btnProofreadAllPage.onclick = startProofreadAll;
   const btnOpenTr = $("#btn-open-translate");
   if (btnOpenTr) btnOpenTr.onclick = () => onOpenTranslate();
   const btnBackSrc = $("#btn-back-source");

@@ -266,6 +266,9 @@ textarea {
 .thumb-badge.ok { background: #5faf7a; }
 .thumb-badge.edit { background: #d4a017; }
 .thumb-badge.wait { background: #6b6256; }
+.thumb-item.has-proof .thumb-meta span:first-child {
+  color: #e8c36a;
+}
 
 .reader-main {
   display: grid;
@@ -665,7 +668,19 @@ textarea {
   letter-spacing: 0.03em;
   color: #8a6a3d;
 }
-.html-preview mark.proof-hit {
+.proof-item .kind {
+  display: inline-block;
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #5a6a48;
+  background: #e8eedc;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+}
+.html-preview mark.proof-hit,
+.source-html-pane mark.proof-hit {
   background: #ffe08a;
   color: inherit;
   padding: 0 0.1em;
@@ -673,7 +688,8 @@ textarea {
   box-shadow: inset 0 -2px 0 #e0a800;
   cursor: help;
 }
-.html-preview mark.proof-hit.is-on {
+.html-preview mark.proof-hit.is-on,
+.source-html-pane mark.proof-hit.is-on {
   background: #c8e6a0;
   box-shadow: inset 0 -2px 0 #6a9a30;
 }

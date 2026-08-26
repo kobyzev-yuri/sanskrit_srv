@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260825pdf2" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260826proof1" />
 </head>
 <body>
   <div class="app-shell">
@@ -133,6 +133,7 @@
               <button type="button" class="primary" id="btn-agree-style">Согласовать шаблон</button>
               <button type="button" id="btn-revoke-style" hidden>Отозвать шаблон</button>
               <button type="button" class="primary" id="btn-translate-all" hidden>Перевести все</button>
+              <button type="button" id="btn-proofread-all" hidden>Смысловая проверка всех</button>
               <span class="muted" id="style-agreed-mark"></span>
             </div>
             <div class="toolbar extract-bar" id="usage-bar" hidden>
@@ -173,6 +174,7 @@
                 </div>
                 <div id="accepted-box" class="directive-box" hidden>
                   <p style="margin:0">Страница <strong>согласована</strong>. Чтобы править — отзовите согласие. PDF доступен всегда.</p>
+                  <p class="muted" id="proof-pending-note" hidden style="margin:0.5rem 0 0"></p>
                   <div class="edit-actions" style="padding:0;border:0;background:transparent">
                     <button type="button" id="btn-revoke">Отозвать согласие</button>
                   </div>
@@ -186,7 +188,8 @@
                       <button type="button" id="btn-review-again">Пересмотри страницу</button>
                       <button type="button" id="btn-translate-page" hidden>Перевести страницу</button>
                       <button type="button" id="btn-translate-all-page" hidden>Перевести все</button>
-                      <button type="button" id="btn-proofread" title="Второй проход: смысловая проверка со сканом">Смысловая проверка</button>
+                      <button type="button" id="btn-proofread" title="Второй проход: смысловая проверка">Смысловая проверка</button>
+                      <button type="button" id="btn-proofread-all-page" hidden>Проверить все</button>
                       <span class="muted" id="revise-status"></span>
                     </div>
                   </div>
@@ -308,6 +311,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260825pdf3"></script>
+  <script src="/assets/app.js?v=20260826proof1"></script>
 </body>
 </html>
