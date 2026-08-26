@@ -1,4 +1,4 @@
-"""Draft / revise page HTML from scan via vision LLM (OpenRouter ox-alpha / ProxyAPI)."""
+"""Draft / revise page HTML from scan via vision LLM (Gemini AI Studio / OpenRouter / ProxyAPI)."""
 from __future__ import annotations
 
 import base64
@@ -25,7 +25,7 @@ from app.services.llm_route import (
     model_plan_primary_only,
     require_keys_for_plan,
 )
-from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
+from app.services.llm_usage import parse_anthropic_usage, parse_openai_usage
 
 BASE_PROMPT = """You restore a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
 
@@ -335,9 +335,7 @@ def revise_from_scan(
 
     for model in _uniq(gemini_models):
         try:
-            html, usage = _call_gemini(
-                effective_proxyapi_key(), settings.gemini_base_url, model, user_text, image_b64
-            )
+            html, usage = _call_gemini(model, user_text, image_b64)
             usage = {**usage, "network": "gemini", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"gemini:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
@@ -427,9 +425,7 @@ def run_vision_prompt(
 
     for model in _uniq(plan["gemini"]):
         try:
-            text, usage = _call_gemini(
-                effective_proxyapi_key(), settings.gemini_base_url, model, user_text, image_b64
-            )
+            text, usage = _call_gemini(model, user_text, image_b64)
             usage = {**usage, "network": "gemini", "model": model}
             return text, f"gemini:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
@@ -599,43 +595,17 @@ def _call_anthropic(
 
 
 def _call_gemini(
-    api_key: str, base_url: str, model: str, user_text: str, image_b64: str
+    model: str, user_text: str, image_b64: str
 ) -> tuple[str, dict[str, Any]]:
-    url = f"{base_url.rstrip('/')}/v1beta/models/{model}:generateContent"
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": user_text},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
-                ],
-            }
+    from app.services.gemini_client import generate_gemini_content
+
+    return generate_gemini_content(
+        model=model,
+        parts=[
+            {"text": user_text},
+            {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
         ],
-        "generationConfig": {"temperature": 0, "maxOutputTokens": 8192},
-    }
-    resp = httpx.post(
-        url,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=180,
     )
-    if resp.status_code != 200:
-        body = resp.text[:400]
-        if is_quota_response(resp.status_code, body):
-            msg = "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
-            set_quota_alert(msg)
-            raise LlmQuotaError(msg)
-        raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
-    data = resp.json()
-    cands = data.get("candidates") or []
-    if not cands:
-        raise RuntimeError("empty candidates")
-    parts = cands[0].get("content", {}).get("parts") or []
-    text = "".join(p.get("text", "") for p in parts)
-    if not text.strip():
-        raise RuntimeError("empty text")
-    return text, parse_gemini_usage(data)
 
 
 def _call_openai(

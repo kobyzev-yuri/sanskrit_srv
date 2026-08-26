@@ -1,4 +1,4 @@
-"""LLM route defaults: OpenRouter ox-alpha vs ProxyAPI Gemini/Opus."""
+"""LLM route defaults: Gemini AI Studio vs OpenRouter / ProxyAPI Opus."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -14,7 +14,9 @@ def _settings(tmp_path, **kwargs):
         storage_root=storage,
         openrouter_model="stealth/ox-alpha",
         anthropic_model="claude-opus-5",
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-2.5-pro",
+        gemini_api_key="studio-test",
+        gemini_base_url="https://generativelanguage.googleapis.com",
         openai_model="gpt-4o-mini",
         openrouter_api_key="sk-or-test",
         openai_api_key="",
@@ -24,17 +26,17 @@ def _settings(tmp_path, **kwargs):
     return SimpleNamespace(**defaults)
 
 
-def test_default_route_is_openrouter(tmp_path, monkeypatch):
+def test_default_route_is_gemini(tmp_path, monkeypatch):
     from app.services import llm_route as lr
 
     monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
-    assert get_route() == "openrouter"
+    assert get_route() == "gemini"
     plan = model_plan()
-    assert plan["openrouter"] == ["stealth/ox-alpha"]
-    assert plan["anthropic"] == []
-    assert plan["gemini"] == []
+    assert plan["gemini"][:1] == ["gemini-2.5-pro"]
+    assert plan["openrouter"] == []
+    assert plan["openai"] == []
     desc = describe_route()
-    assert desc["primary"] == {"provider": "openrouter", "model": "stealth/ox-alpha"}
+    assert desc["primary"] == {"provider": "gemini", "model": "gemini-2.5-pro"}
     assert [o["id"] for o in desc["options"]] == ["openrouter", "gemini", "opus"]
 
 
@@ -47,7 +49,7 @@ def test_opus_route_uses_proxyapi(tmp_path, monkeypatch):
     plan = model_plan()
     assert plan["anthropic"] == ["claude-opus-5"]
     assert plan["openrouter"] == []
-    assert "gemini-2.5-flash" in plan["gemini"]
+    assert "gemini-2.5-pro" in plan["gemini"]
 
 
 def test_primary_only_follows_saved_route(tmp_path, monkeypatch):
@@ -56,7 +58,7 @@ def test_primary_only_follows_saved_route(tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path, openai_api_key="px"))
     set_route("gemini", updated_by="t")
     plan = model_plan_primary_only()
-    assert plan["gemini"][:1] == ["gemini-2.5-flash"]
+    assert plan["gemini"][:1] == ["gemini-2.5-pro"]
     assert plan["openrouter"] == []
     assert plan["anthropic"] == []
     set_route("openrouter", updated_by="t")

@@ -81,10 +81,11 @@ def _me_llm_out(user: User) -> MeLlmOut:
         openrouter_hint=_key_hint(user.openrouter_api_key),
         proxyapi_hint=_key_hint(user.proxyapi_key),
         options=list(effective.get("options") or []),
-        default_route=str(default.get("route") or "openrouter"),
+        default_route=str(default.get("route") or "gemini"),
         default_label=str(default.get("label") or ""),
         default_openrouter_key=bool(default.get("openrouter_key")),
         default_proxyapi_key=bool(default.get("proxyapi_key")),
+        default_gemini_key=bool(default.get("gemini_key")),
     )
 
 

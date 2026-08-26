@@ -1,4 +1,4 @@
-"""Admin-selectable LLM route: OpenRouter ox-alpha (default) vs ProxyAPI Gemini/Opus."""
+"""Admin-selectable LLM route: Gemini (AI Studio default) vs OpenRouter / ProxyAPI Opus."""
 from __future__ import annotations
 
 import json
@@ -17,13 +17,13 @@ RouteId = Literal["openrouter", "gemini", "opus"]
 ROUTES: dict[RouteId, dict[str, str]] = {
     "openrouter": {
         "id": "openrouter",
-        "label": "Ox Alpha (OpenRouter, бесплатно)",
-        "hint": "stealth/ox-alpha: текст + картинка скана, контекст 1M. ProxyAPI не вызывается.",
+        "label": "OpenRouter",
+        "hint": "Модель OPENROUTER_MODEL. Нужен OPENROUTER_API_KEY.",
     },
     "gemini": {
         "id": "gemini",
-        "label": "Gemini (ProxyAPI, платно)",
-        "hint": "Основной: Gemini Flash через ProxyAPI. Запасной: OpenAI. Claude не вызывается.",
+        "label": "Gemini 2.5 Pro (Google AI Studio)",
+        "hint": "Скан + перевод через Gemini Pro. Ключ GEMINI_API_KEY (AI Studio). ProxyAPI не нужен.",
     },
     "opus": {
         "id": "opus",
@@ -55,13 +55,17 @@ class LlmCreds:
     route: RouteId
     openrouter_api_key: str
     openai_api_key: str
+    gemini_api_key: str
     user_id: uuid.UUID | None
     key_source: str  # default | personal
 
     @property
     def key_hint(self) -> str | None:
-        key = self.openrouter_api_key if self.route == "openrouter" else self.openai_api_key
-        return _key_hint(key)
+        if self.route == "openrouter":
+            return _key_hint(self.openrouter_api_key)
+        if self.route == "gemini" and self.gemini_api_key:
+            return _key_hint(self.gemini_api_key)
+        return _key_hint(self.openai_api_key)
 
 
 _llm_creds: ContextVar[LlmCreds | None] = ContextVar("llm_creds", default=None)
@@ -71,7 +75,7 @@ def get_global_route() -> RouteId:
     """Backoffice file `data/llm_route.json` — not the expert's personal override."""
     path = _route_path()
     if not path.is_file():
-        return "openrouter"
+        return "gemini"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         route = str(data.get("route") or "").strip()
@@ -79,7 +83,7 @@ def get_global_route() -> RouteId:
             return route  # type: ignore[return-value]
     except (OSError, json.JSONDecodeError, TypeError):
         pass
-    return "openrouter"
+    return "gemini"
 
 
 def creds_from_settings(*, user_id: uuid.UUID | None = None) -> LlmCreds:
@@ -89,6 +93,7 @@ def creds_from_settings(*, user_id: uuid.UUID | None = None) -> LlmCreds:
         route=get_global_route(),
         openrouter_api_key=(settings.openrouter_api_key or "").strip(),
         openai_api_key=(settings.openai_api_key or "").strip(),
+        gemini_api_key=(settings.gemini_api_key or "").strip(),
         user_id=user_id,
         key_source="default",
     )
@@ -110,6 +115,7 @@ def creds_from_user(user: Any | None) -> LlmCreds:
         route=route,
         openrouter_api_key=(getattr(user, "openrouter_api_key", None) or "").strip(),
         openai_api_key=(getattr(user, "proxyapi_key", None) or "").strip(),
+        gemini_api_key="",
         user_id=uid,
         key_source="personal",
     )
@@ -160,7 +166,13 @@ def require_keys_for_plan(plan: dict[str, list[str]]) -> None:
             if personal
             else "OPENROUTER_API_KEY missing in server .env"
         )
-    if (plan.get("anthropic") or plan.get("gemini") or plan.get("openai")) and not creds.openai_api_key:
+    if plan.get("gemini") and not creds.gemini_api_key and not creds.openai_api_key:
+        raise RuntimeError(
+            "В кабинете не задан ключ ProxyAPI для Gemini (или вернитесь к токенам бэкофиса)."
+            if personal
+            else "GEMINI_API_KEY missing in server .env (AI Studio)"
+        )
+    if (plan.get("anthropic") or plan.get("openai")) and not creds.openai_api_key:
         raise RuntimeError(
             "В кабинете не задан ключ ProxyAPI (или вернитесь к токенам бэкофиса)."
             if personal
@@ -188,7 +200,7 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
     meta = ROUTES[route]
     or_model = (settings.openrouter_model or "").strip() or "stealth/ox-alpha"
     opus_model = (settings.anthropic_model or "").strip() or "claude-opus-5"
-    gemini_model = (settings.gemini_model or "").strip() or "gemini-2.5-flash"
+    gemini_model = (settings.gemini_model or "").strip() or "gemini-2.5-pro"
     openai_model = (settings.openai_model or "").strip() or "gpt-4o-mini"
     primaries = {
         "openrouter": {"provider": "openrouter", "model": or_model},
@@ -215,6 +227,7 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
         "updated_at": _read_updated_at(),
         "openrouter_key": bool(creds.openrouter_api_key if effective else (settings.openrouter_api_key or "").strip()),
         "proxyapi_key": bool(creds.openai_api_key if effective else (settings.openai_api_key or "").strip()),
+        "gemini_key": bool(creds.gemini_api_key if effective else (settings.gemini_api_key or "").strip()),
         "key_source": creds.key_source if effective else "default",
         "use_default": creds.use_default if effective else True,
     }
@@ -241,10 +254,10 @@ def model_plan() -> dict[str, list[str]]:
     plan = _empty_plan()
     or_model = (settings.openrouter_model or "").strip() or "stealth/ox-alpha"
     opus = (settings.anthropic_model or "").strip() or "claude-opus-5"
-    gemini_primary = (settings.gemini_model or "").strip()
+    gemini_primary = (settings.gemini_model or "").strip() or "gemini-2.5-pro"
     geminis = [
         m
-        for m in [gemini_primary, "gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.0-flash"]
+        for m in [gemini_primary, "gemini-2.5-pro", "gemini-2.5-flash"]
         if m and not m.lower().startswith("claude")
     ]
     seen: set[str] = set()
@@ -267,7 +280,8 @@ def model_plan() -> dict[str, list[str]]:
         plan["openai"] = openai_models
         return plan
     plan["gemini"] = gemini_models
-    plan["openai"] = openai_models
+    if not (current_creds().gemini_api_key or "").strip():
+        plan["openai"] = openai_models
     return plan
 
 

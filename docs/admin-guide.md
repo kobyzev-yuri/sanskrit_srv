@@ -118,15 +118,16 @@
 | `JWT_SECRET` | да | Длинная случайная строка для подписи токенов |
 | `STORAGE_ROOT` | да | Каталог файлов проекта (сканы, PDF) |
 | `CORS_ORIGINS` | нет | Список origin через запятую; `*` для alpha |
-| `OPENROUTER_API_KEY` | да* | Ключ OpenRouter для Ox Alpha (`*` нужен для LLM по умолчанию) |
+| `OPENROUTER_API_KEY` | нет | Ключ OpenRouter (маршрут OpenRouter) |
 | `OPENROUTER_BASE_URL` | нет | По умолчанию `https://openrouter.ai/api/v1` |
 | `OPENROUTER_MODEL` | нет | По умолчанию `stealth/ox-alpha` |
-| `OPENROUTER_MAX_TOKENS` | нет | Лимит completion (по умолчанию `32768`; модель до 131k) |
-| `OPENAI_API_KEY` | нет* | Ключ ProxyAPI — нужен только для маршрутов Gemini / Opus |
+| `OPENROUTER_MAX_TOKENS` | нет | Лимит completion OpenRouter |
+| `GEMINI_API_KEY` | да* | Ключ [Google AI Studio](https://aistudio.google.com/apikey) для Gemini (`*` нужен для LLM по умолчанию) |
+| `GEMINI_BASE_URL` | нет | По умолчанию `https://generativelanguage.googleapis.com` |
+| `GEMINI_MODEL` | нет | По умолчанию `gemini-2.5-pro`. **Не** ставьте сюда `claude-*` |
+| `OPENAI_API_KEY` | нет* | Ключ ProxyAPI — нужен только для маршрута Opus |
 | `OPENAI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/openai/v1` |
 | `OPENAI_MODEL` | нет | Модель OpenAI-канала, по умолчанию `gpt-4o-mini` |
-| `GEMINI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/google` |
-| `GEMINI_MODEL` | нет | Модель Gemini-канала, по умолчанию `gemini-2.5-flash`. **Не** ставьте сюда `claude-*` |
 | `ANTHROPIC_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/anthropic` |
 | `ANTHROPIC_MODEL` | нет | Claude на маршруте Opus (напр. `claude-opus-5`) |
 | `LARGE_BOOK_PAGES` | нет | Порог подтверждения «перевести всю книгу» (по умолчанию `100`) |
@@ -139,7 +140,7 @@
 LLM_PRICE_PER_1M={"gemini:gemini-2.5-flash":{"in":0.1,"out":0.4},"openai:gpt-4o-mini":{"in":0.15,"out":0.6}}
 ```
 
-Ключ: `сеть:модель`. Для ProxyAPI сверяйте тарифы вручную. Ox Alpha на OpenRouter в preview — $0.
+Ключ: `сеть:модель`. Для ProxyAPI сверяйте тарифы вручную. Gemini AI Studio free-tier может использовать промпты для обучения моделей Google.
 
 Приложение ищет `.env` в: текущий каталог → корень репозитория → `/opt/sanskrit_srv/.env`.
 
@@ -167,11 +168,10 @@ python -m app.cli user-reset-password --email u@x --password '...'
 1. Пользователи (создание / роли / логин). Колонка **Токены бэкофиса** — можно ли эксперту брать ключи и маршрут из `.env` / блока «Маршрут LLM». Снятая галочка: только свои ключи в кабинете.
 2. **Расход токенов** — по проектам и сетям (OpenRouter / Gemini / Anthropic / OpenAI): входящие (промпт) / исходящие (ответ) / всего / вызовы. Ниже — **по пользователям и ключам**: свои ключи эксперта отдельно от токенов бэкофиса (`key_source` + последние 4 символа ключа, сам ключ не хранится в отчёте).
 3. **Маршрут LLM** — переключатель в бэкофисе (список строится с сервера):
-   - **Ox Alpha (OpenRouter, бесплатно)** — по умолчанию; скан уходит картинкой, ProxyAPI не вызывается;
-   - **Gemini (ProxyAPI)** — Flash, запасной OpenAI;
+   - **Gemini 2.5 Pro (Google AI Studio)** — по умолчанию; скан уходит картинкой, ключ `GEMINI_API_KEY`;
+   - **OpenRouter** — если задан `OPENROUTER_API_KEY` (ox-alpha больше нет в живом каталоге);
    - **Claude Opus (ProxyAPI)** — Opus, запасные Gemini и OpenAI.
    Выбор пишется в `data/llm_route.json` и действует сразу (без правки `.env` / без рестарта) на перевод, пересмотр и смысловую проверку.
-   Если на сервере уже сохранён старый `gemini`/`opus`, переключите радио на Ox Alpha один раз.
 4. Каталог моделей (OpenRouter + ProxyAPI, справочник id).
 
 Конкретные id задаются в `.env`: `OPENROUTER_MODEL`, `GEMINI_MODEL`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`.

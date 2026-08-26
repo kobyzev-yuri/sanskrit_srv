@@ -109,6 +109,7 @@ class MeLlmOut(BaseModel):
     default_label: str
     default_openrouter_key: bool
     default_proxyapi_key: bool
+    default_gemini_key: bool = False
 
 
 class JobOut(BaseModel):
@@ -383,6 +384,7 @@ class LlmRouteOut(BaseModel):
     updated_at: float | None = None
     openrouter_key: bool = False
     proxyapi_key: bool = False
+    gemini_key: bool = False
     key_source: str = "default"
     use_default: bool = True
 

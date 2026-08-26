@@ -37,13 +37,15 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: str = "https://api.proxyapi.ru/openai/v1"
     openai_model: str = "gpt-4o-mini"
-    gemini_base_url: str = "https://api.proxyapi.ru/google"
-    gemini_model: str = "gemini-2.5-flash"
+    # Google AI Studio key (preferred for Gemini). Empty → ProxyAPI Google gateway + OPENAI_API_KEY.
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com"
+    gemini_model: str = "gemini-2.5-pro"
     # Claude via ProxyAPI Anthropic gateway (same OPENAI_API_KEY).
     anthropic_base_url: str = "https://api.proxyapi.ru/anthropic"
     anthropic_model: str = ""  # e.g. claude-opus-5 — empty = skip Claude
 
-    # OpenRouter (default chat/vision). stealth/ox-alpha: text+image, 1M context.
+    # OpenRouter (optional). stealth/ox-alpha is gone from the live catalog.
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "stealth/ox-alpha"

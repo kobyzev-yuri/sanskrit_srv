@@ -35,7 +35,8 @@ def _settings(tmp_path, **kwargs):
         storage_root=storage,
         openrouter_model="stealth/ox-alpha",
         anthropic_model="claude-opus-5",
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-2.5-pro",
+        gemini_api_key="studio-admin",
         openai_model="gpt-4o-mini",
         openrouter_api_key="sk-or-admin",
         openai_api_key="px-admin",
@@ -53,6 +54,7 @@ def test_default_user_inherits_admin_keys(tmp_path, monkeypatch):
     assert creds.use_default is True
     assert creds.key_source == "default"
     assert creds.openrouter_api_key == "sk-or-admin"
+    assert creds.gemini_api_key == "studio-admin"
     assert creds.key_hint == "dmin"
 
 
@@ -69,7 +71,7 @@ def test_personal_keys_override_route(tmp_path, monkeypatch):
     with llm_user_context(user):
         assert get_route() == "gemini"
         plan = model_plan_primary_only()
-        assert plan["gemini"][:1] == ["gemini-2.5-flash"]
+        assert plan["gemini"][:1] == ["gemini-2.5-pro"]
         assert plan["openrouter"] == []
         creds = creds_from_user(user)
         assert creds.key_source == "personal"
@@ -89,3 +91,15 @@ def test_denied_default_requires_own_key(tmp_path, monkeypatch):
     with llm_user_context(user):
         with pytest.raises(RuntimeError, match="кабинете"):
             require_keys_for_plan({"openrouter": ["stealth/ox-alpha"], "anthropic": [], "gemini": [], "openai": []})
+
+
+def test_studio_gemini_does_not_need_proxyapi(tmp_path, monkeypatch):
+    from app.services import llm_route as lr
+
+    monkeypatch.setattr(
+        lr,
+        "get_settings",
+        lambda: _settings(tmp_path, openai_api_key="", gemini_api_key="studio-only"),
+    )
+    with llm_user_context(_user()):
+        require_keys_for_plan({"openrouter": [], "anthropic": [], "gemini": ["gemini-2.5-pro"], "openai": []})

@@ -158,13 +158,38 @@ def llm_status() -> dict[str, Any]:
                     "message": (
                         "В кабинете не задан ключ OpenRouter."
                         if creds.key_source == "personal"
-                        else "OPENROUTER_API_KEY не задан в .env — нужен для Ox Alpha."
+                        else "OPENROUTER_API_KEY не задан в .env."
                     ),
                     "balance": None,
                     "balance_ok": False,
                     "balance_error": "OPENROUTER_API_KEY missing",
                 }
             )
+        if alert.get("active"):
+            return attach(
+                {
+                    "ok": False,
+                    "warning": True,
+                    "code": alert.get("code") or "llm_quota",
+                    "message": alert.get("message"),
+                    "balance": None,
+                    "balance_ok": True,
+                    "balance_error": None,
+                }
+            )
+        return attach(
+            {
+                "ok": True,
+                "warning": False,
+                "code": None,
+                "message": live,
+                "balance": None,
+                "balance_ok": True,
+                "balance_error": None,
+            }
+        )
+
+    if route == "gemini" and creds.gemini_api_key:
         if alert.get("active"):
             return attach(
                 {
@@ -225,4 +250,6 @@ def settings_key_ok() -> bool:
     creds = current_creds()
     if get_route() == "openrouter":
         return bool(creds.openrouter_api_key)
+    if get_route() == "gemini":
+        return bool(creds.gemini_api_key or creds.openai_api_key)
     return bool(creds.openai_api_key)

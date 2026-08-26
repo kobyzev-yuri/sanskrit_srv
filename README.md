@@ -25,7 +25,7 @@
 
 ## Что умеет alpha
 
-- Загрузка PDF-скана → нарезка страниц → vision-LLM черновик HTML (по умолчанию OpenRouter `stealth/ox-alpha`; запасные Gemini/Opus через ProxyAPI)
+- Загрузка PDF-скана → нарезка страниц → vision-LLM черновик HTML (по умолчанию Gemini 2.5 Pro через Google AI Studio; запасные OpenRouter / Opus через ProxyAPI)
 - Редактор: скан слева, превью/HTML справа; статусы **согласовано** / **на правке**
 - Точечный пересмотр страницы заданием на естественном языке
 - Экспорт PDF (текст) и PDF «скан ‖ текст»
@@ -37,7 +37,7 @@
 
 ## Быстрый старт (локально)
 
-Требования: **Python 3.12+**, ключ [OpenRouter](https://openrouter.ai) (`OPENROUTER_API_KEY`) для перевода страниц. ProxyAPI — опционально, если в бэкофисе выбран Gemini/Opus.
+Требования: **Python 3.12+**, ключ [Google AI Studio](https://aistudio.google.com/apikey) (`GEMINI_API_KEY`) для оцифровки и перевода страниц. OpenRouter / ProxyAPI — опционально.
 
 ```bash
 git clone git@github.com:kobyzev-yuri/sanskrit_srv.git
@@ -47,7 +47,7 @@ source .venv/bin/activate
 pip install -r backend/requirements.txt
 
 cp .env.example .env
-# отредактируйте JWT_SECRET и OPENROUTER_API_KEY
+# отредактируйте JWT_SECRET и GEMINI_API_KEY
 
 mkdir -p data storage
 cd backend

@@ -28,12 +28,11 @@ AdminUser = Depends(require_roles(Role.admin))
 
 
 DEFAULT_LLM_CATALOG = [
-    {"provider": "openrouter", "model": "stealth/ox-alpha", "label": "Ox Alpha (OpenRouter, text+image)"},
+    {"provider": "gemini", "model": "gemini-2.5-pro", "label": "Gemini 2.5 Pro (Google AI Studio, text+image)"},
+    {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (Google AI Studio)"},
+    {"provider": "openrouter", "model": "stealth/ox-alpha", "label": "Ox Alpha (OpenRouter — каталог может быть пуст)"},
     {"provider": "anthropic", "model": "claude-opus-5", "label": "Claude Opus 5 (ProxyAPI)"},
     {"provider": "anthropic", "model": "claude-opus-4-6", "label": "Claude Opus 4.6 (ProxyAPI)"},
-    {"provider": "gemini", "model": "gemini-3.5-flash", "label": "Gemini 3.5 Flash (ProxyAPI)"},
-    {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (ProxyAPI)"},
-    {"provider": "gemini", "model": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview (ProxyAPI)"},
     {"provider": "openai", "model": "gpt-4o-mini", "label": "GPT-4o mini (ProxyAPI)"},
     {"provider": "openai", "model": "gpt-4o", "label": "GPT-4o (ProxyAPI)"},
 ]
@@ -113,9 +112,11 @@ def llm_catalog(_: User = AdminUser):
     route = describe_route()
     or_ok = bool((settings.openrouter_api_key or "").strip())
     px_ok = bool((settings.openai_api_key or "").strip())
+    ge_ok = bool((settings.gemini_api_key or "").strip())
     keys = []
-    keys.append("OpenRouter ключ задан." if or_ok else "OPENROUTER_API_KEY MISSING — нужен для Ox Alpha.")
-    keys.append("ProxyAPI ключ задан." if px_ok else "OPENAI_API_KEY (ProxyAPI) не задан — Gemini/Opus недоступны.")
+    keys.append("Gemini AI Studio ключ задан." if ge_ok else "GEMINI_API_KEY MISSING — нужен для Gemini 2.5 Pro.")
+    keys.append("OpenRouter ключ задан." if or_ok else "OPENROUTER_API_KEY не задан (маршрут OpenRouter).")
+    keys.append("ProxyAPI ключ задан." if px_ok else "OPENAI_API_KEY (ProxyAPI) не задан — Opus недоступен.")
     return LlmCatalogOut(
         models=DEFAULT_LLM_CATALOG,
         note=(

@@ -2432,7 +2432,7 @@ async function loadAccountLlm() {
   }
   if (hint) {
     hint.textContent = llm.allow_default_llm
-      ? `Бэкофис: ${llm.default_label}. OpenRouter ${llm.default_openrouter_key ? "задан" : "не задан"}, ProxyAPI ${llm.default_proxyapi_key ? "задан" : "не задан"}.`
+      ? `Бэкофис: ${llm.default_label}. Gemini ${llm.default_gemini_key ? "задан" : "не задан"}, OpenRouter ${llm.default_openrouter_key ? "задан" : "не задан"}, ProxyAPI ${llm.default_proxyapi_key ? "задан" : "не задан"}.`
       : "Администратор не назначил вам токены сервера — нужен свой ключ OpenRouter или ProxyAPI.";
   }
   if (useDef) {

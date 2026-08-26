@@ -60,7 +60,7 @@
           <div class="modal-card">
             <h2>Большая книга</h2>
             <p id="large-book-text" class="muted"></p>
-            <p>Перевести <strong>все страницы</strong>? Для скана это LLM по каждой странице (время; Ox Alpha на OpenRouter бесплатно, Gemini/Opus — расход ProxyAPI).</p>
+            <p>Перевести <strong>все страницы</strong>? Для скана это LLM по каждой странице (время; Gemini 2.5 Pro через Google AI Studio, Opus — расход ProxyAPI).</p>
             <div class="edit-actions" style="border:0;padding:0;background:transparent">
               <button type="button" class="primary" id="btn-confirm-whole-book">Да, перевести всю книгу</button>
               <button type="button" id="btn-cancel-whole-book">Пока не переводить</button>
@@ -380,7 +380,7 @@
             <h2>Каталог LLM</h2>
             <p class="muted" id="llm-note"></p>
             <ul id="llm-catalog"></ul>
-            <p class="muted">Ключи в <code>.env</code>: <code>OPENROUTER_API_KEY</code> (Ox Alpha) и при необходимости <code>OPENAI_API_KEY</code> (ProxyAPI). Id: <code>OPENROUTER_MODEL</code> / <code>GEMINI_MODEL</code> / <code>ANTHROPIC_MODEL</code>.</p>
+            <p class="muted">Ключи в <code>.env</code>: <code>GEMINI_API_KEY</code> (AI Studio, маршрут по умолчанию) и при необходимости <code>OPENROUTER_API_KEY</code> / <code>OPENAI_API_KEY</code> (ProxyAPI). Id: <code>GEMINI_MODEL</code> / <code>OPENROUTER_MODEL</code> / <code>ANTHROPIC_MODEL</code>.</p>
           </div>
         </div>
       </section>
