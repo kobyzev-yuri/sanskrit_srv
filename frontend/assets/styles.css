@@ -166,7 +166,7 @@ textarea {
   color: #f3ebe0;
   border-radius: 12px;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr;
   min-height: 0;
   overflow: hidden;
   border: 1px solid #3d372f;
@@ -199,52 +199,71 @@ textarea {
   margin: 0;
 }
 .draft-search {
-  display: grid;
-  gap: 0.2rem;
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 18rem;
+  min-width: 16rem;
+  gap: 0.4rem;
 }
 .draft-search input[type="search"] {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 10rem;
   box-sizing: border-box;
-  border: 1px solid #5a4f42;
-  background: #1c1916;
-  color: #f3ebe0;
-  border-radius: 6px;
-  padding: 0.28rem 0.45rem;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
   font: inherit;
-  font-size: 0.8rem;
+  min-height: 2.15rem;
 }
 .draft-search input[type="search"]:focus {
   outline: none;
-  border-color: #e0c39a;
+  border-color: #b08958;
+  box-shadow: 0 0 0 2px rgba(176, 137, 88, 0.25);
+}
+.draft-search button[type="submit"] {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.75rem;
 }
 .draft-search-hits {
-  max-height: 28vh;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: min(50vh, 22rem);
   overflow: auto;
-  padding: 0.35rem 0.5rem 0.55rem;
-  border-bottom: 1px solid #3d372f;
+  padding: 0.4rem;
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(40, 30, 10, 0.12);
   scrollbar-width: thin;
 }
 .draft-search-hit {
   text-align: left;
-  border: 1px solid #3d372f;
-  background: #1c1916;
-  color: #f3ebe0;
-  border-radius: 6px;
-  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
   cursor: pointer;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 0.85rem;
   line-height: 1.35;
 }
 .draft-search-hit:hover,
 .draft-search-hit.active {
-  border-color: #e0c39a;
+  border-color: #b08958;
+  background: #fff8ee;
 }
 .draft-search-hit .sn {
-  color: #cfc4b4;
+  color: var(--muted);
   font-family: var(--font-sa), serif;
   display: block;
   margin-top: 0.15rem;
@@ -353,6 +372,8 @@ mark.draft-hl-current {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 0.45rem 0.65rem;
+  overflow: visible;
+  z-index: 6;
 }
 .reader-title { min-width: 0; }
 .reader-title strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
