@@ -471,8 +471,7 @@ function syncTranslateAllButtons() {
     : openOnly
       ? "Перевести страницы без согласия (фильтр включён)"
       : "Перевести все страницы книги";
-  const ids = ["btn-translate-all", "btn-translate-all-page"];
-  if (tr) ids.push("btn-start-pipeline");
+  const ids = ["btn-translate-all"];
   for (const id of ids) {
     const el = $(`#${id}`);
     if (!el) continue;
@@ -496,7 +495,7 @@ function syncProofreadAllButtons() {
   const title = openOnly
     ? "Смысловая проверка страниц без согласия (фильтр включён)"
     : "Пройти весь перевод: грубые обрывы исправить, тонкие — пометить";
-  for (const id of ["btn-proofread-all", "btn-proofread-all-page"]) {
+  for (const id of ["btn-proofread-all"]) {
     const el = $(`#${id}`);
     if (!el) continue;
     el.hidden = !tr;
@@ -515,6 +514,7 @@ function updatePipelineBar() {
   const busy = p.pipeline && ["queued", "running"].includes(p.pipeline.status);
 
   if (tr) {
+    if (btn) btn.hidden = true;
     syncTranslateAllButtons();
     syncProofreadAllButtons();
     syncTaskUi();
@@ -2128,12 +2128,8 @@ function wire() {
   $("#btn-start-pipeline").onclick = startPipeline;
   const btnTrAll = $("#btn-translate-all");
   if (btnTrAll) btnTrAll.onclick = startPipeline;
-  const btnTrAllPage = $("#btn-translate-all-page");
-  if (btnTrAllPage) btnTrAllPage.onclick = startPipeline;
   const btnProofreadAll = $("#btn-proofread-all");
   if (btnProofreadAll) btnProofreadAll.onclick = startProofreadAll;
-  const btnProofreadAllPage = $("#btn-proofread-all-page");
-  if (btnProofreadAllPage) btnProofreadAllPage.onclick = startProofreadAll;
   const btnOpenTr = $("#btn-open-translate");
   if (btnOpenTr) btnOpenTr.onclick = () => onOpenTranslate();
   const btnBackSrc = $("#btn-back-source");

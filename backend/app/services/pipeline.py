@@ -67,6 +67,11 @@ def set_job_progress(db: Session, job: Job, **fields) -> None:
     db.commit()
 
 
+def job_is_cancelled(db: Session, job: Job) -> bool:
+    db.refresh(job, attribute_names=["status"])
+    return job.status == JobStatus.cancelled
+
+
 def enqueue_project_pipeline(
     db: Session,
     project_id: uuid.UUID,
@@ -507,6 +512,11 @@ def run_pipeline_job(db: Session, job: Job) -> None:
             page = db.get(Page, page.id)
             if page is None:
                 continue
+            if job_is_cancelled(db, job):
+                log.info("digitize pipeline cancelled at page %s", page.page_no)
+                project.status = "in_progress"
+                db.commit()
+                return
             job.progress = {
                 "done": done,
                 "total": total,
@@ -628,6 +638,11 @@ def _run_translate_pipeline(
             idx += 1
             rate_tries = 0
             continue
+        if job_is_cancelled(db, job):
+            log.info("translate pipeline cancelled at page %s", page.page_no)
+            project.status = "in_progress"
+            db.commit()
+            return
         job.progress = {
             "done": done,
             "skipped": skipped,
@@ -790,6 +805,11 @@ def _run_translate_proofread(
         if page.page_no in checked:
             idx += 1
             continue
+        if job_is_cancelled(db, job):
+            log.info("proofread pipeline cancelled at page %s", page.page_no)
+            project.status = "in_progress"
+            db.commit()
+            return
         set_job_progress(
             db,
             job,

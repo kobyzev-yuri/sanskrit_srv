@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import get_settings
 from app.db import get_db
@@ -528,6 +529,37 @@ def start_pipeline(
         translate=is_translate and not proofread,
         proofread=proofread,
     )
+    return _project_out(db, project)
+
+
+@router.post("/{project_id}/pipeline/cancel", response_model=ProjectOut)
+def cancel_pipeline(
+    project_id: str,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Stop the running / queued project pipeline after the current page."""
+    project = db.get(Project, _uid(project_id))
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    job = db.scalar(
+        select(Job)
+        .where(
+            Job.project_id == project.id,
+            Job.status.in_([JobStatus.queued, JobStatus.running]),
+        )
+        .order_by(Job.created_at.desc())
+    )
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Нет запущенного конвейера")
+    job.status = JobStatus.cancelled
+    job.error = "cancelled by user"
+    prog = dict(job.progress or {}) if isinstance(job.progress, dict) else {}
+    prog["cancelled"] = True
+    job.progress = prog
+    flag_modified(job, "progress")
+    project.status = "in_progress"
+    db.commit()
     return _project_out(db, project)
 
 
