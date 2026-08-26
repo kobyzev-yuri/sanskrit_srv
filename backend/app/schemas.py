@@ -244,6 +244,7 @@ class PageDetailOut(BaseModel):
 class PageHtmlIn(BaseModel):
     html: str
     note: str | None = None
+    source_html: str | None = None
 
 
 class PageReviseIn(BaseModel):

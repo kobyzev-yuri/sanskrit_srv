@@ -380,8 +380,16 @@ function syncTaskUi() {
   }
   const scanWrap = $("#left-scan-wrap");
   const sourceBox = $("#left-source-html");
+  const srcTabs = $("#source-tabs");
+  const srcEditor = $("#left-source-editor");
   if (scanWrap) scanWrap.hidden = tr;
-  if (sourceBox) sourceBox.hidden = !tr;
+  if (sourceBox) sourceBox.hidden = !tr || $("#left-panel")?.classList.contains("source-tab-html");
+  if (srcTabs) srcTabs.hidden = !tr;
+  if (!tr) {
+    $("#left-panel")?.classList.remove("source-tab-html");
+    if (srcEditor) srcEditor.hidden = true;
+    if (sourceBox) sourceBox.hidden = true;
+  }
 
   const styleBar = $("#style-bar");
   if (styleBar) styleBar.hidden = !tr;
@@ -913,6 +921,8 @@ function updateEditMode() {
   if (wyTab) wyTab.hidden = accepted;
   if (accepted) switchTab("preview");
   $("#html-editor").readOnly = accepted || pendingDraft;
+  const srcEd = $("#left-source-editor");
+  if (srcEd) srcEd.readOnly = accepted || pendingDraft;
   const wyBox = $("#html-wysiwyg");
   if (wyBox && !wyBox.querySelector(".wy-empty")) {
     markWysiwygEditable(wyBox, !(accepted || pendingDraft));
@@ -1071,6 +1081,44 @@ function flushWysiwyg() {
 function currentDraftHtml() {
   if (isWysiwygActive()) flushWysiwyg();
   return $("#html-editor").value;
+}
+
+function setSourceHtml(html) {
+  const ed = $("#left-source-editor");
+  if (ed) ed.value = html || "";
+}
+
+function currentSourceHtml() {
+  const ed = $("#left-source-editor");
+  if (ed && isTranslate()) return ed.value;
+  return state.page?.source_html || "";
+}
+
+function switchSourceTab(name) {
+  const panel = $("#left-panel");
+  const preview = $("#left-source-html");
+  const editor = $("#left-source-editor");
+  const htmlOn = name === "html";
+  if (panel) panel.classList.toggle("source-tab-html", htmlOn);
+  $$("#source-tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.sourceTab === name));
+  if (preview) preview.hidden = !isTranslate() || htmlOn;
+  if (editor) editor.hidden = !isTranslate() || !htmlOn;
+  const sub = $("#left-pane-sub");
+  if (sub && isTranslate()) {
+    sub.textContent = htmlOn ? "в оцифровку — новой версией" : "выверенный текст";
+  }
+  if (!htmlOn && isTranslate()) renderLeftPane();
+}
+
+function pageSavePayload(note) {
+  const payload = { html: currentDraftHtml(), note };
+  if (isTranslate()) {
+    const src = currentSourceHtml();
+    if ((src || "").trim() && src !== (state.page?.source_html || "")) {
+      payload.source_html = src;
+    }
+  }
+  return payload;
 }
 
 function looksRussian(el) {
@@ -1415,9 +1463,13 @@ async function loadPage(pageId) {
     el.classList.toggle("active", el.dataset.id === String(pageId));
   });
   setDraftHtml(state.page.current_html || "");
+  setSourceHtml(state.page.source_html || "");
   const accepted =
     state.page.status === "expert_done" && Boolean((state.page.current_html || "").trim());
   switchTab(accepted ? "preview" : draftTab());
+  if (isTranslate() && $("#left-panel")?.classList.contains("source-tab-html")) {
+    switchSourceTab("html");
+  }
   updateEditMode();
   await renderLeftPane();
   const pendingNote = $("#proof-pending-note");
@@ -1449,7 +1501,7 @@ async function renderLeftPane() {
     }
     if (empty) empty.hidden = true;
     if (!sourceBox) return;
-    const src = (state.page?.source_html || "").trim();
+    const src = currentSourceHtml();
     sourceBox.innerHTML = src
       ? src
       : `<p class="muted">На этой странице нет выверенного санскрита.</p>`;
@@ -1496,13 +1548,17 @@ function jumpToPageNo() {
 async function saveHtml() {
   if (!state.page) return;
   try {
+    const payload = pageSavePayload("manual edit");
+    const synced = Boolean(payload.source_html && state.project?.source_project_id);
     state.page = await api(`/pages/${state.page.id}`, {
       method: "PATCH",
-      json: { html: currentDraftHtml(), note: "manual edit" },
+      json: payload,
     });
     setDraftHtml(state.page.current_html || $("#html-editor").value);
+    setSourceHtml(state.page.source_html || "");
     $("#page-status").textContent = state.page.status;
-    toast("Сохранено");
+    toast(synced ? "Сохранено. Санскрит записан в оцифровку новой версией" : "Сохранено");
+    await renderLeftPane();
     // refresh page list statuses
     state.pages = await api(`/projects/${state.project.id}/pages`);
     renderThumbList();
@@ -1526,12 +1582,16 @@ async function acceptPage() {
       toast("Нет черновика — нечего согласовать", true);
       return;
     }
-    if (html !== saved) {
+    const payload = pageSavePayload("edit before accept");
+    payload.html = html;
+    const needSave = html !== saved || Boolean(payload.source_html);
+    if (needSave) {
       state.page = await api(`/pages/${state.page.id}`, {
         method: "PATCH",
-        json: { html, note: "edit before accept" },
+        json: payload,
       });
       setDraftHtml(state.page.current_html || html);
+      setSourceHtml(state.page.source_html || "");
     }
     const acceptedId = state.page.id;
     const openAfter = visiblePages().filter((p) => p.id !== acceptedId);
@@ -1964,9 +2024,15 @@ async function applySelectedProofs() {
     });
     clearProofread();
     setDraftHtml(state.page.current_html || "");
+    setSourceHtml(state.page.source_html || "");
     if (isTranslate()) await renderLeftPane();
     switchTab("preview");
-    toast(`Применено правок: ${accepted.length}`);
+    const srcN = accepted.filter((s) => s.target === "source" || s.target === "both").length;
+    toast(
+      srcN && state.project?.source_project_id
+        ? `Применено правок: ${accepted.length}. Санскрит записан в оцифровку новой версией`
+        : `Применено правок: ${accepted.length}`
+    );
     if (state.page.proofread?.suggestions?.length) {
       renderProofreadPanel(state.page.proofread);
     }
@@ -2577,6 +2643,9 @@ function wire() {
   }
   $$("#preview-panel .tab[data-tab]").forEach((t) => {
     t.onclick = () => switchTab(t.dataset.tab);
+  });
+  $$("#source-tabs .tab").forEach((t) => {
+    t.onclick = () => switchSourceTab(t.dataset.sourceTab);
   });
   $$(".agent-tabs .tab").forEach((t) => {
     t.onclick = () => switchAgentTab(t.dataset.agentTab);

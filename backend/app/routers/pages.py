@@ -45,6 +45,7 @@ from app.services.llm_status import LlmQuotaError
 from app.services.llm_translate import translate_from_source
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
+from app.services.source_sync import sync_sanskrit_to_digitize
 from app.services.translation_style import project_task, translation_agreed, translation_cfg
 
 router = APIRouter(tags=["pages"])
@@ -211,12 +212,20 @@ def save_html(
 
     page.current_html = body.html
     project = db.get(Project, page.project_id)
-    if (
-        project is not None
-        and project_task(project) == "translate"
-        and (page.source_html or "").strip()
-    ):
+    is_translate = project is not None and project_task(project) == "translate"
+    if is_translate and (page.source_html or "").strip():
         page.current_html = preserve_figure_srcs(page.source_html or "", page.current_html or "")
+
+    incoming_source = body.source_html if is_translate else None
+    source_changed = False
+    if incoming_source is not None and incoming_source.strip():
+        if incoming_source != (page.source_html or ""):
+            page.source_html = incoming_source
+            source_changed = True
+            # Figures in the Russian draft still follow the (possibly new) Sanskrit HTML.
+            if (page.current_html or "").strip():
+                page.current_html = preserve_figure_srcs(page.source_html or "", page.current_html or "")
+
     if page.status in (PageStatus.pending, PageStatus.llm_draft, PageStatus.ocr):
         page.status = PageStatus.expert_review
 
@@ -224,6 +233,10 @@ def save_html(
         db.scalar(select(func.max(PageVersion.version)).where(PageVersion.page_id == page.id)) or 0
     ) + 1
     source = VersionSource.expert if user.role in (Role.admin, Role.expert) else VersionSource.scholar
+    note = body.note
+    if source_changed:
+        extra = "source html edited"
+        note = f"{note} | {extra}" if note else extra
     db.add(
         PageVersion(
             page_id=page.id,
@@ -231,9 +244,18 @@ def save_html(
             html=page.current_html or body.html,
             source=source,
             created_by=user.id,
-            note=body.note,
+            note=note,
         )
     )
+    if source_changed:
+        sync_sanskrit_to_digitize(
+            db,
+            translate_project=project,
+            translate_page=page,
+            html=page.source_html or "",
+            user=user,
+            reason=body.note or "manual edit",
+        )
     db.commit()
     db.refresh(page)
     return get_page(str(page.id), user, db)
@@ -672,9 +694,18 @@ def apply_proofread(
     project = db.get(Project, page.project_id)
     is_translate = project is not None and project_task(project) == "translate"
     if is_translate and (page.source_html or "").strip():
-        html = preserve_figure_srcs(page.source_html or "", html)
         if applied_src:
             page.source_html = source_html
+        html = preserve_figure_srcs(page.source_html or "", html)
+        if applied_src:
+            sync_sanskrit_to_digitize(
+                db,
+                translate_project=project,
+                translate_page=page,
+                html=page.source_html or "",
+                user=user,
+                reason="proofread source",
+            )
     elif page.scan_path and Path(page.scan_path).exists():
         html = finalize_page_html(
             html,
