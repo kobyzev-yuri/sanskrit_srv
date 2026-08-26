@@ -69,7 +69,7 @@ def test_generate_429_exhausted_raises_rate_limit():
     def always_429(*_a, **_k):
         return _Resp(429, "RESOURCE_EXHAUSTED")
 
-    with pytest.raises(LlmRateLimitError, match="временно не принимает"):
+    with pytest.raises(LlmRateLimitError, match="5 запросов в минуту"):
         generate_gemini_content(
             model="gemini-3.1-pro-preview",
             parts=[{"text": "hi"}],
@@ -103,3 +103,41 @@ def test_generate_credits_depleted_is_quota_not_retry():
             post=once,
         )
     assert calls["n"] == 1
+
+
+def test_daily_quota_429_does_not_retry():
+    from app.services.llm_status import gemini_quota_wait_message
+
+    body = (
+        '{"error":{"code":429,"message":"You exceeded your current quota",'
+        '"details":[{"retryDelay":"7200s"},'
+        '{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}]}}'
+    )
+    msg = gemini_quota_wait_message(body, 7200)
+    assert "Суточный" in msg
+    assert "ч" in msg
+
+    calls = {"n": 0}
+
+    def once(*_a, **_k):
+        calls["n"] += 1
+        return _Resp(429, body, json_data=__import__("json").loads(body))
+
+    with pytest.raises(LlmRateLimitError, match="Суточный"):
+        generate_gemini_content(
+            model="gemini-3.5-flash",
+            parts=[{"text": "hi"}],
+            api_key="k",
+            base_url="https://generativelanguage.googleapis.com",
+            sleep=lambda _s: None,
+            post=once,
+        )
+    assert calls["n"] == 1
+
+
+def test_format_wait_ru():
+    from app.services.llm_status import format_wait_ru
+
+    assert format_wait_ru(20) == "20 сек"
+    assert "мин" in format_wait_ru(120)
+    assert format_wait_ru(7200) == "2 ч"

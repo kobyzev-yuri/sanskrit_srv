@@ -21,7 +21,7 @@ function toast(msg, err = false) {
   el.textContent = msg;
   el.classList.toggle("err", err);
   el.classList.add("show");
-  setTimeout(() => el.classList.remove("show"), err ? 5000 : 2600);
+  setTimeout(() => el.classList.remove("show"), err ? 8000 : 2600);
 }
 
 async function api(path, opts = {}) {

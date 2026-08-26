@@ -41,6 +41,87 @@ GEMINI_CREDITS_MSG = (
 )
 
 
+def format_wait_ru(seconds: int) -> str:
+    sec = max(1, int(seconds))
+    if sec < 90:
+        return f"{sec} сек"
+    minutes = max(1, round(sec / 60))
+    if minutes < 90:
+        return f"{minutes} мин"
+    hours = max(1, round(minutes / 60))
+    return f"{hours} ч"
+
+
+def seconds_until_pacific_midnight() -> int:
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/Los_Angeles"))
+    nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(60, int((nxt - now).total_seconds()))
+
+
+def gemini_quota_wait_message(body: str, retry_after_s: int | None = None) -> str:
+    """Human wait hint for Studio 429 (Free RPM/TPM/RPD, not prepaid credits)."""
+    low = (body or "").lower()
+    wait = int(retry_after_s) if retry_after_s and retry_after_s > 0 else None
+    daily = any(
+        m in low
+        for m in (
+            "perday",
+            "per_day",
+            "requestsperday",
+            "generatecontentrequestperday",
+            "requests per day",
+        )
+    )
+    per_min = any(
+        m in low
+        for m in (
+            "perminute",
+            "per_minute",
+            "requestsperminute",
+            "generatecontentrequestperminute",
+            "requests per minute",
+        )
+    )
+    tokens = any(
+        m in low
+        for m in (
+            "tokensperminute",
+            "tokens per minute",
+            "inputtokencount",
+        )
+    )
+    long_wait = wait is not None and wait > 180
+    if daily or (long_wait and not per_min):
+        wait_s = wait or seconds_until_pacific_midnight()
+        return (
+            "Суточный лимит бесплатного Gemini Flash (20 запросов). "
+            f"Подождите {format_wait_ru(wait_s)} и повторите "
+            "(сброс в полночь по Калифорнии)."
+        )
+    if tokens:
+        wait_s = wait or 60
+        return (
+            "Лимит токенов в минуту на бесплатном Flash. "
+            f"Подождите {format_wait_ru(wait_s)} и повторите."
+        )
+    wait_s = wait or 60
+    if "exceeded your current quota" in low:
+        return (
+            "Лимит бесплатного Gemini Flash. "
+            f"Подождите {format_wait_ru(wait_s)} (5 запросов в минуту). "
+            "Если за сегодня уже много страниц — суточный лимит 20 запросов, "
+            f"ждите {format_wait_ru(seconds_until_pacific_midnight())} "
+            "до полуночи по Калифорнии."
+        )
+    return (
+        "Лимит бесплатного Gemini: 5 запросов в минуту. "
+        f"Подождите {format_wait_ru(wait_s)} и повторите."
+    )
+
+
 def is_quota_response(status_code: int, body: str) -> bool:
     if status_code == 402:
         return True

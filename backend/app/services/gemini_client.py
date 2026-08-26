@@ -14,6 +14,7 @@ from app.services.llm_status import (
     GEMINI_RATE_LIMIT_MSG,
     LlmQuotaError,
     LlmRateLimitError,
+    gemini_quota_wait_message,
     is_quota_response,
     set_quota_alert,
 )
@@ -76,22 +77,27 @@ def _normalize_parts(parts: list[dict[str, Any]], *, studio: bool) -> list[dict[
     return out
 
 
-def _retry_after_seconds(resp: httpx.Response, fallback: int) -> int:
+def _retry_after_seconds(resp: httpx.Response, fallback: int = 0, *, cap: int = 48 * 3600) -> int:
     raw = (resp.headers.get("Retry-After") or "").strip()
+    parsed: float | None = None
     if raw.isdigit():
-        return max(1, min(int(raw), 120))
-    try:
-        details = ((resp.json() or {}).get("error") or {}).get("details") or []
-        for item in details:
-            if not isinstance(item, dict):
-                continue
-            delay = str(item.get("retryDelay") or "")
-            match = re.match(r"([0-9.]+)\s*s", delay, re.I)
-            if match:
-                return max(1, min(int(float(match.group(1))), 120))
-    except Exception:  # noqa: BLE001
-        pass
-    return fallback
+        parsed = float(raw)
+    else:
+        try:
+            details = ((resp.json() or {}).get("error") or {}).get("details") or []
+            for item in details:
+                if not isinstance(item, dict):
+                    continue
+                delay = str(item.get("retryDelay") or "")
+                match = re.match(r"([0-9.]+)\s*s", delay, re.I)
+                if match:
+                    parsed = float(match.group(1))
+                    break
+        except Exception:  # noqa: BLE001
+            parsed = None
+    if parsed is None:
+        return max(0, int(fallback))
+    return max(1, min(int(parsed), cap))
 
 
 def generate_gemini_content(
@@ -140,7 +146,7 @@ def generate_gemini_content(
             if not text.strip():
                 raise RuntimeError("empty text")
             return text, parse_gemini_usage(data)
-        body = resp.text[:400]
+        body = resp.text or ""
         if is_quota_response(resp.status_code, body):
             msg = GEMINI_CREDITS_MSG if studio else "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
             set_quota_alert(msg)
@@ -148,13 +154,20 @@ def generate_gemini_content(
         if resp.status_code in _RETRY_STATUSES:
             last_err = f"HTTP {resp.status_code} {body[:200]}"
             log.warning("Gemini %s", last_err[:240])
+            retry_s = _retry_after_seconds(resp, 0)
+            if studio and resp.status_code == 429 and retry_s > 180:
+                raise LlmRateLimitError(gemini_quota_wait_message(body, retry_s))
             if attempt + 1 < len(waits):
                 waits[attempt + 1] = max(
                     waits[attempt + 1],
-                    _retry_after_seconds(resp, waits[attempt + 1]),
+                    retry_s if retry_s else waits[attempt + 1],
                 )
+                if waits[attempt + 1] > 120:
+                    waits[attempt + 1] = 120
             continue
         raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
     if studio:
-        raise LlmRateLimitError(GEMINI_RATE_LIMIT_MSG)
+        wait_s = _retry_after_seconds(resp, 60) if resp is not None else 60
+        body = (resp.text if resp is not None else "") or last_err
+        raise LlmRateLimitError(gemini_quota_wait_message(body, wait_s))
     raise LlmRateLimitError(last_err or "Gemini rate limited")
