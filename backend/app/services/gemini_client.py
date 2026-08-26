@@ -10,6 +10,7 @@ import httpx
 
 from app.config import get_settings
 from app.services.llm_status import (
+    GEMINI_CREDITS_MSG,
     GEMINI_RATE_LIMIT_MSG,
     LlmQuotaError,
     LlmRateLimitError,
@@ -141,7 +142,7 @@ def generate_gemini_content(
             return text, parse_gemini_usage(data)
         body = resp.text[:400]
         if is_quota_response(resp.status_code, body):
-            msg = "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
+            msg = GEMINI_CREDITS_MSG if studio else "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
             set_quota_alert(msg)
             raise LlmQuotaError(msg)
         if resp.status_code in _RETRY_STATUSES:

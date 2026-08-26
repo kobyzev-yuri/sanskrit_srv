@@ -2,7 +2,7 @@
 import pytest
 
 from app.services.gemini_client import generate_gemini_content, gemini_headers, is_google_studio_base
-from app.services.llm_status import LlmRateLimitError
+from app.services.llm_status import LlmQuotaError, LlmRateLimitError, is_quota_response
 
 
 def test_studio_uses_goog_api_key_header():
@@ -78,3 +78,28 @@ def test_generate_429_exhausted_raises_rate_limit():
             sleep=lambda _s: None,
             post=always_429,
         )
+
+
+def test_quota_detects_studio_prepaid_credits():
+    body = '{"error":{"code":429,"message":"Your prepayment credits are depleted. Please go to AI Studio"}}'
+    assert is_quota_response(429, body)
+    assert not is_quota_response(429, "RESOURCE_EXHAUSTED rate-limited upstream")
+
+
+def test_generate_credits_depleted_is_quota_not_retry():
+    calls = {"n": 0}
+
+    def once(*_a, **_k):
+        calls["n"] += 1
+        return _Resp(429, "Your prepayment credits are depleted. Please go to AI Studio")
+
+    with pytest.raises(LlmQuotaError, match="кредиты"):
+        generate_gemini_content(
+            model="gemini-3.1-pro-preview",
+            parts=[{"text": "hi"}],
+            api_key="k",
+            base_url="https://generativelanguage.googleapis.com",
+            sleep=lambda _s: None,
+            post=once,
+        )
+    assert calls["n"] == 1

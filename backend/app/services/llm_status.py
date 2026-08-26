@@ -35,6 +35,10 @@ GEMINI_RATE_LIMIT_MSG = (
     "Google временно не принимает запрос к Gemini (перегрузка, не ваш лимит). "
     "Подождите около минуты и повторите."
 )
+GEMINI_CREDITS_MSG = (
+    "На проекте Google AI Studio закончились предоплаченные кредиты. "
+    "Пополните баланс: https://aistudio.google.com (Projects → billing)."
+)
 
 
 def is_quota_response(status_code: int, body: str) -> bool:
@@ -49,6 +53,9 @@ def is_quota_response(status_code: int, body: str) -> bool:
         "не хватает",
         "balance to run",
         "payment required",
+        "prepayment credits",
+        "credits are depleted",
+        "insufficient credits",
     )
     return any(m in low for m in markers)
 
