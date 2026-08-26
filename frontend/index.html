@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260826search2" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260826trui1" />
 </head>
 <body>
   <div class="app-shell">
@@ -147,8 +147,8 @@
               <span id="usage-info" class="muted">Расход LLM: —</span>
             </div>
 
-            <div class="editor-layout">
-              <section class="panel">
+            <div class="editor-layout" id="editor-layout">
+              <section class="panel" id="left-panel">
                 <header><span id="left-pane-title">Скан</span><span class="muted" id="left-pane-sub">как в PDF</span></header>
                 <div class="scan-pane" id="left-scan-wrap">
                   <img id="scan-img" alt="scan page" />
@@ -156,28 +156,26 @@
                 </div>
                 <div id="left-source-html" class="html-preview source-html-pane" hidden></div>
               </section>
-              <section class="panel edit-pane">
+              <section class="panel edit-pane" id="preview-panel">
                 <header>
-                  <div class="tabs">
+                  <div class="tabs preview-tabs">
                     <button type="button" class="tab active" data-tab="preview">Превью</button>
                     <button type="button" class="tab" data-tab="wysiwyg" title="Правка санскрита и русского без HTML-тегов">Текст</button>
                     <button type="button" class="tab" data-tab="source">HTML</button>
-                    <button type="button" class="tab" data-tab="chart">Справочник</button>
                   </div>
                   <span class="muted sa" id="right-pane-sub">देवनागरी</span>
                 </header>
-                <div id="tab-preview" class="tab-panel active">
-                  <div id="html-preview" class="html-preview" aria-live="polite"></div>
-                </div>
-                <div id="tab-wysiwyg" class="tab-panel">
-                  <p class="muted wy-hint" id="wysiwyg-hint">Правите санскрит и русский прямо в тексте. HTML-теги не показываются.</p>
-                  <div id="html-wysiwyg" class="html-preview wysiwyg-preview"></div>
-                </div>
-                <div id="tab-source" class="tab-panel">
-                  <textarea id="html-editor" spellcheck="false" placeholder="HTML черновик страницы…"></textarea>
-                </div>
-                <div id="tab-chart" class="tab-panel">
-                  <div id="sa-chart" class="sa-chart" aria-label="Справочник Devanagari для копирования"></div>
+                <div class="preview-body">
+                  <div id="tab-preview" class="tab-panel active">
+                    <div id="html-preview" class="html-preview" aria-live="polite"></div>
+                  </div>
+                  <div id="tab-wysiwyg" class="tab-panel">
+                    <p class="muted wy-hint" id="wysiwyg-hint">Правите санскрит и русский прямо в тексте. HTML-теги не показываются.</p>
+                    <div id="html-wysiwyg" class="html-preview wysiwyg-preview"></div>
+                  </div>
+                  <div id="tab-source" class="tab-panel">
+                    <textarea id="html-editor" spellcheck="false" placeholder="HTML черновик страницы…"></textarea>
+                  </div>
                 </div>
                 <div id="accepted-box" class="directive-box" hidden>
                   <p style="margin:0">Страница <strong>согласована</strong>. Чтобы править — отзовите согласие. PDF доступен всегда.</p>
@@ -186,35 +184,50 @@
                     <button type="button" id="btn-revoke">Отозвать согласие</button>
                   </div>
                 </div>
-                <div id="edit-tools">
-                  <div class="directive-box">
-                    <label for="directive-input">Замечание / задание</label>
-                    <textarea id="directive-input" rows="3" placeholder="С чем не согласны — или: пересмотри страницу."></textarea>
-                    <div class="edit-actions" style="padding:0;border:0;background:transparent">
-                      <button class="primary" type="button" id="btn-revise">Отправить задание</button>
-                      <button type="button" id="btn-review-again">Пересмотри страницу</button>
-                      <button type="button" id="btn-translate-page" hidden>Перевести страницу</button>
-                      <button type="button" id="btn-proofread" title="Второй проход: смысловая проверка">Смысловая проверка</button>
-                      <span class="muted" id="revise-status"></span>
+                <div id="preview-save" class="edit-actions">
+                  <button type="button" id="btn-save">Сохранить правку</button>
+                  <button class="primary" type="button" id="btn-accept">Сохранить и согласовать</button>
+                </div>
+              </section>
+              <section class="panel agent-pane" id="agent-panel">
+                <header>
+                  <div class="tabs agent-tabs">
+                    <button type="button" class="tab active" data-agent-tab="task">Задание</button>
+                    <button type="button" class="tab" data-agent-tab="chart">Справочник</button>
+                  </div>
+                </header>
+                <div class="agent-body">
+                  <div id="agent-task" class="agent-section">
+                    <div id="edit-tools">
+                      <div class="directive-box">
+                        <label for="directive-input">Замечание / задание</label>
+                        <textarea id="directive-input" rows="3" placeholder="С чем не согласны — или: пересмотри страницу."></textarea>
+                        <div class="edit-actions" style="padding:0;border:0;background:transparent">
+                          <button class="primary" type="button" id="btn-revise">Отправить задание</button>
+                          <button type="button" id="btn-review-again">Пересмотри страницу</button>
+                          <button type="button" id="btn-translate-page" hidden>Перевести страницу</button>
+                          <button type="button" id="btn-proofread" title="Второй проход: смысловая проверка">Смысловая проверка</button>
+                          <span class="muted" id="revise-status"></span>
+                        </div>
+                      </div>
+                      <div id="proofread-box" class="proofread-box" hidden>
+                        <div class="proofread-head">
+                          <strong>Предложения проверки</strong>
+                          <span class="muted" id="proofread-meta"></span>
+                        </div>
+                        <p class="muted" id="proofread-note" style="margin:0.35rem 0"></p>
+                        <div id="proofread-list" class="proofread-list"></div>
+                        <div class="edit-actions" style="padding:0.5rem 0 0;border:0;background:transparent">
+                          <button type="button" id="btn-proof-all">Выбрать все</button>
+                          <button type="button" id="btn-proof-none">Снять все</button>
+                          <button class="primary" type="button" id="btn-proof-apply">Применить выбранные</button>
+                          <button type="button" id="btn-proof-dismiss">Закрыть</button>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div id="proofread-box" class="proofread-box" hidden>
-                    <div class="proofread-head">
-                      <strong>Предложения проверки</strong>
-                      <span class="muted" id="proofread-meta"></span>
-                    </div>
-                    <p class="muted" id="proofread-note" style="margin:0.35rem 0"></p>
-                    <div id="proofread-list" class="proofread-list"></div>
-                    <div class="edit-actions" style="padding:0.5rem 0 0;border:0;background:transparent">
-                      <button type="button" id="btn-proof-all">Выбрать все</button>
-                      <button type="button" id="btn-proof-none">Снять все</button>
-                      <button class="primary" type="button" id="btn-proof-apply">Применить выбранные</button>
-                      <button type="button" id="btn-proof-dismiss">Закрыть</button>
-                    </div>
-                  </div>
-                  <div class="edit-actions">
-                    <button type="button" id="btn-save">Сохранить правку</button>
-                    <button class="primary" type="button" id="btn-accept">Сохранить и согласовать</button>
+                  <div id="tab-chart" class="agent-chart" hidden>
+                    <div id="sa-chart" class="sa-chart" aria-label="Справочник Devanagari для копирования"></div>
                   </div>
                 </div>
               </section>
@@ -396,6 +409,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260826search2"></script>
+  <script src="/assets/app.js?v=20260826trui1"></script>
 </body>
 </html>

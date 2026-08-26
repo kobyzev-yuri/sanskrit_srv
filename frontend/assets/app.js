@@ -367,6 +367,8 @@ function syncTaskUi() {
   const p = state.project;
   const cfg = translationCfg();
   const agreed = Boolean(cfg.agreed);
+  const layout = $("#editor-layout");
+  if (layout) layout.classList.toggle("translate", tr);
   const leftTitle = $("#left-pane-title");
   const leftSub = $("#left-pane-sub");
   const rightSub = $("#right-pane-sub");
@@ -903,6 +905,8 @@ function updateEditMode() {
       ["pending", "extracting", "llm_draft", "ocr"].includes(state.page?.status || "");
   $("#accepted-box").hidden = !accepted;
   $("#edit-tools").hidden = accepted || pendingDraft;
+  const previewSave = $("#preview-save");
+  if (previewSave) previewSave.hidden = accepted || pendingDraft;
   const srcTab = document.querySelector('.tab[data-tab="source"]');
   if (srcTab) srcTab.hidden = accepted;
   const wyTab = document.querySelector('.tab[data-tab="wysiwyg"]');
@@ -1175,11 +1179,25 @@ function renderWysiwyg(html) {
 
 function switchTab(name) {
   if (isWysiwygActive() && name !== "wysiwyg") flushWysiwyg();
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
-  $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
+  if (name === "chart") {
+    switchAgentTab("chart");
+    return;
+  }
+  $$("#preview-panel .tab[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  $$("#preview-panel .tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
   if (name === "preview") renderPreview($("#html-editor").value);
   if (name === "wysiwyg") renderWysiwyg($("#html-editor").value);
-  if (name === "chart") renderSaChart();
+}
+
+function switchAgentTab(name) {
+  $$(".agent-tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.agentTab === name));
+  const task = $("#agent-task");
+  const chart = $("#tab-chart");
+  if (task) task.hidden = name !== "task";
+  if (chart) {
+    chart.hidden = name !== "chart";
+    if (name === "chart") renderSaChart();
+  }
 }
 
 function insertPlainText(text) {
@@ -2557,8 +2575,11 @@ function wire() {
     wyBox.addEventListener("paste", onWysiwygPaste);
     wyBox.addEventListener("keydown", onWysiwygKeydown);
   }
-  $$(".tab").forEach((t) => {
+  $$("#preview-panel .tab[data-tab]").forEach((t) => {
     t.onclick = () => switchTab(t.dataset.tab);
+  });
+  $$(".agent-tabs .tab").forEach((t) => {
+    t.onclick = () => switchAgentTab(t.dataset.agentTab);
   });
   $("#btn-prev").onclick = () => shiftPage(-1);
   $("#btn-next").onclick = () => shiftPage(1);
