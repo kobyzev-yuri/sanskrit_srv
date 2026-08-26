@@ -9,6 +9,8 @@ const state = {
   /** @type {"all"|"open"} */
   thumbFilter: localStorage.getItem("ss_thumb_filter") === "open" ? "open" : "all",
   proofSuggestions: [],
+  draftQuery: "",
+  draftHits: [],
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -606,6 +608,7 @@ async function openProject(id) {
   $("#page-total").textContent = String(state.pages.length || state.project.pdf_pages || 0);
   $("#page-jump").max = String(state.pages.length || 1);
   renderThumbList();
+  clearDraftSearchUi(false);
   showView("editor");
   const pipeBusy =
     state.project.pipeline &&
@@ -665,10 +668,13 @@ function renderThumbList() {
     return;
   }
 
+  const hitIds = new Set((state.draftHits || []).map((h) => String(h.page_id)));
   list.innerHTML = shown
     .map(
       (p) => `
-    <button type="button" class="thumb-item${p.proof_n ? " has-proof" : ""}" data-id="${p.id}" data-no="${p.page_no}" title="${
+    <button type="button" class="thumb-item${p.proof_n ? " has-proof" : ""}${
+      hitIds.has(String(p.id)) ? " search-hit" : ""
+    }" data-id="${p.id}" data-no="${p.page_no}" title="${
         p.proof_n
           ? `Стр. ${p.page_no} · замечаний смысловой проверки: ${p.proof_n}`
           : `Стр. ${p.page_no}`
@@ -714,6 +720,153 @@ function setThumbFilter(openOnly) {
   state.thumbFilter = openOnly ? "open" : "all";
   localStorage.setItem("ss_thumb_filter", state.thumbFilter);
   renderThumbList();
+}
+
+function indexOfFold(hay, needle, from) {
+  if (!hay || !needle) return -1;
+  const exact = hay.indexOf(needle, from);
+  if (exact >= 0) return exact;
+  const hl = hay.toLocaleLowerCase();
+  const nl = needle.toLocaleLowerCase();
+  if (hl.length === hay.length && nl.length === needle.length) {
+    return hl.indexOf(nl, from);
+  }
+  return -1;
+}
+
+function unwrapDraftMarks(root) {
+  if (!root) return;
+  root.querySelectorAll("mark.draft-hl").forEach((m) => {
+    const parent = m.parentNode;
+    if (!parent) return;
+    while (m.firstChild) parent.insertBefore(m.firstChild, m);
+    parent.removeChild(m);
+    parent.normalize();
+  });
+}
+
+function highlightDraftQuery(root) {
+  unwrapDraftMarks(root);
+  const query = (state.draftQuery || "").trim();
+  if (!root || !query) return 0;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+      if (node.parentElement?.closest("mark.draft-hl, script, style")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  let n = 0;
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    let from = 0;
+    const pieces = [];
+    while (true) {
+      const i = indexOfFold(text, query, from);
+      if (i < 0) break;
+      if (i > from) pieces.push(document.createTextNode(text.slice(from, i)));
+      const mark = document.createElement("mark");
+      mark.className = n === 0 ? "draft-hl draft-hl-current" : "draft-hl";
+      mark.textContent = text.slice(i, i + query.length);
+      pieces.push(mark);
+      n += 1;
+      from = i + Math.max(query.length, 1);
+    }
+    if (!pieces.length) continue;
+    if (from < text.length) pieces.push(document.createTextNode(text.slice(from)));
+    const parent = node.parentNode;
+    if (!parent) continue;
+    for (const p of pieces) parent.insertBefore(p, node);
+    parent.removeChild(node);
+  }
+  const current = root.querySelector("mark.draft-hl-current");
+  if (current) current.scrollIntoView({ block: "nearest", inline: "nearest" });
+  return n;
+}
+
+function clearDraftSearchUi(clearInput = true) {
+  state.draftQuery = "";
+  state.draftHits = [];
+  const hits = $("#draft-search-hits");
+  const meta = $("#draft-search-meta");
+  if (hits) {
+    hits.hidden = true;
+    hits.innerHTML = "";
+  }
+  if (meta) meta.textContent = "";
+  if (clearInput && $("#draft-search")) $("#draft-search").value = "";
+  renderThumbList();
+  highlightDraftQuery($("#html-preview"));
+  highlightDraftQuery($("#left-source-html"));
+}
+
+function renderDraftSearchHits(data) {
+  const box = $("#draft-search-hits");
+  const meta = $("#draft-search-meta");
+  if (!box) return;
+  const hits = data.hits || [];
+  state.draftHits = hits;
+  if (meta) {
+    meta.textContent = hits.length
+      ? `${data.page_hits} стр. · ${data.total_matches} совп.${data.truncated ? "…" : ""}`
+      : data.query
+        ? "нет"
+        : "";
+  }
+  if (!hits.length) {
+    box.hidden = true;
+    box.innerHTML = data.query ? `<p class="thumb-list-empty">В черновике не найдено</p>` : "";
+    box.hidden = !data.query;
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = hits
+    .map((h) => {
+      const sn = (h.snippets || []).slice(0, 2).map((s) => `<span class="sn">${escapeHtml(s)}</span>`).join("");
+      const active = state.page && String(state.page.id) === String(h.page_id) ? " active" : "";
+      return `<button type="button" class="draft-search-hit${active}" data-id="${escapeHtml(h.page_id)}">
+        <strong>стр. ${h.page_no}</strong> · ${h.count}
+        ${sn}
+      </button>`;
+    })
+    .join("");
+  box.querySelectorAll(".draft-search-hit").forEach((el) => {
+    el.onclick = () => loadPage(el.dataset.id);
+  });
+}
+
+let draftSearchTimer = 0;
+async function runDraftSearch(q) {
+  if (!state.project) return;
+  const query = String(q || "").trim();
+  if (!query) {
+    clearDraftSearchUi(false);
+    return;
+  }
+  state.draftQuery = query;
+  try {
+    const data = await api(
+      `/projects/${state.project.id}/search?q=${encodeURIComponent(query)}`
+    );
+    if (state.draftQuery !== query) return;
+    renderDraftSearchHits(data);
+    renderThumbList();
+    highlightDraftQuery($("#html-preview"));
+    highlightDraftQuery($("#left-source-html"));
+  } catch (e) {
+    const meta = $("#draft-search-meta");
+    if (meta) meta.textContent = e.message || "ошибка поиска";
+  }
+}
+
+function scheduleDraftSearch() {
+  const q = $("#draft-search")?.value || "";
+  window.clearTimeout(draftSearchTimer);
+  draftSearchTimer = window.setTimeout(() => runDraftSearch(q), 280);
 }
 
 async function loadThumb(pageId, imgEl) {
@@ -829,6 +982,7 @@ function renderPreview(html) {
   box.innerHTML = src;
   hydratePreviewFigures(box);
   if (state.proofSuggestions?.length) highlightProofSuggestions(box, state.proofSuggestions);
+  highlightDraftQuery(box);
 }
 
 /** /api/.../figures/* require Bearer — plain <img src> gets 401 and shows only alt text. */
@@ -1239,6 +1393,9 @@ async function loadPage(pageId) {
   $("#page-jump").value = String(state.page.page_no);
   $("#page-total").textContent = String(state.pages.length || state.project?.pdf_pages || 0);
   highlightThumb(pageId);
+  $$(".draft-search-hit").forEach((el) => {
+    el.classList.toggle("active", el.dataset.id === String(pageId));
+  });
   setDraftHtml(state.page.current_html || "");
   const accepted =
     state.page.status === "expert_done" && Boolean((state.page.current_html || "").trim());
@@ -1279,6 +1436,7 @@ async function renderLeftPane() {
       ? src
       : `<p class="muted">На этой странице нет выверенного санскрита.</p>`;
     if (src) await hydratePreviewFigures(sourceBox);
+    highlightDraftQuery(sourceBox);
     return;
   }
   if (sourceBox) sourceBox.innerHTML = "";
@@ -2374,6 +2532,24 @@ function wire() {
     thumbFilter.checked = state.thumbFilter === "open";
     thumbFilter.onchange = () => setThumbFilter(thumbFilter.checked);
   }
+  const searchForm = $("#draft-search-form");
+  const searchInput = $("#draft-search");
+  if (searchForm) {
+    searchForm.onsubmit = (ev) => {
+      ev.preventDefault();
+      window.clearTimeout(draftSearchTimer);
+      runDraftSearch(searchInput?.value || "");
+    };
+  }
+  if (searchInput) {
+    searchInput.addEventListener("input", scheduleDraftSearch);
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        clearDraftSearchUi(true);
+      }
+    });
+  }
   $("#html-editor").addEventListener("input", () => renderPreview($("#html-editor").value));
   const wyBox = $("#html-wysiwyg");
   if (wyBox) {
@@ -2395,6 +2571,15 @@ function wire() {
   });
   document.addEventListener("keydown", (e) => {
     if (!$("#view-editor").classList.contains("active")) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+      const box = $("#draft-search");
+      if (box) {
+        e.preventDefault();
+        box.focus();
+        box.select();
+      }
+      return;
+    }
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "TEXTAREA" || tag === "INPUT") return;
     if (e.key === "ArrowLeft") {

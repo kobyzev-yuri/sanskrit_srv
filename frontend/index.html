@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260826cabinet1" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260826search1" />
 </head>
 <body>
   <div class="app-shell">
@@ -83,7 +83,12 @@
                 <input type="checkbox" id="thumb-filter-open" />
                 только несогласованные
               </label>
+              <form class="draft-search" id="draft-search-form" role="search">
+                <input id="draft-search" type="search" maxlength="200" placeholder="Найти в черновике…" autocomplete="off" />
+                <span class="muted" id="draft-search-meta"></span>
+              </form>
             </div>
+            <div id="draft-search-hits" class="draft-search-hits" hidden></div>
             <div id="thumb-list" class="thumb-list"></div>
           </aside>
 
@@ -390,6 +395,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260826cabinet1"></script>
+  <script src="/assets/app.js?v=20260826search1"></script>
 </body>
 </html>

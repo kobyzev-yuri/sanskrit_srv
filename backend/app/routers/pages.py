@@ -10,6 +10,7 @@ from app.db import get_db
 from app.deps import get_current_user, require_roles
 from app.models import Page, PageStatus, PageVersion, Project, Role, User, VersionSource
 from app.schemas import (
+    DraftSearchOut,
     PageDetailOut,
     PageHtmlIn,
     PageOut,
@@ -22,6 +23,7 @@ from app.schemas import (
     ProofreadSuggestion,
 )
 from app.services.directive_fix import apply_directive_replacements
+from app.services.draft_search import search_pages
 from app.services.layout_assets import (
     extract_embedded_figures,
     finalize_page_html,
@@ -103,6 +105,29 @@ def list_pages(
         q = q.where(Page.status == status_filter)
     counts = proofread_counts(pid)
     return [_page_out(p, proof_n=counts.get(str(p.id), 0)) for p in db.scalars(q).all()]
+
+
+@router.get("/projects/{project_id}/search", response_model=DraftSearchOut)
+def search_project_draft(
+    project_id: str,
+    q: str = "",
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Substring search in page drafts (and Sanskrit source on translate projects)."""
+    pid = _uid(project_id)
+    project = db.get(Project, pid)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    query = (q or "").strip()
+    if not query:
+        return DraftSearchOut(query="")
+    pages = list(
+        db.scalars(select(Page).where(Page.project_id == pid).order_by(Page.page_no)).all()
+    )
+    return DraftSearchOut.model_validate(
+        search_pages(pages, query, include_source=project_task(project) == "translate")
+    )
 
 
 @router.get("/pages/{page_id}", response_model=PageDetailOut)

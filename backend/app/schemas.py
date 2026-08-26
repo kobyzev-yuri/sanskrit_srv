@@ -199,6 +199,22 @@ class ProofreadApplyIn(BaseModel):
     accepted: list[ProofreadSuggestion] = Field(default_factory=list)
 
 
+class DraftSearchHitOut(BaseModel):
+    page_id: str
+    page_no: int
+    count: int
+    fields: list[str] = []
+    snippets: list[str] = []
+
+
+class DraftSearchOut(BaseModel):
+    query: str
+    page_hits: int = 0
+    total_matches: int = 0
+    hits: list[DraftSearchHitOut] = []
+    truncated: bool = False
+
+
 class PageOut(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
