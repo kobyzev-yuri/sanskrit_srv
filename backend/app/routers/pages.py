@@ -41,7 +41,7 @@ from app.services.llm_proofread import (
     save_page_proofread,
     split_by_target,
 )
-from app.services.llm_status import LlmQuotaError
+from app.services.llm_status import GEMINI_RATE_LIMIT_MSG, LlmQuotaError, LlmRateLimitError
 from app.services.llm_translate import translate_from_source
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
@@ -56,6 +56,20 @@ def _uid(value: str) -> uuid.UUID:
         return uuid.UUID(value)
     except ValueError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found") from exc
+
+
+def _raise_llm_http(exc: BaseException) -> None:
+    if isinstance(exc, LlmQuotaError):
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            detail={"code": "llm_quota", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, LlmRateLimitError):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc) or GEMINI_RATE_LIMIT_MSG,
+        ) from exc
+    raise exc
 
 
 def _proofread_out(stored: dict | None) -> ProofreadOut | None:
@@ -344,11 +358,8 @@ def draft_one_page(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
     try:
         process_one_page(db, page, force=False, force_llm=False)
-    except LlmQuotaError as exc:
-        raise HTTPException(
-            status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"code": "llm_quota", "message": str(exc)},
-        ) from exc
+    except (LlmQuotaError, LlmRateLimitError) as exc:
+        _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Draft failed: {exc}") from exc
     db.refresh(page)
@@ -397,11 +408,8 @@ def _apply_translate_revision(
             current_html=page.current_html,
             directive=directive,
         )
-    except LlmQuotaError as exc:
-        raise HTTPException(
-            status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"code": "llm_quota", "message": str(exc)},
-        ) from exc
+    except (LlmQuotaError, LlmRateLimitError) as exc:
+        _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Translate failed: {exc}") from exc
 
@@ -480,11 +488,8 @@ def _apply_llm_revision(
             directive=directive,
             available_figures=figs or None,
         )
-    except LlmQuotaError as exc:
-        raise HTTPException(
-            status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"code": "llm_quota", "message": str(exc)},
-        ) from exc
+    except (LlmQuotaError, LlmRateLimitError) as exc:
+        _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"LLM revise failed: {exc}") from exc
 
@@ -626,11 +631,8 @@ def proofread_page(
             )
     except HTTPException:
         raise
-    except LlmQuotaError as exc:
-        raise HTTPException(
-            status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"code": "llm_quota", "message": str(exc)},
-        ) from exc
+    except (LlmQuotaError, LlmRateLimitError) as exc:
+        _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Proofread failed: {exc}") from exc
 

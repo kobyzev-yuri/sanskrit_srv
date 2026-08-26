@@ -73,3 +73,17 @@ def test_openai_message_text_reasoning_fallback():
     assert "hi" in _openai_message_text({"content": [{"type": "text", "text": "hi"}]})
     cot = "Let me analyze the source HTML.\nKeep Devanagari exactly as in source"
     assert _openai_message_text({"content": "", "reasoning": cot}) == ""
+
+
+def test_reset_llm_user_foreign_context():
+    from contextvars import copy_context
+
+    from app.services import llm_route as lr
+
+    holder: dict = {}
+
+    def bind_in_child():
+        holder["tok"] = lr._llm_creds.set(None)
+
+    copy_context().run(bind_in_child)
+    lr.reset_llm_user(holder["tok"])

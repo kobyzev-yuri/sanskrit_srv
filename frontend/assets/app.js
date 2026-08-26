@@ -21,7 +21,7 @@ function toast(msg, err = false) {
   el.textContent = msg;
   el.classList.toggle("err", err);
   el.classList.add("show");
-  setTimeout(() => el.classList.remove("show"), 2600);
+  setTimeout(() => el.classList.remove("show"), err ? 5000 : 2600);
 }
 
 async function api(path, opts = {}) {
@@ -41,6 +41,9 @@ async function api(path, opts = {}) {
     try {
       const j = await res.json();
       detail = j.detail || JSON.stringify(j);
+      if (detail && typeof detail === "object") {
+        detail = detail.message || JSON.stringify(detail);
+      }
     } catch (_) {}
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }

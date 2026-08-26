@@ -130,7 +130,11 @@ def bind_llm_user(user: Any | None):
 
 
 def reset_llm_user(token) -> None:
-    _llm_creds.reset(token)
+    try:
+        _llm_creds.reset(token)
+    except ValueError:
+        # FastAPI may close the sync dependency in a different ContextVar context.
+        _llm_creds.set(None)
 
 
 @contextmanager

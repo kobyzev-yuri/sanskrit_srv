@@ -26,9 +26,15 @@ class LlmQuotaError(RuntimeError):
 
 
 class LlmRateLimitError(RuntimeError):
-    """OpenRouter / upstream 429 after retries (ox-alpha shared free pool)."""
+    """Upstream 429 after retries (OpenRouter pool or Gemini AI Studio RPM)."""
 
     code = "llm_rate_limit"
+
+
+GEMINI_RATE_LIMIT_MSG = (
+    "Google временно не принимает запрос к Gemini (перегрузка, не ваш лимит). "
+    "Подождите около минуты и повторите."
+)
 
 
 def is_quota_response(status_code: int, body: str) -> bool:
