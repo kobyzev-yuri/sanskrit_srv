@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.models import Job, JobStatus, Page, PageStatus, PageVersion, Project, VersionSource, utcnow
+from app.models import Job, JobStatus, Page, PageStatus, PageVersion, Project, User, VersionSource, utcnow
 from app.services import storage
 from app.services.layout_assets import extract_embedded_figures, finalize_page_html, preserve_figure_srcs
 from app.services.llm_draft import revise_from_scan
@@ -81,6 +81,7 @@ def enqueue_project_pipeline(
     open_only: bool = False,
     translate: bool = False,
     proofread: bool = False,
+    user_id: uuid.UUID | None = None,
 ) -> Job:
     job = Job(
         kind="pipeline_project",
@@ -92,6 +93,7 @@ def enqueue_project_pipeline(
             "open_only": open_only,
             "translate": bool(translate) and not proofread,
             "proofread": bool(proofread),
+            "user_id": str(user_id) if user_id else None,
         },
         progress={"done": 0, "total": 0, "current_page": None},
     )
@@ -444,6 +446,23 @@ def process_one_page(
 
 
 def run_pipeline_job(db: Session, job: Job) -> None:
+    from app.services.llm_route import bind_llm_user, reset_llm_user
+
+    raw = (job.payload or {}).get("user_id")
+    user = None
+    if raw:
+        try:
+            user = db.get(User, uuid.UUID(str(raw)))
+        except (ValueError, TypeError):
+            user = None
+    token = bind_llm_user(user)
+    try:
+        _run_pipeline_job_body(db, job)
+    finally:
+        reset_llm_user(token)
+
+
+def _run_pipeline_job_body(db: Session, job: Job) -> None:
     job.status = JobStatus.running
     job.error = None
     db.commit()

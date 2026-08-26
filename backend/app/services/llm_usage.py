@@ -66,7 +66,13 @@ def record_usage(
     operation: str = "auto_draft",
     page_id: uuid.UUID | None = None,
     job_id: uuid.UUID | None = None,
+    user_id: uuid.UUID | None = None,
+    key_source: str | None = None,
+    key_hint: str | None = None,
 ) -> LlmUsageEvent:
+    from app.services.llm_route import current_creds
+
+    creds = current_creds()
     event = LlmUsageEvent(
         project_id=project_id,
         page_id=page_id,
@@ -79,6 +85,9 @@ def record_usage(
         total_tokens=int(usage.get("total_tokens") or 0),
         usage_raw=usage.get("usage_raw") or usage,
         ok=True,
+        user_id=user_id if user_id is not None else creds.user_id,
+        key_source=key_source or creds.key_source or "default",
+        key_hint=key_hint if key_hint is not None else creds.key_hint,
     )
     db.add(event)
     db.commit()
@@ -116,6 +125,120 @@ def estimate_usd(network: str, model: str, prompt_tokens: int, completion_tokens
     return (prompt_tokens * rates["in"] + completion_tokens * rates["out"]) / 1_000_000.0
 
 
+def _user_bucket_key(event: Any) -> tuple:
+    uid = getattr(event, "user_id", None)
+    return (
+        str(uid) if uid else "",
+        str(getattr(event, "key_source", None) or "default"),
+        str(getattr(event, "key_hint", None) or ""),
+    )
+
+
+def _accumulate_user_row(acc: dict[tuple, dict[str, Any]], event: Any) -> None:
+    key = _user_bucket_key(event)
+    row = acc.setdefault(
+        key,
+        {
+            "user_id": str(event.user_id) if getattr(event, "user_id", None) else None,
+            "key_source": str(getattr(event, "key_source", None) or "default"),
+            "key_hint": getattr(event, "key_hint", None) or None,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "calls": 0,
+            "by_network": {},
+        },
+    )
+    row["prompt_tokens"] += int(getattr(event, "prompt_tokens", 0) or 0)
+    row["completion_tokens"] += int(getattr(event, "completion_tokens", 0) or 0)
+    row["total_tokens"] += int(getattr(event, "total_tokens", 0) or 0)
+    row["calls"] += 1
+    net_id = getattr(event, "network", None) or "?"
+    net = row["by_network"].setdefault(
+        net_id,
+        {
+            "network": net_id,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "calls": 0,
+        },
+    )
+    net["prompt_tokens"] += int(getattr(event, "prompt_tokens", 0) or 0)
+    net["completion_tokens"] += int(getattr(event, "completion_tokens", 0) or 0)
+    net["total_tokens"] += int(getattr(event, "total_tokens", 0) or 0)
+    net["calls"] += 1
+
+
+def _user_rows(db: Session, acc: dict[tuple, dict[str, Any]]) -> list[dict[str, Any]]:
+    from app.models import User
+
+    ids: list[uuid.UUID] = []
+    for row in acc.values():
+        if not row.get("user_id"):
+            continue
+        try:
+            ids.append(uuid.UUID(str(row["user_id"])))
+        except ValueError:
+            continue
+    users: dict[str, Any] = {}
+    if ids:
+        found = list(db.scalars(select(User).where(User.id.in_(ids))).all())
+        for u in found:
+            uid = getattr(u, "id", None)
+            if uid is None:
+                continue
+            users[str(uid)] = u
+    out = []
+    for key in sorted(acc, key=lambda k: (k[0], k[1], k[2])):
+        row = acc[key]
+        user = users.get(row["user_id"] or "")
+        nets = [row["by_network"][k] for k in sorted(row["by_network"])]
+        out.append(
+            {
+                "user_id": row["user_id"],
+                "login": getattr(user, "login", None) if user else None,
+                "email": getattr(user, "email", None) if user else None,
+                "display_name": (
+                    user.display_name
+                    if user
+                    else ("бэкофис" if row["key_source"] == "default" else "неизвестный ключ")
+                ),
+                "key_source": row["key_source"],
+                "key_hint": row["key_hint"],
+                "prompt_tokens": row["prompt_tokens"],
+                "completion_tokens": row["completion_tokens"],
+                "total_tokens": row["total_tokens"],
+                "calls": row["calls"],
+                "by_network": nets,
+            }
+        )
+    return out
+
+
+def user_usage_summary(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
+    events = list(
+        db.scalars(
+            select(LlmUsageEvent).where(
+                LlmUsageEvent.ok.is_(True),
+                LlmUsageEvent.user_id == user_id,
+            )
+        ).all()
+    )
+    tot = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
+    by_user_acc: dict[tuple, dict[str, Any]] = {}
+    for e in events:
+        tot["prompt_tokens"] += int(e.prompt_tokens or 0)
+        tot["completion_tokens"] += int(e.completion_tokens or 0)
+        tot["total_tokens"] += int(e.total_tokens or 0)
+        tot["calls"] += 1
+        _accumulate_user_row(by_user_acc, e)
+    return {
+        "totals": tot,
+        "by_user": _user_rows(db, by_user_acc),
+    }
+
+
 def project_usage_summary(db: Session, project_id: uuid.UUID) -> dict[str, Any]:
     events = list(
         db.scalars(
@@ -129,6 +252,7 @@ def project_usage_summary(db: Session, project_id: uuid.UUID) -> dict[str, Any]:
     tot_p = tot_c = tot_t = 0
     by_net: dict[str, dict[str, int]] = {}
     by_model: dict[tuple[str, str], dict[str, int]] = {}
+    by_user_acc: dict[tuple, dict[str, Any]] = {}
 
     for e in events:
         tot_p += e.prompt_tokens
@@ -149,6 +273,7 @@ def project_usage_summary(db: Session, project_id: uuid.UUID) -> dict[str, Any]:
         bm["completion_tokens"] += e.completion_tokens
         bm["total_tokens"] += e.total_tokens
         bm["calls"] += 1
+        _accumulate_user_row(by_user_acc, e)
 
     by_model_rows = []
     net_est: dict[str, float] = {}
@@ -207,6 +332,7 @@ def project_usage_summary(db: Session, project_id: uuid.UUID) -> dict[str, Any]:
             if primary
             else None
         ),
+        "by_user": _user_rows(db, by_user_acc),
     }
 
 
@@ -232,6 +358,7 @@ def all_projects_usage_summary(db: Session) -> dict[str, Any]:
             "calls": 0,
             "by_network": {},
         }
+    by_user_acc: dict[tuple, dict[str, Any]] = {}
     for e in events:
         row = by_proj.get(e.project_id)
         if row is None:
@@ -254,6 +381,7 @@ def all_projects_usage_summary(db: Session) -> dict[str, Any]:
         net["completion_tokens"] += int(e.completion_tokens or 0)
         net["total_tokens"] += int(e.total_tokens or 0)
         net["calls"] += 1
+        _accumulate_user_row(by_user_acc, e)
 
     projects_out = []
     tot = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
@@ -286,4 +414,5 @@ def all_projects_usage_summary(db: Session) -> dict[str, Any]:
         "projects": projects_out,
         "totals": tot,
         "by_network": [by_net_tot[k] for k in sorted(by_net_tot)],
+        "by_user": _user_rows(db, by_user_acc),
     }

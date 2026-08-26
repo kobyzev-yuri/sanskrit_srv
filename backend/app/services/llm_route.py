@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 
 from app.config import get_settings
 
@@ -40,7 +44,31 @@ def _route_path() -> Path:
     return _data_dir() / "llm_route.json"
 
 
-def get_route() -> RouteId:
+def _key_hint(key: str | None) -> str | None:
+    text = (key or "").strip()
+    return text[-4:] if len(text) >= 4 else None
+
+
+@dataclass(frozen=True)
+class LlmCreds:
+    use_default: bool
+    route: RouteId
+    openrouter_api_key: str
+    openai_api_key: str
+    user_id: uuid.UUID | None
+    key_source: str  # default | personal
+
+    @property
+    def key_hint(self) -> str | None:
+        key = self.openrouter_api_key if self.route == "openrouter" else self.openai_api_key
+        return _key_hint(key)
+
+
+_llm_creds: ContextVar[LlmCreds | None] = ContextVar("llm_creds", default=None)
+
+
+def get_global_route() -> RouteId:
+    """Backoffice file `data/llm_route.json` — not the expert's personal override."""
     path = _route_path()
     if not path.is_file():
         return "openrouter"
@@ -52,6 +80,92 @@ def get_route() -> RouteId:
     except (OSError, json.JSONDecodeError, TypeError):
         pass
     return "openrouter"
+
+
+def creds_from_settings(*, user_id: uuid.UUID | None = None) -> LlmCreds:
+    settings = get_settings()
+    return LlmCreds(
+        use_default=True,
+        route=get_global_route(),
+        openrouter_api_key=(settings.openrouter_api_key or "").strip(),
+        openai_api_key=(settings.openai_api_key or "").strip(),
+        user_id=user_id,
+        key_source="default",
+    )
+
+
+def creds_from_user(user: Any | None) -> LlmCreds:
+    """Resolve keys for this user. Default = admin route + server .env, if granted."""
+    if user is None:
+        return creds_from_settings()
+    uid = getattr(user, "id", None)
+    allow = bool(getattr(user, "allow_default_llm", True))
+    use_default = bool(getattr(user, "use_default_llm", True)) and allow
+    if use_default:
+        return creds_from_settings(user_id=uid)
+    route_raw = str(getattr(user, "llm_route", None) or "").strip()
+    route: RouteId = route_raw if route_raw in ROUTES else get_global_route()
+    return LlmCreds(
+        use_default=False,
+        route=route,
+        openrouter_api_key=(getattr(user, "openrouter_api_key", None) or "").strip(),
+        openai_api_key=(getattr(user, "proxyapi_key", None) or "").strip(),
+        user_id=uid,
+        key_source="personal",
+    )
+
+
+def current_creds() -> LlmCreds:
+    return _llm_creds.get() or creds_from_settings()
+
+
+def bind_llm_user(user: Any | None):
+    return _llm_creds.set(creds_from_user(user))
+
+
+def reset_llm_user(token) -> None:
+    _llm_creds.reset(token)
+
+
+@contextmanager
+def llm_user_context(user: Any | None) -> Iterator[LlmCreds]:
+    tok = bind_llm_user(user)
+    try:
+        yield current_creds()
+    finally:
+        reset_llm_user(tok)
+
+
+def get_route() -> RouteId:
+    ov = _llm_creds.get()
+    if ov is not None:
+        return ov.route
+    return get_global_route()
+
+
+def effective_openrouter_key() -> str:
+    return current_creds().openrouter_api_key
+
+
+def effective_proxyapi_key() -> str:
+    return current_creds().openai_api_key
+
+
+def require_keys_for_plan(plan: dict[str, list[str]]) -> None:
+    creds = current_creds()
+    personal = creds.key_source == "personal"
+    if plan.get("openrouter") and not creds.openrouter_api_key:
+        raise RuntimeError(
+            "В кабинете не задан ключ OpenRouter (или вернитесь к токенам бэкофиса)."
+            if personal
+            else "OPENROUTER_API_KEY missing in server .env"
+        )
+    if (plan.get("anthropic") or plan.get("gemini") or plan.get("openai")) and not creds.openai_api_key:
+        raise RuntimeError(
+            "В кабинете не задан ключ ProxyAPI (или вернитесь к токенам бэкофиса)."
+            if personal
+            else "OPENAI_API_KEY missing in server .env"
+        )
 
 
 def set_route(route: RouteId, *, updated_by: str | None = None) -> dict[str, Any]:
@@ -67,9 +181,10 @@ def set_route(route: RouteId, *, updated_by: str | None = None) -> dict[str, Any
     return describe_route()
 
 
-def describe_route() -> dict[str, Any]:
+def describe_route(*, effective: bool = False) -> dict[str, Any]:
     settings = get_settings()
-    route = get_route()
+    creds = current_creds() if effective else creds_from_settings()
+    route = creds.route if effective else get_global_route()
     meta = ROUTES[route]
     or_model = (settings.openrouter_model or "").strip() or "stealth/ox-alpha"
     opus_model = (settings.anthropic_model or "").strip() or "claude-opus-5"
@@ -98,8 +213,10 @@ def describe_route() -> dict[str, Any]:
             "anthropic": opus_model,
         },
         "updated_at": _read_updated_at(),
-        "openrouter_key": bool((settings.openrouter_api_key or "").strip()),
-        "proxyapi_key": bool((settings.openai_api_key or "").strip()),
+        "openrouter_key": bool(creds.openrouter_api_key if effective else (settings.openrouter_api_key or "").strip()),
+        "proxyapi_key": bool(creds.openai_api_key if effective else (settings.openai_api_key or "").strip()),
+        "key_source": creds.key_source if effective else "default",
+        "use_default": creds.use_default if effective else True,
     }
 
 

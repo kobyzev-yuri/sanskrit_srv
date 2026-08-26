@@ -84,13 +84,15 @@ def read_alert() -> dict[str, Any]:
 
 def fetch_balance() -> dict[str, Any]:
     """GET ProxyAPI balance. May 403 if key has no balance permission."""
-    settings = get_settings()
-    if not settings.openai_api_key:
+    from app.services.llm_route import effective_proxyapi_key
+
+    key = effective_proxyapi_key()
+    if not key:
         return {"ok": False, "error": "OPENAI_API_KEY missing", "balance": None}
     try:
         resp = httpx.get(
             "https://api.proxyapi.ru/proxyapi/balance",
-            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            headers={"Authorization": f"Bearer {key}"},
             timeout=20,
         )
     except Exception as exc:  # noqa: BLE001
@@ -120,17 +122,24 @@ def fetch_balance() -> dict[str, Any]:
 
 
 def llm_status() -> dict[str, Any]:
-    from app.services.llm_route import describe_route, get_route
+    from app.services.llm_route import current_creds, describe_route, get_route
 
-    desc = describe_route()
+    creds = current_creds()
+    desc = describe_route(effective=True)
     route = get_route()
     primary = desc.get("primary") or {}
     live = f"{desc.get('label') or route} · {primary.get('provider')}:{primary.get('model')}"
+    if creds.key_source == "personal":
+        live = f"свой ключ · {live}"
+    else:
+        live = f"бэкофис · {live}"
 
     def attach(payload: dict[str, Any]) -> dict[str, Any]:
         payload["route"] = route
         payload["route_label"] = desc.get("label")
         payload["route_model"] = f"{primary.get('provider')}:{primary.get('model')}"
+        payload["key_source"] = creds.key_source
+        payload["use_default"] = creds.use_default
         if not payload.get("message"):
             payload["message"] = live
         elif payload.get("ok") and not payload.get("warning"):
@@ -139,14 +148,18 @@ def llm_status() -> dict[str, Any]:
 
     alert = read_alert()
     if route == "openrouter":
-        or_ok = bool((get_settings().openrouter_api_key or "").strip())
+        or_ok = bool(creds.openrouter_api_key)
         if not or_ok:
             return attach(
                 {
                     "ok": False,
                     "warning": True,
                     "code": "llm_key",
-                    "message": "OPENROUTER_API_KEY не задан в .env — нужен для Ox Alpha.",
+                    "message": (
+                        "В кабинете не задан ключ OpenRouter."
+                        if creds.key_source == "personal"
+                        else "OPENROUTER_API_KEY не задан в .env — нужен для Ox Alpha."
+                    ),
                     "balance": None,
                     "balance_ok": False,
                     "balance_error": "OPENROUTER_API_KEY missing",
@@ -184,7 +197,11 @@ def llm_status() -> dict[str, Any]:
     elif bal.get("low"):
         message = f"Мало средств на ProxyAPI: баланс {bal.get('balance')} ₽."
     elif not bal.get("ok") and not settings_key_ok():
-        message = "Ключ ProxyAPI не задан в .env"
+        message = (
+            "В кабинете не задан ключ ProxyAPI."
+            if creds.key_source == "personal"
+            else "Ключ ProxyAPI не задан в .env"
+        )
         active = True
     ok_msg = live if bal.get("ok") else (
         "Баланс недоступен (включите «Запрос баланса» у ключа в кабинете ProxyAPI) — квота всё равно отловится по HTTP 402."
@@ -203,9 +220,9 @@ def llm_status() -> dict[str, Any]:
 
 
 def settings_key_ok() -> bool:
-    s = get_settings()
-    from app.services.llm_route import get_route
+    from app.services.llm_route import current_creds, get_route
 
+    creds = current_creds()
     if get_route() == "openrouter":
-        return bool((s.openrouter_api_key or "").strip())
-    return bool(s.openai_api_key)
+        return bool(creds.openrouter_api_key)
+    return bool(creds.openai_api_key)

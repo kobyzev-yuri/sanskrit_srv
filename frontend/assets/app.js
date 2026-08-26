@@ -61,6 +61,8 @@ function logout(notify = true) {
   localStorage.removeItem("ss_token");
   $("#top-user").textContent = "";
   $("#nav-authed").hidden = true;
+  const cabinet = $("#nav-account");
+  if (cabinet) cabinet.hidden = true;
   showView("login");
   if (notify) toast("Выход");
 }
@@ -84,6 +86,8 @@ function afterLogin() {
   $("#nav-authed").hidden = false;
   $("#top-user").textContent = `${state.user.display_name} · ${state.user.role}`;
   $("#nav-admin").hidden = state.user.role !== "admin";
+  const cabinet = $("#nav-account");
+  if (cabinet) cabinet.hidden = !["admin", "expert", "scholar"].includes(state.user.role);
   $("#upload-card").hidden = state.user.role !== "admin";
 }
 
@@ -554,7 +558,7 @@ function usageLabel(u, llm) {
   const usd =
     u.est_usd_total != null ? ` · ≈ $${Number(u.est_usd_total).toFixed(4)}` : "";
   const live = llm?.route_label
-    ? `Сейчас: ${llm.route_label}${llm.route_model ? " (" + llm.route_model + ")" : ""}. `
+    ? `Сейчас: ${llm.key_source === "personal" ? "свой ключ · " : "бэкофис · "}${llm.route_label}${llm.route_model ? " (" + llm.route_model + ")" : ""}. `
     : llm?.message
       ? `Сейчас: ${llm.message}. `
       : "";
@@ -1953,12 +1957,29 @@ async function loadAdmin() {
     .map(
       (u) => `<tr>
       <td>${escapeHtml(u.email)}</td>
+      <td>${escapeHtml(u.login || "")}</td>
       <td>${escapeHtml(u.display_name)}</td>
       <td>${u.role}</td>
       <td>${u.is_active ? "да" : "нет"}</td>
+      <td><label class="check-row"><input type="checkbox" class="allow-default-llm" data-user="${u.id}"${u.allow_default_llm ? " checked" : ""} /></label></td>
+      <td>${u.has_openrouter_key || u.has_proxyapi_key ? "да" : "нет"}</td>
     </tr>`
     )
     .join("");
+  $$(".allow-default-llm").forEach((el) => {
+    el.onchange = async () => {
+      try {
+        await api(`/admin/users/${el.dataset.user}`, {
+          method: "PATCH",
+          json: { allow_default_llm: el.checked },
+        });
+        toast(el.checked ? "Токены бэкофиса разрешены" : "Только свои ключи");
+      } catch (e) {
+        toast(e.message, true);
+        el.checked = !el.checked;
+      }
+    };
+  });
   const cat = await api("/admin/llm-catalog");
   $("#llm-catalog").innerHTML = cat.models
     .map((m) => `<li><code>${m.provider}</code> · <strong>${escapeHtml(m.model)}</strong> — ${escapeHtml(m.label)}</li>`)
@@ -2025,7 +2046,8 @@ async function loadAdminUsage() {
       <td class="num">${formatTokens(t.total_tokens)}</td>
       <td class="num">${t.calls || 0}</td>
     </tr>`);
-    if (foot) foot.innerHTML = footRows.join("");
+    foot.innerHTML = footRows.join("");
+    renderUsageByUser($("#usage-by-user-table"), data.by_user || []);
   } catch (e) {
     body.innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(e.message || "не удалось загрузить")}</td></tr>`;
   }
@@ -2080,12 +2102,190 @@ async function loadLlmRoute() {
 
 async function createUser(ev) {
   ev.preventDefault();
-  const body = Object.fromEntries(new FormData(ev.target).entries());
+  const fd = new FormData(ev.target);
+  const body = {
+    email: String(fd.get("email") || "").trim(),
+    display_name: String(fd.get("display_name") || "").trim(),
+    login: String(fd.get("login") || "").trim() || undefined,
+    password: String(fd.get("password") || ""),
+    role: String(fd.get("role") || "expert"),
+    allow_default_llm: Boolean(ev.target.allow_default_llm?.checked),
+  };
   try {
     await api("/admin/users", { method: "POST", json: body });
     toast("Пользователь создан");
     ev.target.reset();
+    if (ev.target.allow_default_llm) ev.target.allow_default_llm.checked = true;
     await loadAdmin();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function keySourceLabel(source, hint) {
+  if (source === "personal") {
+    return hint ? `свой ключ · …${escapeHtml(hint)}` : "свой ключ";
+  }
+  return hint ? `бэкофис · …${escapeHtml(hint)}` : "бэкофис";
+}
+
+function renderUsageByUser(body, rows) {
+  if (!body) return;
+  const out = [];
+  for (const u of rows || []) {
+    const who = `${escapeHtml(u.display_name || "—")}${u.login ? `<div class="muted">${escapeHtml(u.login)}</div>` : ""}`;
+    const nets = (u.by_network || []).filter((n) => n.calls);
+    if (!nets.length) {
+      out.push(`<tr>
+        <td>${who}</td>
+        <td>${keySourceLabel(u.key_source, u.key_hint)}</td>
+        <td>—</td>
+        <td class="num">${formatTokens(u.prompt_tokens)}</td>
+        <td class="num">${formatTokens(u.completion_tokens)}</td>
+        <td class="num">${formatTokens(u.total_tokens)}</td>
+        <td class="num">${u.calls || 0}</td>
+      </tr>`);
+      continue;
+    }
+    for (const n of nets) {
+      out.push(`<tr>
+        <td>${who}</td>
+        <td>${keySourceLabel(u.key_source, u.key_hint)}</td>
+        <td>${escapeHtml(networkLabel(n.network))}</td>
+        <td class="num">${formatTokens(n.prompt_tokens)}</td>
+        <td class="num">${formatTokens(n.completion_tokens)}</td>
+        <td class="num">${formatTokens(n.total_tokens)}</td>
+        <td class="num">${n.calls || 0}</td>
+      </tr>`);
+    }
+  }
+  body.innerHTML = out.join("") || `<tr><td colspan="7" class="muted">Пока нет вызовов с учётом ключа</td></tr>`;
+}
+
+async function loadAccount() {
+  const form = $("#account-profile-form");
+  if (!form || !state.user) return;
+  const me = await api("/auth/me");
+  state.user = me;
+  afterLogin();
+  form.login.value = me.login || "";
+  form.email.value = me.email || "";
+  form.display_name.value = me.display_name || "";
+  form.current_password.value = "";
+  form.password.value = "";
+  await loadAccountLlm();
+  await loadAccountUsage();
+}
+
+async function loadAccountLlm() {
+  const llm = await api("/auth/me/llm");
+  const status = $("#account-llm-status");
+  const hint = $("#account-default-hint");
+  const useDef = $("#account-use-default");
+  const resetBtn = $("#btn-llm-reset");
+  if (status) {
+    status.textContent = llm.use_default_llm
+      ? `Сейчас: токены бэкофиса · ${llm.effective_label}`
+      : `Сейчас: свои ключи · ${llm.effective_label}`;
+  }
+  if (hint) {
+    hint.textContent = llm.allow_default_llm
+      ? `Бэкофис: ${llm.default_label}. OpenRouter ${llm.default_openrouter_key ? "задан" : "не задан"}, ProxyAPI ${llm.default_proxyapi_key ? "задан" : "не задан"}.`
+      : "Администратор не назначил вам токены сервера — нужен свой ключ OpenRouter или ProxyAPI.";
+  }
+  if (useDef) {
+    useDef.checked = Boolean(llm.use_default_llm);
+    useDef.disabled = !llm.allow_default_llm;
+  }
+  if (resetBtn) resetBtn.hidden = !llm.allow_default_llm;
+  const orHint = $("#account-or-hint");
+  const pxHint = $("#account-px-hint");
+  if (orHint) orHint.textContent = llm.has_openrouter_key ? `Сохранён OpenRouter …${llm.openrouter_hint || ""}` : "Свой OpenRouter не задан";
+  if (pxHint) pxHint.textContent = llm.has_proxyapi_key ? `Сохранён ProxyAPI …${llm.proxyapi_hint || ""}` : "Свой ProxyAPI не задан";
+  const box = $("#account-llm-route-box");
+  if (box) {
+    const selected = llm.use_default_llm ? llm.default_route : (llm.llm_route || llm.effective_route);
+    box.innerHTML = (llm.options || [])
+      .map((opt) => {
+        const primary = opt.primary || {};
+        const detail = primary.provider
+          ? `${primary.provider}:${primary.model} — ${opt.hint || ""}`
+          : opt.hint || "";
+        return `<label class="llm-route-opt">
+          <input type="radio" name="account-llm-route" value="${escapeHtml(opt.id)}"${opt.id === selected ? " checked" : ""}${llm.use_default_llm ? " disabled" : ""} />
+          <span>
+            <strong>${escapeHtml(opt.label || opt.id)}</strong>
+            <span class="muted llm-route-detail">${escapeHtml(detail)}</span>
+          </span>
+        </label>`;
+      })
+      .join("");
+  }
+}
+
+async function loadAccountUsage() {
+  const body = $("#account-usage-table");
+  if (!body) return;
+  try {
+    const data = await api("/auth/me/usage");
+    renderUsageByUser(body, data.by_user || []);
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="6" class="muted">${escapeHtml(e.message || "не удалось загрузить")}</td></tr>`;
+  }
+}
+
+async function saveAccountProfile(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const body = {
+    login: String(fd.get("login") || "").trim(),
+    email: String(fd.get("email") || "").trim(),
+    display_name: String(fd.get("display_name") || "").trim(),
+  };
+  const current = String(fd.get("current_password") || "");
+  const next = String(fd.get("password") || "");
+  if (current) body.current_password = current;
+  if (next) {
+    body.password = next;
+    body.current_password = current;
+  }
+  try {
+    state.user = await api("/auth/me", { method: "PATCH", json: body });
+    afterLogin();
+    toast("Профиль сохранён");
+    ev.target.current_password.value = "";
+    ev.target.password.value = "";
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function saveAccountLlm(ev) {
+  ev.preventDefault();
+  const useDefault = Boolean($("#account-use-default")?.checked);
+  const body = { use_default_llm: useDefault };
+  const orKey = String(ev.target.openrouter_api_key.value || "").trim();
+  const pxKey = String(ev.target.proxyapi_key.value || "").trim();
+  if (orKey) body.openrouter_api_key = orKey;
+  if (pxKey) body.proxyapi_key = pxKey;
+  const picked = document.querySelector('input[name="account-llm-route"]:checked');
+  if (picked && !useDefault) body.llm_route = picked.value;
+  try {
+    await api("/auth/me/llm", { method: "PATCH", json: body });
+    ev.target.openrouter_api_key.value = "";
+    ev.target.proxyapi_key.value = "";
+    toast("Ключи сохранены");
+    await loadAccountLlm();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function resetAccountLlm() {
+  try {
+    await api("/auth/me/llm/reset", { method: "POST", json: {} });
+    toast("Снова токены бэкофиса");
+    await loadAccountLlm();
   } catch (e) {
     toast(e.message, true);
   }
@@ -2207,12 +2407,34 @@ function wire() {
     }
   });
   $("#user-form").onsubmit = createUser;
+  const accForm = $("#account-profile-form");
+  if (accForm) accForm.onsubmit = saveAccountProfile;
+  const accLlm = $("#account-llm-form");
+  if (accLlm) accLlm.onsubmit = saveAccountLlm;
+  const resetLlm = $("#btn-llm-reset");
+  if (resetLlm) resetLlm.onclick = resetAccountLlm;
+  const useDef = $("#account-use-default");
+  if (useDef) {
+    useDef.onchange = () => {
+      $$('input[name="account-llm-route"]').forEach((el) => {
+        el.disabled = useDef.checked;
+      });
+    };
+  }
 
   $$(".nav-btn").forEach((btn) => {
     btn.onclick = async () => {
       const view = btn.dataset.view;
       if (view === "projects") await loadProjects();
       if (view === "admin") await loadAdmin();
+      if (view === "account") {
+        try {
+          await loadAccount();
+        } catch (e) {
+          toast(e.message, true);
+          return;
+        }
+      }
       if (view === "editor" && !state.project) {
         toast("Сначала откройте проект", true);
         return;

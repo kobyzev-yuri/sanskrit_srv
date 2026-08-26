@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260826batch1" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260826cabinet1" />
 </head>
 <body>
   <div class="app-shell">
@@ -16,6 +16,7 @@
       <nav id="nav-authed" hidden>
         <button type="button" class="nav-btn ghost" data-view="projects">Проекты</button>
         <button type="button" class="nav-btn ghost" data-view="editor">Редактор</button>
+        <button type="button" class="nav-btn ghost" id="nav-account" data-view="account" hidden>Кабинет</button>
         <button type="button" class="nav-btn ghost" id="nav-admin" data-view="admin" hidden>Бэкофис</button>
         <button type="button" class="ghost" id="logout-btn">Выход</button>
       </nav>
@@ -29,7 +30,7 @@
           <form class="card form-col" id="login-form">
             <h1>Вход</h1>
             <p>Загрузка скана, просмотр и правка HTML-черновика. Бэкофис — только admin.</p>
-            <label>Email <input id="login-email" type="email" required autocomplete="username" /></label>
+            <label>Email или логин <input id="login-email" type="text" required autocomplete="username" /></label>
             <label>Пароль <input id="login-password" type="password" required autocomplete="current-password" /></label>
             <button class="primary" type="submit">Войти</button>
           </form>
@@ -217,18 +218,76 @@
         <select id="page-select" hidden aria-hidden="true"></select>
       </section>
 
+      <section id="view-account" class="view">
+        <div class="admin-layout">
+          <div class="admin-section">
+            <h2>Профиль</h2>
+            <p class="muted">Логин и email — для входа. Имя видно в шапке. Текущий пароль нужен, чтобы сменить email или пароль.</p>
+            <form id="account-profile-form" class="form-col">
+              <label>Логин <input name="login" required minlength="2" autocomplete="username" /></label>
+              <label>Email <input name="email" type="email" required autocomplete="email" /></label>
+              <label>Имя <input name="display_name" required /></label>
+              <label>Текущий пароль <input name="current_password" type="password" autocomplete="current-password" /></label>
+              <label>Новый пароль <input name="password" type="password" minlength="6" autocomplete="new-password" /></label>
+              <button class="primary" type="submit">Сохранить профиль</button>
+            </form>
+          </div>
+          <div class="admin-section">
+            <h2>Ключи LLM</h2>
+            <p class="muted" id="account-llm-status">—</p>
+            <form id="account-llm-form" class="form-col">
+              <label class="check-row" id="account-use-default-wrap">
+                <input type="checkbox" name="use_default_llm" id="account-use-default" />
+                Использовать токены и модель бэкофиса
+              </label>
+              <p class="muted" id="account-default-hint"></p>
+              <label>Ключ OpenRouter <input name="openrouter_api_key" type="password" autocomplete="off" placeholder="оставить пустым — не менять" /></label>
+              <p class="muted" id="account-or-hint"></p>
+              <label>Ключ ProxyAPI <input name="proxyapi_key" type="password" autocomplete="off" placeholder="оставить пустым — не менять" /></label>
+              <p class="muted" id="account-px-hint"></p>
+              <p class="muted">Своя сеть (если не бэкофис):</p>
+              <div id="account-llm-route-box" class="llm-route-box"></div>
+              <div class="edit-actions" style="border:0;padding:0;background:transparent">
+                <button class="primary" type="submit">Сохранить ключи</button>
+                <button type="button" id="btn-llm-reset">Вернуться к токенам бэкофиса</button>
+              </div>
+            </form>
+          </div>
+          <div class="admin-section">
+            <h2>Мой расход токенов</h2>
+            <p class="muted">По вашим вызовам: свой ключ отдельно от токенов бэкофиса.</p>
+            <div class="table-wrap">
+              <table class="usage-table">
+                <thead>
+                  <tr>
+                    <th>Ключ</th>
+                    <th>Сеть</th>
+                    <th class="num">Входящие</th>
+                    <th class="num">Исходящие</th>
+                    <th class="num">Всего</th>
+                    <th class="num">Вызовы</th>
+                  </tr>
+                </thead>
+                <tbody id="account-usage-table"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="view-admin" class="view">
         <div class="admin-layout">
           <div class="admin-section">
             <h2>Пользователи</h2>
             <table>
-              <thead><tr><th>Email</th><th>Имя</th><th>Роль</th><th>Активен</th></tr></thead>
+              <thead><tr><th>Email</th><th>Логин</th><th>Имя</th><th>Роль</th><th>Активен</th><th>Токены бэкофиса</th><th>Свои ключи</th></tr></thead>
               <tbody id="users-table"></tbody>
             </table>
             <form id="user-form" class="form-col" style="margin-top:1rem">
               <h3 style="margin:0">Новый пользователь</h3>
               <label>Email <input name="email" type="email" required /></label>
               <label>Имя <input name="display_name" required /></label>
+              <label>Логин <input name="login" placeholder="по умолчанию = email" /></label>
               <label>Пароль <input name="password" type="password" minlength="6" required /></label>
               <label>Роль
                 <select name="role">
@@ -237,6 +296,10 @@
                   <option value="reader">reader</option>
                   <option value="admin">admin</option>
                 </select>
+              </label>
+              <label class="check-row">
+                <input type="checkbox" name="allow_default_llm" checked />
+                Разрешить токены и модель бэкофиса
               </label>
               <button class="primary" type="submit">Создать</button>
             </form>
@@ -259,6 +322,24 @@
                 </thead>
                 <tbody id="usage-table"></tbody>
                 <tfoot id="usage-tfoot"></tfoot>
+              </table>
+            </div>
+            <h3 style="margin:1.25rem 0 0.5rem">По пользователям и ключам</h3>
+            <p class="muted">Строка = кто вызвал × свои ключи или токены бэкофиса. Старые вызовы без пользователя — «бэкофис».</p>
+            <div class="table-wrap">
+              <table class="usage-table">
+                <thead>
+                  <tr>
+                    <th>Пользователь</th>
+                    <th>Ключ</th>
+                    <th>Сеть</th>
+                    <th class="num">Входящие</th>
+                    <th class="num">Исходящие</th>
+                    <th class="num">Всего</th>
+                    <th class="num">Вызовы</th>
+                  </tr>
+                </thead>
+                <tbody id="usage-by-user-table"></tbody>
               </table>
             </div>
           </div>
@@ -309,6 +390,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260826batch1"></script>
+  <script src="/assets/app.js?v=20260826cabinet1"></script>
 </body>
 </html>

@@ -66,8 +66,25 @@ def ensure_schema() -> None:
     if not settings.database_url.startswith("sqlite"):
         return
     with engine.begin() as conn:
-        rows = conn.execute(text("PRAGMA table_info(pages)")).fetchall()
-        names = {r[1] for r in rows}
-        if "source_html" not in names:
-            conn.execute(text("ALTER TABLE pages ADD COLUMN source_html TEXT"))
+        _sqlite_add_column(conn, "pages", "source_html", "TEXT")
+        _sqlite_add_column(conn, "users", "login", "VARCHAR(255)")
+        _sqlite_add_column(conn, "users", "allow_default_llm", "BOOLEAN DEFAULT 1")
+        _sqlite_add_column(conn, "users", "use_default_llm", "BOOLEAN DEFAULT 1")
+        _sqlite_add_column(conn, "users", "llm_route", "VARCHAR(32)")
+        _sqlite_add_column(conn, "users", "openrouter_api_key", "TEXT")
+        _sqlite_add_column(conn, "users", "proxyapi_key", "TEXT")
+        _sqlite_add_column(conn, "llm_usage_events", "user_id", "CHAR(32)")
+        _sqlite_add_column(conn, "llm_usage_events", "key_source", "VARCHAR(16) DEFAULT 'default'")
+        _sqlite_add_column(conn, "llm_usage_events", "key_hint", "VARCHAR(8)")
+        conn.execute(
+            text("UPDATE users SET login = lower(email) WHERE login IS NULL OR trim(login) = ''")
+        )
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_login ON users(login)"))
+
+
+def _sqlite_add_column(conn, table: str, name: str, ddl: str) -> None:
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    names = {r[1] for r in rows}
+    if name not in names:
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 

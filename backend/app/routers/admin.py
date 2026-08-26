@@ -19,6 +19,7 @@ from app.schemas import (
     UserOut,
     UserUpdateIn,
 )
+from app.services.account import assert_ident_free, normalize_login
 from app.services.llm_route import ROUTES, describe_route, set_route
 from app.services.llm_usage import all_projects_usage_summary
 
@@ -46,13 +47,18 @@ def list_users(_: User = AdminUser, db: Session = Depends(get_db)):
 @router.post("/users", response_model=UserOut, status_code=201)
 def create_user(body: UserCreateIn, _: User = AdminUser, db: Session = Depends(get_db)):
     email = body.email.lower()
-    if db.scalar(select(User).where(User.email == email)):
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="Email already exists")
+    login = normalize_login(body.login) if body.login else email
+    assert_ident_free(db, email)
+    if login != email:
+        assert_ident_free(db, login)
     user = User(
         email=email,
+        login=login,
         password_hash=hash_password(body.password),
         display_name=body.display_name,
         role=body.role,
+        allow_default_llm=bool(body.allow_default_llm),
+        use_default_llm=bool(body.allow_default_llm),
     )
     db.add(user)
     db.commit()
@@ -76,12 +82,26 @@ def update_user(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
     if body.display_name is not None:
         user.display_name = body.display_name
+    if body.login is not None:
+        login = normalize_login(body.login)
+        if login != user.login:
+            assert_ident_free(db, login, exclude_id=user.id)
+            user.login = login
+    if body.email is not None:
+        email = body.email.lower()
+        if email != user.email:
+            assert_ident_free(db, email, exclude_id=user.id)
+            user.email = email
     if body.role is not None:
         user.role = body.role
     if body.is_active is not None:
         user.is_active = body.is_active
     if body.password is not None:
         user.password_hash = hash_password(body.password)
+    if body.allow_default_llm is not None:
+        user.allow_default_llm = bool(body.allow_default_llm)
+        if not user.allow_default_llm:
+            user.use_default_llm = False
     db.commit()
     db.refresh(user)
     return user

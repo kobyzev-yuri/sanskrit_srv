@@ -18,7 +18,13 @@ from app.services.openrouter_ox import (
     openrouter_headers,
     post_openrouter_chat,
 )
-from app.services.llm_route import model_plan, model_plan_primary_only
+from app.services.llm_route import (
+    effective_openrouter_key,
+    effective_proxyapi_key,
+    model_plan,
+    model_plan_primary_only,
+    require_keys_for_plan,
+)
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 
 BASE_PROMPT = """You restore a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
@@ -238,7 +244,7 @@ def revise_from_scan(
     """
     settings = get_settings()
     plan = model_plan_primary_only()
-    _require_keys_for_plan(settings, plan)
+    require_keys_for_plan(plan)
     if not scan_path.exists():
         raise FileNotFoundError(f"scan missing: {scan_path}")
 
@@ -298,7 +304,7 @@ def revise_from_scan(
     for model in _uniq(openrouter_models):
         try:
             html, usage = _call_openrouter(
-                settings.openrouter_api_key,
+                effective_openrouter_key(),
                 settings.openrouter_base_url,
                 model,
                 user_text,
@@ -314,7 +320,7 @@ def revise_from_scan(
     for model in _uniq(anthropic_models):
         try:
             html, usage = _call_anthropic(
-                settings.openai_api_key,
+                effective_proxyapi_key(),
                 settings.anthropic_base_url,
                 model,
                 user_text,
@@ -330,7 +336,7 @@ def revise_from_scan(
     for model in _uniq(gemini_models):
         try:
             html, usage = _call_gemini(
-                settings.openai_api_key, settings.gemini_base_url, model, user_text, image_b64
+                effective_proxyapi_key(), settings.gemini_base_url, model, user_text, image_b64
             )
             usage = {**usage, "network": "gemini", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"gemini:{model}", usage
@@ -342,7 +348,7 @@ def revise_from_scan(
     for model in _uniq(openai_models):
         try:
             html, usage = _call_openai(
-                settings.openai_api_key, settings.openai_base_url, model, user_text, image_b64
+                effective_proxyapi_key(), settings.openai_base_url, model, user_text, image_b64
             )
             usage = {**usage, "network": "openai", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"openai:{model}", usage
@@ -374,7 +380,7 @@ def run_vision_prompt(
         plan = model_plan_primary_only()
     else:
         plan = model_plan()
-    _require_keys_for_plan(settings, plan)
+    require_keys_for_plan(plan)
     if not scan_path.exists():
         raise FileNotFoundError(f"scan missing: {scan_path}")
 
@@ -384,7 +390,7 @@ def run_vision_prompt(
     for model in _uniq(plan.get("openrouter") or []):
         try:
             text, usage = _call_openrouter(
-                settings.openrouter_api_key,
+                effective_openrouter_key(),
                 settings.openrouter_base_url,
                 model,
                 user_text,
@@ -400,7 +406,7 @@ def run_vision_prompt(
     for model in _uniq(plan["anthropic"]):
         try:
             text, usage = _call_anthropic(
-                settings.openai_api_key,
+                effective_proxyapi_key(),
                 settings.anthropic_base_url,
                 model,
                 user_text,
@@ -422,7 +428,7 @@ def run_vision_prompt(
     for model in _uniq(plan["gemini"]):
         try:
             text, usage = _call_gemini(
-                settings.openai_api_key, settings.gemini_base_url, model, user_text, image_b64
+                effective_proxyapi_key(), settings.gemini_base_url, model, user_text, image_b64
             )
             usage = {**usage, "network": "gemini", "model": model}
             return text, f"gemini:{model}", usage
@@ -434,7 +440,7 @@ def run_vision_prompt(
     for model in _uniq(plan["openai"]):
         try:
             text, usage = _call_openai(
-                settings.openai_api_key, settings.openai_base_url, model, user_text, image_b64
+                effective_proxyapi_key(), settings.openai_base_url, model, user_text, image_b64
             )
             usage = {**usage, "network": "openai", "model": model}
             return text, f"openai:{model}", usage
@@ -446,13 +452,8 @@ def run_vision_prompt(
     raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
 
 
-def _require_keys_for_plan(settings: Any, plan: dict[str, list[str]]) -> None:
-    if plan.get("openrouter") and not (settings.openrouter_api_key or "").strip():
-        raise RuntimeError("OPENROUTER_API_KEY missing in server .env")
-    if (plan.get("anthropic") or plan.get("gemini") or plan.get("openai")) and not (
-        settings.openai_api_key or ""
-    ).strip():
-        raise RuntimeError("OPENAI_API_KEY missing in server .env")
+def _require_keys_for_plan(_settings: Any, plan: dict[str, list[str]]) -> None:
+    require_keys_for_plan(plan)
 
 
 def _openai_message_text(message: dict[str, Any] | None) -> str:

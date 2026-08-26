@@ -350,7 +350,7 @@ async def create_project(
 
     project.status = "processing"
     db.commit()
-    enqueue_project_pipeline(db, project.id, force=False)
+    enqueue_project_pipeline(db, project.id, force=False, user_id=user.id)
     db.refresh(project)
     return _project_out(db, project)
 
@@ -528,6 +528,7 @@ def start_pipeline(
         open_only=open_only,
         translate=is_translate and not proofread,
         proofread=proofread,
+        user_id=user.id,
     )
     return _project_out(db, project)
 

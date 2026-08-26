@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.models import PageStatus, Role, VersionSource
 
@@ -18,33 +18,97 @@ class TokenOut(BaseModel):
 
 
 class LoginIn(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=1)  # email or login
     password: str
 
 
 class UserOut(BaseModel):
     id: uuid.UUID
     email: EmailStr
+    login: str = ""
     display_name: str
     role: Role
     is_active: bool
     created_at: datetime
+    allow_default_llm: bool = True
+    use_default_llm: bool = True
+    llm_route: str | None = None
+    has_openrouter_key: bool = False
+    has_proxyapi_key: bool = False
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_orm(cls, data: Any):
+        if isinstance(data, dict):
+            return data
+        return {
+            "id": data.id,
+            "email": data.email,
+            "login": getattr(data, "login", None) or data.email,
+            "display_name": data.display_name,
+            "role": data.role,
+            "is_active": data.is_active,
+            "created_at": data.created_at,
+            "allow_default_llm": bool(getattr(data, "allow_default_llm", True)),
+            "use_default_llm": bool(getattr(data, "use_default_llm", True)),
+            "llm_route": getattr(data, "llm_route", None) or None,
+            "has_openrouter_key": bool((getattr(data, "openrouter_api_key", None) or "").strip()),
+            "has_proxyapi_key": bool((getattr(data, "proxyapi_key", None) or "").strip()),
+        }
 
 
 class UserCreateIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
     display_name: str
+    login: str | None = None
     role: Role = Role.expert
+    allow_default_llm: bool = True
 
 
 class UserUpdateIn(BaseModel):
     display_name: str | None = None
+    login: str | None = None
+    email: EmailStr | None = None
     role: Role | None = None
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=6)
+    allow_default_llm: bool | None = None
+
+
+class MeUpdateIn(BaseModel):
+    email: EmailStr | None = None
+    login: str | None = None
+    display_name: str | None = None
+    current_password: str | None = None
+    password: str | None = Field(default=None, min_length=6)
+
+
+class MeLlmUpdateIn(BaseModel):
+    use_default_llm: bool | None = None
+    llm_route: str | None = None
+    openrouter_api_key: str | None = None
+    proxyapi_key: str | None = None
+
+
+class MeLlmOut(BaseModel):
+    allow_default_llm: bool
+    use_default_llm: bool
+    llm_route: str | None = None
+    effective_route: str
+    effective_label: str
+    key_source: str
+    has_openrouter_key: bool
+    has_proxyapi_key: bool
+    openrouter_hint: str | None = None
+    proxyapi_hint: str | None = None
+    options: list[dict[str, Any]] = []
+    default_route: str
+    default_label: str
+    default_openrouter_key: bool
+    default_proxyapi_key: bool
 
 
 class JobOut(BaseModel):
@@ -237,6 +301,20 @@ class LlmUsageModelOut(BaseModel):
     est_usd: float | None = None
 
 
+class AdminUsageUserOut(BaseModel):
+    user_id: str | None = None
+    login: str | None = None
+    email: str | None = None
+    display_name: str
+    key_source: str
+    key_hint: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    calls: int = 0
+    by_network: list[LlmUsageNetworkOut] = []
+
+
 class ProjectUsageOut(BaseModel):
     project_id: str
     totals: LlmUsageTotalsOut
@@ -246,6 +324,7 @@ class ProjectUsageOut(BaseModel):
     route: str | None = None
     route_label: str | None = None
     route_model: str | None = None
+    by_user: list[AdminUsageUserOut] = []
 
 
 class AdminUsageProjectOut(BaseModel):
@@ -264,6 +343,12 @@ class AdminUsageOut(BaseModel):
     projects: list[AdminUsageProjectOut]
     totals: LlmUsageTotalsOut
     by_network: list[LlmUsageNetworkOut] = []
+    by_user: list[AdminUsageUserOut] = []
+
+
+class MeUsageOut(BaseModel):
+    totals: LlmUsageTotalsOut
+    by_user: list[AdminUsageUserOut] = []
 
 
 class LlmCatalogOut(BaseModel):
@@ -281,6 +366,8 @@ class LlmRouteOut(BaseModel):
     updated_at: float | None = None
     openrouter_key: bool = False
     proxyapi_key: bool = False
+    key_source: str = "default"
+    use_default: bool = True
 
 
 class LlmRouteIn(BaseModel):

@@ -36,6 +36,7 @@ def user_create(email: str, password: str, role: str, name: str) -> None:
             sys.exit(1)
         user = User(
             email=email,
+            login=email,
             password_hash=hash_password(password),
             display_name=name,
             role=Role(role),
@@ -51,7 +52,7 @@ def user_list() -> None:
         users = db.scalars(select(User).order_by(User.created_at)).all()
         for u in users:
             flag = "active" if u.is_active else "off"
-            print(f"{u.email}\t{u.role.value}\t{flag}\t{u.display_name}")
+            print(f"{u.email}\t{getattr(u, 'login', '')}\t{u.role.value}\t{flag}\t{u.display_name}")
 
 
 def user_reset_password(email: str, password: str) -> None:

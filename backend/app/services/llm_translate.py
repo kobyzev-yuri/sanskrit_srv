@@ -15,7 +15,7 @@ from app.services.llm_draft import (
     _uniq,
     extract_html_only,
 )
-from app.services.llm_route import model_plan_primary_only
+from app.services.llm_route import effective_openrouter_key, effective_proxyapi_key, model_plan_primary_only
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, is_quota_response, set_quota_alert
 from app.services.llm_usage import parse_anthropic_usage, parse_gemini_usage, parse_openai_usage
 from app.services.layout_assets import preserve_figure_srcs
@@ -131,7 +131,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     for model in _uniq(plan.get("openrouter") or []):
         try:
             text, usage = _call_openrouter_text(
-                settings.openrouter_api_key, settings.openrouter_base_url, model, user_text
+                effective_openrouter_key(), settings.openrouter_base_url, model, user_text
             )
             usage = {**usage, "network": "openrouter", "model": model}
             return text, f"openrouter:{model}", usage
@@ -143,7 +143,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     for model in _uniq(plan.get("anthropic") or []):
         try:
             text, usage = _call_anthropic_text(
-                settings.openai_api_key, settings.anthropic_base_url, model, user_text
+                effective_proxyapi_key(), settings.anthropic_base_url, model, user_text
             )
             usage = {**usage, "network": "anthropic", "model": model}
             return text, f"anthropic:{model}", usage
@@ -155,7 +155,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     for model in _uniq(plan.get("gemini") or []):
         try:
             text, usage = _call_gemini_text(
-                settings.openai_api_key, settings.gemini_base_url, model, user_text
+                effective_proxyapi_key(), settings.gemini_base_url, model, user_text
             )
             usage = {**usage, "network": "gemini", "model": model}
             return text, f"gemini:{model}", usage
@@ -167,7 +167,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     for model in _uniq(plan.get("openai") or []):
         try:
             text, usage = _call_openai_text(
-                settings.openai_api_key, settings.openai_base_url, model, user_text
+                effective_proxyapi_key(), settings.openai_base_url, model, user_text
             )
             usage = {**usage, "network": "openai", "model": model}
             return text, f"openai:{model}", usage
