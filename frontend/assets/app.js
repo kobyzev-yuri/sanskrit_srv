@@ -862,7 +862,9 @@ function setDraftHtml(html) {
 }
 
 function draftTab() {
-  return "wysiwyg";
+  // Digitize: stay on preview vs scan. Wysiwyg flush of figures can empty the editor
+  // and then «Сохранить и согласовать» looks like it does nothing.
+  return isTranslate() ? "wysiwyg" : "preview";
 }
 
 function isWysiwygActive() {
@@ -1332,9 +1334,19 @@ async function saveHtml() {
 async function acceptPage() {
   if (!state.page) return;
   try {
-    // Direct HTML edit is first-class: persist textarea before acceptance.
-    const html = currentDraftHtml();
-    if (html !== (state.page.current_html || "")) {
+    const saved = state.page.current_html || "";
+    let html = saved;
+    try {
+      html = currentDraftHtml();
+    } catch (_) {
+      html = saved;
+    }
+    if (!(html || "").trim()) html = saved;
+    if (!(html || "").trim()) {
+      toast("Нет черновика — нечего согласовать", true);
+      return;
+    }
+    if (html !== saved) {
       state.page = await api(`/pages/${state.page.id}`, {
         method: "PATCH",
         json: { html, note: "edit before accept" },
@@ -1345,7 +1357,7 @@ async function acceptPage() {
     const openAfter = visiblePages().filter((p) => p.id !== acceptedId);
     const nextOpen = openAfter.find((p) => p.page_no > state.page.page_no) || openAfter[0] || null;
     state.page = await api(`/pages/${state.page.id}/accept`, { method: "POST" });
-    $("#page-status").textContent = state.page.status;
+    $("#page-status").textContent = "согласовано";
     toast("Страница сохранена и принята");
     await openProject(state.project.id);
     if (state.thumbFilter === "open" && nextOpen) {
@@ -1363,7 +1375,11 @@ async function revokePage() {
     updateEditMode();
     $("#page-status").textContent =
       state.page.status === "expert_review" ? "на правке" : state.page.status;
-    toast("Согласие отозвано — можно править заданием");
+    const filterNote =
+      state.thumbFilter === "open"
+        ? " В списке слева только несогласованные — остальные скрыты фильтром, не отозваны."
+        : "";
+    toast("Согласие отозвано — можно править заданием." + filterNote);
     if (state.project?.id) await openProject(state.project.id);
   } catch (e) {
     toast(e.message, true);

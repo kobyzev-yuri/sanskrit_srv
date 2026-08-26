@@ -391,6 +391,14 @@ textarea {
   display: grid;
   grid-template-rows: auto 1fr auto auto;
   min-height: 0;
+  overflow: auto;
+}
+#edit-tools,
+#accepted-box {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--panel);
 }
 .tabs { display: flex; gap: 0.25rem; }
 .tab {
