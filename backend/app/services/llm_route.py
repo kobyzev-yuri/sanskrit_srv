@@ -22,8 +22,8 @@ ROUTES: dict[RouteId, dict[str, str]] = {
     },
     "gemini": {
         "id": "gemini",
-        "label": "Gemini 2.5 Pro (Google AI Studio)",
-        "hint": "Скан + перевод через Gemini Pro. Ключ GEMINI_API_KEY (AI Studio). ProxyAPI не нужен.",
+        "label": "Gemini 3.1 Pro (Google AI Studio)",
+        "hint": "Скан + перевод через Gemini 3.1 Pro. Ключ GEMINI_API_KEY (AI Studio). ProxyAPI не нужен.",
     },
     "opus": {
         "id": "opus",
@@ -200,7 +200,7 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
     meta = ROUTES[route]
     or_model = (settings.openrouter_model or "").strip() or "stealth/ox-alpha"
     opus_model = (settings.anthropic_model or "").strip() or "claude-opus-5"
-    gemini_model = (settings.gemini_model or "").strip() or "gemini-2.5-pro"
+    gemini_model = (settings.gemini_model or "").strip() or "gemini-3.1-pro-preview"
     openai_model = (settings.openai_model or "").strip() or "gpt-4o-mini"
     primaries = {
         "openrouter": {"provider": "openrouter", "model": or_model},
@@ -254,10 +254,10 @@ def model_plan() -> dict[str, list[str]]:
     plan = _empty_plan()
     or_model = (settings.openrouter_model or "").strip() or "stealth/ox-alpha"
     opus = (settings.anthropic_model or "").strip() or "claude-opus-5"
-    gemini_primary = (settings.gemini_model or "").strip() or "gemini-2.5-pro"
+    gemini_primary = (settings.gemini_model or "").strip() or "gemini-3.1-pro-preview"
     geminis = [
         m
-        for m in [gemini_primary, "gemini-2.5-pro", "gemini-2.5-flash"]
+        for m in [gemini_primary, "gemini-3.1-pro-preview", "gemini-2.5-flash"]
         if m and not m.lower().startswith("claude")
     ]
     seen: set[str] = set()

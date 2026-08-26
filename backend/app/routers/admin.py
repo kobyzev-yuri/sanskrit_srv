@@ -28,7 +28,7 @@ AdminUser = Depends(require_roles(Role.admin))
 
 
 DEFAULT_LLM_CATALOG = [
-    {"provider": "gemini", "model": "gemini-2.5-pro", "label": "Gemini 2.5 Pro (Google AI Studio, text+image)"},
+    {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (Google AI Studio, text+image)"},
     {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (Google AI Studio)"},
     {"provider": "openrouter", "model": "stealth/ox-alpha", "label": "Ox Alpha (OpenRouter — каталог может быть пуст)"},
     {"provider": "anthropic", "model": "claude-opus-5", "label": "Claude Opus 5 (ProxyAPI)"},
@@ -114,7 +114,7 @@ def llm_catalog(_: User = AdminUser):
     px_ok = bool((settings.openai_api_key or "").strip())
     ge_ok = bool((settings.gemini_api_key or "").strip())
     keys = []
-    keys.append("Gemini AI Studio ключ задан." if ge_ok else "GEMINI_API_KEY MISSING — нужен для Gemini 2.5 Pro.")
+    keys.append("Gemini AI Studio ключ задан." if ge_ok else "GEMINI_API_KEY MISSING — нужен для Gemini 3.1 Pro.")
     keys.append("OpenRouter ключ задан." if or_ok else "OPENROUTER_API_KEY не задан (маршрут OpenRouter).")
     keys.append("ProxyAPI ключ задан." if px_ok else "OPENAI_API_KEY (ProxyAPI) не задан — Opus недоступен.")
     return LlmCatalogOut(

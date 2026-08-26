@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # Google AI Studio key (preferred for Gemini). Empty → ProxyAPI Google gateway + OPENAI_API_KEY.
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
-    gemini_model: str = "gemini-2.5-pro"
+    gemini_model: str = "gemini-3.1-pro-preview"
     # Claude via ProxyAPI Anthropic gateway (same OPENAI_API_KEY).
     anthropic_base_url: str = "https://api.proxyapi.ru/anthropic"
     anthropic_model: str = ""  # e.g. claude-opus-5 — empty = skip Claude

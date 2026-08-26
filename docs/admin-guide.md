@@ -124,7 +124,7 @@
 | `OPENROUTER_MAX_TOKENS` | нет | Лимит completion OpenRouter |
 | `GEMINI_API_KEY` | да* | Ключ [Google AI Studio](https://aistudio.google.com/apikey) для Gemini (`*` нужен для LLM по умолчанию) |
 | `GEMINI_BASE_URL` | нет | По умолчанию `https://generativelanguage.googleapis.com` |
-| `GEMINI_MODEL` | нет | По умолчанию `gemini-2.5-pro`. **Не** ставьте сюда `claude-*` |
+| `GEMINI_MODEL` | нет | По умолчанию `gemini-3.1-pro-preview`. **Не** ставьте сюда `claude-*` |
 | `OPENAI_API_KEY` | нет* | Ключ ProxyAPI — нужен только для маршрута Opus |
 | `OPENAI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/openai/v1` |
 | `OPENAI_MODEL` | нет | Модель OpenAI-канала, по умолчанию `gpt-4o-mini` |
@@ -168,7 +168,7 @@ python -m app.cli user-reset-password --email u@x --password '...'
 1. Пользователи (создание / роли / логин). Колонка **Токены бэкофиса** — можно ли эксперту брать ключи и маршрут из `.env` / блока «Маршрут LLM». Снятая галочка: только свои ключи в кабинете.
 2. **Расход токенов** — по проектам и сетям (OpenRouter / Gemini / Anthropic / OpenAI): входящие (промпт) / исходящие (ответ) / всего / вызовы. Ниже — **по пользователям и ключам**: свои ключи эксперта отдельно от токенов бэкофиса (`key_source` + последние 4 символа ключа, сам ключ не хранится в отчёте).
 3. **Маршрут LLM** — переключатель в бэкофисе (список строится с сервера):
-   - **Gemini 2.5 Pro (Google AI Studio)** — по умолчанию; скан уходит картинкой, ключ `GEMINI_API_KEY`;
+   - **Gemini 3.1 Pro (Google AI Studio)** — по умолчанию; скан уходит картинкой, ключ `GEMINI_API_KEY`;
    - **OpenRouter** — если задан `OPENROUTER_API_KEY` (ox-alpha больше нет в живом каталоге);
    - **Claude Opus (ProxyAPI)** — Opus, запасные Gemini и OpenAI.
    Выбор пишется в `data/llm_route.json` и действует сразу (без правки `.env` / без рестарта) на перевод, пересмотр и смысловую проверку.
