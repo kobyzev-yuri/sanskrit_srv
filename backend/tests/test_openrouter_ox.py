@@ -5,11 +5,14 @@ import pytest
 
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError
 from app.services.openrouter_ox import (
+    HAIMAKER_402_MSG,
+    OPENROUTER_402_MSG,
     TASK_DRAFT,
     TASK_TRANSLATE,
     apply_ox_chat_options,
     completion_cap,
     post_openrouter_chat,
+    quota_message_for_url,
 )
 
 
@@ -29,6 +32,17 @@ def test_ox_draft_payload_uses_high_effort():
     assert payload["reasoning"]["effort"] == "high"
 
 
+def test_glm_payload_uses_reasoning_effort_not_ox_block():
+    payload: dict = {"model": "z-ai/glm-5v-turbo"}
+    apply_ox_chat_options(payload, "z-ai/glm-5v-turbo", task=TASK_DRAFT)
+    assert payload["max_completion_tokens"] == 16384
+    assert payload["reasoning_effort"] == "high"
+    assert "reasoning" not in payload
+    translate: dict = {"model": "z-ai/glm-5v-turbo"}
+    apply_ox_chat_options(translate, "z-ai/glm-5v-turbo", task=TASK_TRANSLATE)
+    assert translate["reasoning_effort"] == "low"
+
+
 def test_env_32k_cannot_raise_translate_cap(monkeypatch):
     from app.services import openrouter_ox as ox
 
@@ -39,6 +53,19 @@ def test_env_32k_cannot_raise_translate_cap(monkeypatch):
     )
     assert completion_cap(TASK_TRANSLATE) == 8192
     assert completion_cap(TASK_DRAFT) == 16384
+
+
+def test_batch_max_tokens_can_raise_translate_cap(monkeypatch):
+    from app.services import openrouter_ox as ox
+
+    monkeypatch.setattr(
+        ox,
+        "get_settings",
+        lambda: SimpleNamespace(openrouter_max_tokens=16384),
+    )
+    payload: dict = {"model": "stealth/ox-alpha"}
+    apply_ox_chat_options(payload, "stealth/ox-alpha", task=TASK_TRANSLATE, max_tokens=24000)
+    assert payload["max_completion_tokens"] == 16384
 
 
 def test_env_can_lower_cap(monkeypatch):
@@ -104,9 +131,26 @@ def test_post_402_is_quota():
     def paywall(*_a, **_k):
         return _Resp(402, "Payment required")
 
-    with pytest.raises(LlmQuotaError):
+    with pytest.raises(LlmQuotaError, match="OpenRouter"):
         post_openrouter_chat(
-            "https://example/v1/chat/completions",
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={},
+            payload={},
+            sleep=lambda _s: None,
+            post=paywall,
+        )
+
+
+def test_402_haimaker_is_not_labeled_openrouter():
+    assert quota_message_for_url("https://api.haimaker.ai/v1/chat/completions") == HAIMAKER_402_MSG
+    assert quota_message_for_url("https://openrouter.ai/api/v1/chat/completions") == OPENROUTER_402_MSG
+
+    def paywall(*_a, **_k):
+        return _Resp(402, "Payment required")
+
+    with pytest.raises(LlmQuotaError, match="Haimaker GLM"):
+        post_openrouter_chat(
+            "https://api.haimaker.ai/v1/chat/completions",
             headers={},
             payload={},
             sleep=lambda _s: None,

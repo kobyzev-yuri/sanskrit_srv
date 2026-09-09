@@ -216,7 +216,7 @@ async function createProject(ev) {
       state.pendingConfirmProject = project;
       const kind =
         project.source_kind === "text"
-          ? "текстовый PDF (без LLM, но все страницы)"
+          ? "текстовый PDF"
           : "скан (LLM на каждую страницу)";
       $("#large-book-text").textContent =
         `«${project.title}» — ${project.page_count} страниц (>100). Тип: ${kind}.`;
@@ -225,7 +225,7 @@ async function createProject(ev) {
     }
     const mode =
       project.source_kind === "text"
-        ? "текстовый PDF — LLM не используется"
+        ? "текстовый PDF"
         : "скан — LLM по всей книге";
     toast(`Вся книга в очереди (${project.page_count} стр.): ${mode}`);
     await openProject(project.id);
@@ -243,10 +243,11 @@ async function confirmWholeBook() {
   if (!project) return;
   try {
     $("#btn-confirm-whole-book").disabled = true;
-    state.project = await api(`/projects/${project.id}/pipeline`, { method: "POST" });
+    const q = project.source_kind === "text" ? "?force_llm=true" : "";
+    state.project = await api(`/projects/${project.id}/pipeline${q}`, { method: "POST" });
     $("#large-book-modal").hidden = true;
     state.pendingConfirmProject = null;
-    toast(`Перевод всей книги запущен (${state.project.page_count} стр.)`);
+    toast(`Оцифровка всей книги запущена (${state.project.page_count} стр.)`);
     await loadProjects();
     await openProject(state.project.id);
   } catch (e) {
@@ -260,13 +261,22 @@ function cancelWholeBook() {
   $("#large-book-modal").hidden = true;
   const project = state.pendingConfirmProject;
   state.pendingConfirmProject = null;
-  toast("Книга загружена без перевода — можно запустить позже");
+  toast("Книга загружена без оцифровки — можно запустить позже");
   if (project) openProject(project.id);
 }
 
 function sourceKindLabel(p) {
-  if (p.source_kind === "text") return "текстовый PDF (без LLM)";
+  if (p.source_kind === "text") return "текстовый PDF";
   return "скан → LLM";
+}
+
+function projectHasHtml() {
+  if ((state.project?.draft_ready || 0) > 0 || (state.project?.accepted || 0) > 0) return true;
+  return (state.pages || []).some((p) => p.has_html || Boolean((p.current_html || "").trim()));
+}
+
+function isDigitizeTextPdf() {
+  return !isTranslate() && state.project?.source_kind === "text";
 }
 
 function pipelineLabel(p) {
@@ -274,8 +284,6 @@ function pipelineLabel(p) {
   const total = prTotal(p);
   const pipe = p.pipeline;
   if (task === "translate") {
-    const tr = p.translation || p.settings?.translation || {};
-    const agreed = tr.agreed ? "шаблон согласован" : "шаблон не согласован";
     if (pipe && (pipe.status === "running" || pipe.status === "queued")) {
       const pr = pipe.progress || {};
       const scope = pr.open_only ? "несогласованные" : "все";
@@ -296,21 +304,21 @@ function pipelineLabel(p) {
         const high = pr.applied_high != null ? ` · грубых правок ${pr.applied_high}` : "";
         return `смысловая проверка перевода · готово ${pr.done ?? 0}/${pr.total ?? total}${high}${flags}`;
       }
-      return `перевод на русский · ${agreed} · готово ${pr.done ?? total}/${pr.total ?? total}`;
+      return `перевод на русский · готово ${pr.done ?? total}/${pr.total ?? total}`;
     }
-    return `перевод на русский · ${agreed} · ${total} стр.`;
+    return `перевод на русский · ${total} стр.`;
   }
   const kind = sourceKindLabel(p);
   if (p.manual_pages && !pipe) {
-    return `${kind} · ${total} стр. · постранично (автоперевод всей книги не запускался)`;
+    return `${kind} · ${total} стр. · постранично (автооцифровка всей книги не запускалась)`;
   }
   if (p.confirm_required || p.status === "awaiting_confirm") {
-    return `${kind} · ${total} стр. (>100) — нужно подтверждение перевода всей книги`;
+    return `${kind} · ${total} стр. (>100) — нужно подтверждение оцифровки всей книги`;
   }
   if (!pipe) return `${kind} · вся книга (${total} стр.) — конвейер не запущен`;
   const pr = pipe.progress || {};
   if (pipe.status === "running" || pipe.status === "queued") {
-    const mode = (pr.source_kind || p.source_kind) === "text" ? "текст всей книги" : "перевод всей книги";
+    const mode = (pr.source_kind || p.source_kind) === "text" ? "текст из PDF" : "оцифровка всей книги";
     const scope = pr.open_only ? "несогласованные" : mode;
     return `${kind} · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
   }
@@ -403,23 +411,26 @@ function syncTaskUi() {
     if (sel && cfg.style) sel.value = cfg.style;
     if (eng && cfg.english_comments) eng.value = cfg.english_comments;
     if (notes) notes.value = cfg.notes || "";
-    const lock = agreed || !canAgreeStyle();
-    if (sel) sel.disabled = lock;
-    if (eng) eng.disabled = lock;
-    if (notes) notes.disabled = lock;
+    const canEdit = canAgreeStyle();
+    if (sel) sel.disabled = !canEdit;
+    if (eng) eng.disabled = !canEdit;
+    if (notes) notes.disabled = !canEdit;
     const agreeBtn = $("#btn-agree-style");
     const revokeBtn = $("#btn-revoke-style");
     const mark = $("#style-agreed-mark");
-    if (agreeBtn) agreeBtn.hidden = !canAgreeStyle() || agreed;
-    if (revokeBtn) revokeBtn.hidden = !canAgreeStyle() || !agreed;
-    if (mark) mark.textContent = agreed ? "согласован" : "не согласован — LLM не запустится";
+    if (agreeBtn) agreeBtn.hidden = true;
+    if (revokeBtn) revokeBtn.hidden = true;
+    if (mark) mark.textContent = canEdit ? "шаблон можно править" : "";
   }
 
   const dir = $("#directive-input");
   if (dir) {
+    const hasHtml = Boolean((state.page?.current_html || "").trim());
     dir.placeholder = tr
       ? "Замечание к переводу — или нажмите «Перевести страницу»."
-      : "С чем не согласны — или: пересмотри страницу.";
+      : hasHtml
+        ? "С чем не согласны — или нажмите «Пересмотри страницу»."
+        : "Задание к странице — или нажмите «Оцифровать страницу».";
   }
   const proof = $("#btn-proofread");
   if (proof) {
@@ -429,12 +440,18 @@ function syncTaskUi() {
       : "Второй проход: смысловая проверка со сканом";
   }
   const review = $("#btn-review-again");
-  if (review) review.hidden = tr;
+  if (review) {
+    review.hidden = tr;
+    const hasHtml = Boolean((state.page?.current_html || "").trim());
+    review.textContent = hasHtml ? "Пересмотри страницу" : "Оцифровать страницу";
+  }
   const trPage = $("#btn-translate-page");
   if (trPage) {
     trPage.hidden = !tr;
-    trPage.disabled = tr && !agreed;
-    trPage.title = agreed ? "LLM переводит эту страницу по согласованному шаблону" : "Сначала согласуйте шаблон";
+    trPage.disabled = false;
+    trPage.title = agreed
+      ? "LLM переводит эту страницу по шаблону"
+      : "Зафиксирует шаблон и переведёт эту страницу";
   }
   syncTranslateAllButtons();
   syncProofreadAllButtons();
@@ -447,7 +464,7 @@ function syncTaskUi() {
     } else {
       const child = childTranslation();
       const canSpawn = canAgreeStyle();
-      openTr.hidden = !child && !canSpawn;
+      openTr.hidden = !child && (!canSpawn || !projectHasHtml());
       openTr.textContent = child ? "Открыть перевод" : "Перевод на русский";
       openTr.classList.toggle("primary", !child);
     }
@@ -475,7 +492,6 @@ function isProofreadJob() {
 
 function syncTranslateAllButtons() {
   const tr = isTranslate();
-  const agreed = Boolean(translationCfg().agreed);
   const can = canRunTranslateAll();
   const busy = pipelineBusy();
   const proofBusy = busy && isProofreadJob();
@@ -485,8 +501,8 @@ function syncTranslateAllButtons() {
     : openOnly
       ? "Перевести несогласованные"
       : "Перевести все";
-  const title = !agreed
-    ? "Сначала согласуйте шаблон перевода"
+  const title = busy
+    ? "Идёт перевод"
     : openOnly
       ? "Перевести страницы без согласия (фильтр включён)"
       : "Перевести все страницы книги";
@@ -495,7 +511,7 @@ function syncTranslateAllButtons() {
     const el = $(`#${id}`);
     if (!el) continue;
     el.hidden = !tr || !can;
-    el.disabled = !agreed || busy;
+    el.disabled = busy;
     el.textContent = label;
     el.title = title;
   }
@@ -547,13 +563,32 @@ function updatePipelineBar() {
   }
   btn.hidden = false;
   btn.disabled = !!busy;
+  const openOnly = state.thumbFilter === "open" || Boolean(p.pipeline?.progress?.open_only);
   if (p.confirm_required || p.status === "awaiting_confirm") {
     btn.disabled = false;
-    btn.textContent = "Подтвердить перевод всей книги";
+    btn.textContent = openOnly
+      ? "Оцифровать несогласованные"
+      : "Подтвердить оцифровку всей книги";
+    btn.title = openOnly
+      ? "Фильтр включён: LLM только по страницам без согласия"
+      : "Запустить оцифровку всех страниц книги";
     syncTaskUi();
     return;
   }
-  btn.textContent = busy ? "Идёт перевод всей книги…" : "Перевести всю книгу заново";
+  if (busy) {
+    btn.textContent = openOnly ? "Идёт оцифровка несогласованных…" : "Идёт оцифровка всей книги…";
+  } else if (openOnly) {
+    btn.textContent = isDigitizeTextPdf()
+      ? "Оцифровать несогласованные по скану"
+      : "Оцифровать несогласованные";
+    btn.title = "Только страницы без статуса «согласовано» (фильтр слева)";
+  } else if (isDigitizeTextPdf()) {
+    btn.textContent = "Оцифровать по скану (LLM)";
+    btn.title = "Все страницы, включая согласованные";
+  } else {
+    btn.textContent = "Оцифровать всю книгу";
+    btn.title = "Все страницы, включая согласованные";
+  }
   syncTaskUi();
 }
 
@@ -654,9 +689,15 @@ function statusBadgeClass(status) {
 }
 
 /** Pages visible in the thumb rail (and for ‹ › when filter is on). */
+const AGREED_PAGE_STATUSES = new Set(["expert_done", "scholar_review", "published"]);
+
+function pageIsAgreed(p) {
+  return AGREED_PAGE_STATUSES.has(p?.status);
+}
+
 function visiblePages() {
   if (state.thumbFilter !== "open") return state.pages;
-  return state.pages.filter((p) => p.status !== "expert_done");
+  return state.pages.filter((p) => !pageIsAgreed(p));
 }
 
 function renderThumbList() {
@@ -733,6 +774,7 @@ function setThumbFilter(openOnly) {
   state.thumbFilter = openOnly ? "open" : "all";
   localStorage.setItem("ss_thumb_filter", state.thumbFilter);
   renderThumbList();
+  updatePipelineBar();
 }
 
 function indexOfFold(hay, needle, from) {
@@ -908,41 +950,45 @@ function highlightThumb(pageId) {
 
 function updateEditMode() {
   const hasHtml = Boolean((state.page?.current_html || "").trim());
-  const hasSource = Boolean((state.page?.source_html || "").trim());
   const accepted = state.page?.status === "expert_done" && hasHtml;
-  const pendingDraft = isTranslate()
-    ? !hasSource && !hasHtml
-    : !hasHtml &&
-      ["pending", "extracting", "llm_draft", "ocr"].includes(state.page?.status || "");
   $("#accepted-box").hidden = !accepted;
-  $("#edit-tools").hidden = accepted || pendingDraft;
+  $("#edit-tools").hidden = accepted;
   const previewSave = $("#preview-save");
-  if (previewSave) previewSave.hidden = accepted || pendingDraft;
+  if (previewSave) previewSave.hidden = accepted;
+  const saveBtn = $("#btn-save");
+  const acceptBtn = $("#btn-accept");
+  if (saveBtn) saveBtn.disabled = accepted || !hasHtml;
+  if (acceptBtn) acceptBtn.disabled = accepted || !hasHtml;
   const srcTab = document.querySelector('.tab[data-tab="source"]');
   if (srcTab) srcTab.hidden = accepted;
   const wyTab = document.querySelector('.tab[data-tab="wysiwyg"]');
   if (wyTab) wyTab.hidden = accepted;
   if (accepted) switchTab("preview");
-  $("#html-editor").readOnly = accepted || pendingDraft;
+  $("#html-editor").readOnly = accepted;
   const srcEd = $("#left-source-editor");
-  if (srcEd) srcEd.readOnly = accepted || pendingDraft;
+  if (srcEd) srcEd.readOnly = accepted;
   const wyBox = $("#html-wysiwyg");
   if (wyBox && !wyBox.querySelector(".wy-empty")) {
-    markWysiwygEditable(wyBox, !(accepted || pendingDraft));
+    markWysiwygEditable(wyBox, !accepted);
   }
-  const agreed = Boolean(translationCfg().agreed);
   const proofBtn = $("#btn-proofread");
   if (proofBtn) {
-    proofBtn.disabled = accepted || pendingDraft || !hasHtml;
+    proofBtn.disabled = accepted || !hasHtml;
   }
   if (isTranslate()) {
     const trPage = $("#btn-translate-page");
-    if (trPage) trPage.disabled = !agreed || accepted;
+    if (trPage) trPage.disabled = accepted;
     const revise = $("#btn-revise");
-    if (revise) revise.disabled = !agreed || accepted;
+    if (revise) revise.disabled = accepted;
   } else {
     const revise = $("#btn-revise");
-    if (revise) revise.disabled = accepted || pendingDraft;
+    if (revise) revise.disabled = accepted;
+    const review = $("#btn-review-again");
+    if (review) review.disabled = accepted;
+  }
+  const reviewBtn = $("#btn-review-again");
+  if (reviewBtn && !isTranslate()) {
+    reviewBtn.textContent = hasHtml ? "Пересмотри страницу" : "Оцифровать страницу";
   }
 }
 
@@ -992,7 +1038,7 @@ function renderPreview(html) {
   if (!src) {
     box.innerHTML = isTranslate()
       ? `<p class="muted">Русский черновик ещё не готов. Согласуйте шаблон и нажмите «Перевести страницу».</p>`
-      : `<p class="muted">Черновик ещё готовится (автоперевод) или пуст.</p>`;
+      : `<p class="muted">Черновик ещё не готов. Нажмите «Оцифровать страницу» справа внизу — модель разберёт скан.</p>`;
     return;
   }
   // Draft HTML is trusted content from our pipeline / LLM, not arbitrary user HTML from the open web.
@@ -1667,7 +1713,7 @@ async function revisePage() {
     toast(
       isTranslate()
         ? "Опишите правку или нажмите «Перевести страницу»"
-        : "Опишите, с чем не согласны, или нажмите «Пересмотри страницу»",
+        : "Опишите задание или нажмите «Оцифровать страницу»",
       true
     );
     return;
@@ -1681,19 +1727,22 @@ async function reviewAgain() {
     await runRevision(note);
     return;
   }
+  const hadHtml = Boolean((state.page?.current_html || "").trim());
   const st = $("#revise-status");
   $("#btn-revise").disabled = true;
   $("#btn-review-again").disabled = true;
-  st.textContent = "Пересмотр страницы…";
+  st.textContent = hadHtml ? "Пересмотр страницы…" : "Оцифровка страницы…";
   try {
     state.page = await api(`/pages/${state.page.id}/review-again`, {
       method: "POST",
       json: {},
     });
     setDraftHtml(state.page.current_html || "");
+    const row = (state.pages || []).find((p) => String(p.id) === String(state.page.id));
+    if (row) row.has_html = Boolean((state.page.current_html || "").trim());
     switchTab(draftTab());
     $("#page-status").textContent = state.page.status;
-    toast("Страница пересмотрена");
+    toast(hadHtml ? "Страница пересмотрена" : "Страница оцифрована");
     st.textContent = "готово";
   } catch (e) {
     toast(e.message, true);
@@ -1702,15 +1751,19 @@ async function reviewAgain() {
     $("#btn-revise").disabled = false;
     $("#btn-review-again").disabled = false;
     updateEditMode();
+    syncTaskUi();
   }
+}
+
+async function ensureTranslationAgreed() {
+  if (!state.project || translationCfg().agreed) return true;
+  await patchTranslationStyle(true);
+  return true;
 }
 
 async function translatePage() {
   if (!state.page) return;
-  if (!translationCfg().agreed) {
-    toast("Сначала согласуйте шаблон перевода", true);
-    return;
-  }
+  if (!(await ensureTranslationAgreed())) return;
   const st = $("#revise-status");
   const trBtn = $("#btn-translate-page");
   const reviseBtn = $("#btn-revise");
@@ -1802,7 +1855,7 @@ async function spawnTranslation(ev) {
       json: body,
     });
     showTranslateModal(false);
-    toast("Проект перевода создан — согласуйте шаблон");
+    toast("Проект перевода создан — можно переводить страницы");
     await openProject(dest.id);
   } catch (e) {
     toast(e.message, true);
@@ -1816,19 +1869,22 @@ async function spawnTranslation(ev) {
 
 async function patchTranslationStyle(agree) {
   if (!state.project) return;
+  const payload = {
+    style: $("#style-select").value,
+    english_comments: $("#style-english").value,
+    notes: $("#style-notes").value,
+  };
+  if (agree === true || agree === false) payload.agree = agree;
   try {
     state.project = await api(`/projects/${state.project.id}/translation-style`, {
       method: "PATCH",
-      json: {
-        style: $("#style-select").value,
-        english_comments: $("#style-english").value,
-        notes: $("#style-notes").value,
-        agree,
-      },
+      json: payload,
     });
     updatePipelineBar();
     updateEditMode();
-    toast(agree ? "Шаблон согласован — можно переводить страницы" : "Согласование отозвано");
+    syncTaskUi();
+    if (agree === true) toast("Шаблон сохранён");
+    else if (agree === false) toast("Согласование отозвано");
   } catch (e) {
     toast(e.message, true);
   }
@@ -2058,7 +2114,7 @@ function setProofSelection(all) {
 async function startPipeline() {
   if (!state.project) return;
   const openOnly = state.thumbFilter === "open";
-  const openCount = state.pages.filter((p) => p.status !== "expert_done").length;
+  const openCount = state.pages.filter((p) => !pageIsAgreed(p)).length;
   const total = state.pages.length;
   const n = openOnly ? openCount : total;
   if (!n) {
@@ -2072,22 +2128,36 @@ async function startPipeline() {
       ? `Перевести ${n} несогласованных страниц?`
       : `Перевести все ${n} страниц, включая согласованные? Черновики будут перезаписаны.`;
   } else if (state.project.confirm_required || state.project.status === "awaiting_confirm") {
-    msg = `Подтвердить перевод всей книги (${n} стр.)?`;
+    msg = `Подтвердить оцифровку всей книги (${n} стр.)?`;
+  } else if (isDigitizeTextPdf()) {
+    msg = openOnly
+      ? `Оцифровать ${n} несогласованных страниц по скану (LLM)?`
+      : `Оцифровать все ${n} страниц по скану (LLM)? Черновики будут перезаписаны.`;
   } else {
     msg = openOnly
-      ? `Перезапустить конвейер для ${n} несогласованных страниц?`
-      : `Перезапустить конвейер для всех ${n} страниц, включая согласованные? Черновики будут перезаписаны.`;
+      ? `Оцифровать ${n} несогласованных страниц?`
+      : `Оцифровать все ${n} страниц, включая согласованные? Черновики будут перезаписаны.`;
   }
   if (!confirm(msg)) return;
+  if (tr && !(await ensureTranslationAgreed())) return;
 
   const params = new URLSearchParams();
   params.set("open_only", openOnly ? "true" : "false");
   if (!openOnly) params.set("force", "true");
+  if (!tr && isDigitizeTextPdf()) params.set("force_llm", "true");
   try {
     state.project = await api(`/projects/${state.project.id}/pipeline?${params}`, {
       method: "POST",
     });
-    toast(tr ? "Запущен перевод страниц" : "Запущен перевод всей книги");
+    toast(
+      tr
+        ? openOnly
+          ? "Запущен перевод несогласованных страниц"
+          : "Запущен перевод страниц"
+        : openOnly
+          ? "Запущена оцифровка несогласованных страниц"
+          : "Запущена оцифровка всей книги"
+    );
     updatePipelineBar();
     startPipelinePoll();
   } catch (e) {
@@ -2099,7 +2169,7 @@ async function startProofreadAll() {
   if (!state.project || !isTranslate()) return;
   const openOnly = state.thumbFilter === "open";
   const n = openOnly
-    ? state.pages.filter((p) => p.status !== "expert_done" && p.has_html).length
+    ? state.pages.filter((p) => !pageIsAgreed(p) && p.has_html).length
     : state.pages.filter((p) => p.has_html).length;
   if (!n) {
     toast(openOnly ? "Нет несогласованных страниц с переводом" : "Нет страниц с переводом", true);
@@ -2305,12 +2375,12 @@ async function loadLlmRoute() {
   try {
     const route = await api("/admin/llm-route");
     const options = route.options || [];
-    box.innerHTML = options
+    const radios = options
       .map((opt) => {
         const primary = opt.primary || {};
-        const detail = primary.provider
+        const detail = primary.model
           ? `${primary.provider}:${primary.model} — ${opt.hint || ""}`
-          : opt.hint || "";
+          : opt.hint || "модель не задана";
         return `<label class="llm-route-opt">
           <input type="radio" name="llm-route" value="${escapeHtml(opt.id)}"${opt.id === route.route ? " checked" : ""} />
           <span>
@@ -2320,26 +2390,63 @@ async function loadLlmRoute() {
         </label>`;
       })
       .join("");
+    const models = route.proxyapi_models || [];
+    const currentPx = route.proxyapi_model || "";
+    const selectOpts = models
+      .map((m) => {
+        const sel = m.id === currentPx ? " selected" : "";
+        return `<option value="${escapeHtml(m.id)}"${sel}>${escapeHtml(m.label)} — ${escapeHtml(m.provider)}:${escapeHtml(m.id)}</option>`;
+      })
+      .join("");
+    box.innerHTML =
+      radios +
+      (selectOpts
+        ? `<label class="llm-proxyapi-model">Модель на ProxyAPI.ru
+            <select id="llm-proxyapi-model">${selectOpts}</select>
+          </label>
+          <p class="muted">Список переключает на платный ProxyAPI (тот же ключ, другая модель). Бесплатный Gemini Studio — радиокнопка выше, не этот список.</p>`
+        : "");
+    const applyRoute = async (payload) => {
+      const updated = await api("/admin/llm-route", { method: "PUT", json: payload });
+      const um = updated.primary || {};
+      const live = um.model ? `${um.provider}:${um.model}` : `${um.provider || updated.route} (модель не задана)`;
+      toast(`Маршрут LLM: ${updated.label} · ${live}`);
+      status.textContent = `Активно: ${updated.label} · ${live}`;
+      const cat = await api("/admin/llm-catalog");
+      $("#llm-note").textContent = cat.note;
+      await loadLlmRoute();
+    };
     box.querySelectorAll('input[name="llm-route"]').forEach((input) => {
-      input.checked = input.value === route.route;
       input.onchange = async () => {
         if (!input.checked) return;
         try {
-          const updated = await api("/admin/llm-route", {
-            method: "PUT",
-            json: { route: input.value },
-          });
-          toast(`Маршрут LLM: ${updated.label}`);
-          status.textContent = `Активно: ${updated.label} · ${updated.primary.provider}:${updated.primary.model}`;
-          const cat = await api("/admin/llm-catalog");
-          $("#llm-note").textContent = cat.note;
+          await applyRoute({ route: input.value });
         } catch (e) {
           toast(e.message, true);
           await loadLlmRoute();
         }
       };
     });
-    status.textContent = `Активно: ${route.label} · ${route.primary.provider}:${route.primary.model}`;
+    const pxSelect = $("#llm-proxyapi-model");
+    if (pxSelect) {
+      pxSelect.onchange = async () => {
+        try {
+          await applyRoute({ route: "opus", proxyapi_model: pxSelect.value });
+        } catch (e) {
+          toast(e.message, true);
+          await loadLlmRoute();
+        }
+      };
+    }
+    const primary = route.primary || {};
+    const liveModel = primary.model
+      ? `${primary.provider}:${primary.model}`
+      : `${primary.provider || route.route} (модель не задана)`;
+    const keysBit =
+      route.route === "gemini" && (route.gemini_keys || 0) > 1
+        ? ` · ключи ${route.gemini_keys_available ?? route.gemini_keys}/${route.gemini_keys}`
+        : "";
+    status.textContent = `Активно: ${route.label} · ${liveModel}${keysBit}`;
   } catch (e) {
     status.textContent = e.message || "Не удалось загрузить маршрут";
   }
@@ -2435,7 +2542,7 @@ async function loadAccountLlm() {
   }
   if (hint) {
     hint.textContent = llm.allow_default_llm
-      ? `Бэкофис: ${llm.default_label}. Gemini ${llm.default_gemini_key ? "задан" : "не задан"}, OpenRouter ${llm.default_openrouter_key ? "задан" : "не задан"}, ProxyAPI ${llm.default_proxyapi_key ? "задан" : "не задан"}.`
+      ? `Бэкофис: ${llm.default_label}. Gemini ${llm.default_gemini_keys > 1 ? llm.default_gemini_keys + " ключей" : (llm.default_gemini_key ? "задан" : "не задан")}, OpenRouter ${llm.default_openrouter_key ? "задан" : "не задан"}, ProxyAPI ${llm.default_proxyapi_key ? "задан" : "не задан"}.`
       : "Администратор не назначил вам токены сервера — нужен свой ключ OpenRouter или ProxyAPI.";
   }
   if (useDef) {
@@ -2447,15 +2554,20 @@ async function loadAccountLlm() {
   const pxHint = $("#account-px-hint");
   if (orHint) orHint.textContent = llm.has_openrouter_key ? `Сохранён OpenRouter …${llm.openrouter_hint || ""}` : "Свой OpenRouter не задан";
   if (pxHint) pxHint.textContent = llm.has_proxyapi_key ? `Сохранён ProxyAPI …${llm.proxyapi_hint || ""}` : "Свой ProxyAPI не задан";
+  const orModel = $("#account-openrouter-model");
+  if (orModel) {
+    orModel.value = llm.openrouter_model || "";
+    orModel.disabled = Boolean(llm.use_default_llm);
+  }
   const box = $("#account-llm-route-box");
   if (box) {
     const selected = llm.use_default_llm ? llm.default_route : (llm.llm_route || llm.effective_route);
     box.innerHTML = (llm.options || [])
       .map((opt) => {
         const primary = opt.primary || {};
-        const detail = primary.provider
+        const detail = primary.model
           ? `${primary.provider}:${primary.model} — ${opt.hint || ""}`
-          : opt.hint || "";
+          : opt.hint || "модель не задана";
         return `<label class="llm-route-opt">
           <input type="radio" name="account-llm-route" value="${escapeHtml(opt.id)}"${opt.id === selected ? " checked" : ""}${llm.use_default_llm ? " disabled" : ""} />
           <span>
@@ -2513,6 +2625,9 @@ async function saveAccountLlm(ev) {
   const pxKey = String(ev.target.proxyapi_key.value || "").trim();
   if (orKey) body.openrouter_api_key = orKey;
   if (pxKey) body.proxyapi_key = pxKey;
+  if (!useDefault) {
+    body.openrouter_model = String(ev.target.openrouter_model?.value || "").trim();
+  }
   const picked = document.querySelector('input[name="account-llm-route"]:checked');
   if (picked && !useDefault) body.llm_route = picked.value;
   try {
@@ -2587,6 +2702,12 @@ function wire() {
   if (btnAgree) btnAgree.onclick = () => patchTranslationStyle(true);
   const btnRevokeStyle = $("#btn-revoke-style");
   if (btnRevokeStyle) btnRevokeStyle.onclick = () => patchTranslationStyle(false);
+  for (const id of ["style-select", "style-english", "style-notes"]) {
+    const el = $(`#${id}`);
+    if (!el || el.dataset.boundStyle) continue;
+    el.dataset.boundStyle = "1";
+    el.addEventListener("change", () => patchTranslationStyle());
+  }
   const btnTrPage = $("#btn-translate-page");
   if (btnTrPage) btnTrPage.onclick = translatePage;
   const trForm = $("#translate-form");
@@ -2697,6 +2818,8 @@ function wire() {
       $$('input[name="account-llm-route"]').forEach((el) => {
         el.disabled = useDef.checked;
       });
+      const orModel = $("#account-openrouter-model");
+      if (orModel) orModel.disabled = useDef.checked;
     };
   }
 

@@ -1,6 +1,7 @@
 """Agreed Russian-translation templates (expert chooses before LLM)."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 STYLE_INTERLINEAR = "interlinear"
@@ -43,7 +44,7 @@ def default_translation_settings(
         "style": st,
         "english_comments": en,
         "notes": (notes or "").strip()[:4000],
-        "agreed": False,
+        "agreed": True,
         "agreed_by": None,
         "agreed_at": None,
     }
@@ -67,6 +68,25 @@ def translation_cfg(project) -> dict[str, Any]:
 
 def translation_agreed(project) -> bool:
     return bool(translation_cfg(project).get("agreed"))
+
+
+def persist_translation_cfg(project, cfg: dict[str, Any]) -> None:
+    settings = dict(getattr(project, "settings", None) or {})
+    settings["translation"] = cfg
+    project.settings = settings
+
+
+def lock_translation_template(project, user: Any = None) -> dict[str, Any]:
+    """Creating or starting a translation locks the chosen template so LLM can run."""
+    cfg = translation_cfg(project)
+    if cfg.get("agreed"):
+        return cfg
+    cfg["agreed"] = True
+    uid = getattr(user, "id", None)
+    cfg["agreed_by"] = str(uid) if uid else None
+    cfg["agreed_at"] = datetime.now(timezone.utc).isoformat()
+    persist_translation_cfg(project, cfg)
+    return cfg
 
 
 def _style_prompt(style: str) -> str:
@@ -152,4 +172,42 @@ def build_translate_prompt(
         )
     # Per-chunk source is already sized; keep a hard ceiling for single-shot pages.
     parts.append("SOURCE HTML:\n" + (source_html or "").strip()[:40000])
+    return "\n\n".join(parts)
+
+
+def build_translate_batch_prompt(
+    *,
+    pages: list[tuple[int, str]],
+    cfg: dict[str, Any],
+) -> str:
+    """One prompt for several consecutive source pages (===PAGE n=== output)."""
+    style = str(cfg.get("style") or STYLE_INTERLINEAR)
+    policy = str(cfg.get("english_comments") or ENGLISH_REPLACE)
+    notes = (cfg.get("notes") or "").strip()
+    nos = [int(n) for n, _ in pages]
+    first, last = nos[0], nos[-1]
+    parts = [
+        "You produce Russian translation HTML fragments of Sanskrit pages already restored as HTML.",
+        "The SOURCE HTML is diplomatic text (Devanagari). Do NOT 'correct' Vedic/old spellings.",
+        f"You are given {len(pages)} consecutive pages {first}–{last}. "
+        "Use neighbors for verse continuation and consistent terminology. "
+        "Do not copy body text from one page onto another.",
+        f"You MUST emit a block for EVERY page {first}–{last} — do not stop after the first. "
+        "A short or blank leaf still gets its own block.",
+        "Output ONLY labeled HTML. For every page emit exactly these two lines of structure:",
+        "===PAGE N===",
+        '<article class="page-style" lang="ru">…</article>',
+        "No commentary, markdown fences, or extra headings outside those blocks.",
+        "Keep Devanagari exactly as in the source. Russian is literary, not a word-for-word crib unless the template asks for glosses.",
+        "Layout only via classes (sa, shloka, ru, tr, note, indent, centered, running-head, page-num). No inline style=, flex, float.",
+        "FIGURES / IMAGES: copy every <img …> and <figure …> from that page's SOURCE HTML with the src= URL "
+        "CHARACTER-FOR-CHARACTER identical (full /api/v1/pages/<uuid>/figures/crop-NN.png or emb-NN.png). "
+        "Do not invent, shorten, or 'fix' UUIDs. Do not use blob: URLs.",
+        _style_prompt(style),
+        _english_prompt(policy),
+    ]
+    if notes:
+        parts.append("EXPERT NOTES (binding):\n" + notes[:4000])
+    for no, src in pages:
+        parts.append(f"SOURCE HTML for page {no}:\n" + (src or "").strip()[:40000])
     return "\n\n".join(parts)

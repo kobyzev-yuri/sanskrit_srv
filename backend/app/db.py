@@ -72,6 +72,7 @@ def ensure_schema() -> None:
         _sqlite_add_column(conn, "users", "use_default_llm", "BOOLEAN DEFAULT 1")
         _sqlite_add_column(conn, "users", "llm_route", "VARCHAR(32)")
         _sqlite_add_column(conn, "users", "openrouter_api_key", "TEXT")
+        _sqlite_add_column(conn, "users", "openrouter_model", "VARCHAR(128)")
         _sqlite_add_column(conn, "users", "proxyapi_key", "TEXT")
         _sqlite_add_column(conn, "llm_usage_events", "user_id", "CHAR(32)")
         _sqlite_add_column(conn, "llm_usage_events", "key_source", "VARCHAR(16) DEFAULT 'default'")

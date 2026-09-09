@@ -14,8 +14,14 @@ from app.services.llm_draft import (
     _require_keys_for_plan,
     _uniq,
     extract_html_only,
+    split_batch_page_html,
 )
-from app.services.llm_route import effective_openrouter_key, effective_proxyapi_key, model_plan_primary_only
+from app.services.llm_route import (
+    effective_openrouter_base_url,
+    effective_openrouter_key,
+    effective_proxyapi_key,
+    model_plan_primary_only,
+)
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, is_quota_response, set_quota_alert
 from app.services.llm_usage import parse_anthropic_usage, parse_openai_usage
 from app.services.layout_assets import preserve_figure_srcs
@@ -25,7 +31,91 @@ from app.services.openrouter_ox import (
     openrouter_headers,
     post_openrouter_chat,
 )
-from app.services.translation_style import build_translate_prompt
+from app.services.translation_style import build_translate_batch_prompt, build_translate_prompt
+
+
+# Combined source chars for one translate call. Dense interlinear HTML is ~2× this in output.
+TRANSLATE_BATCH_SOURCE_CAP = 22000
+
+
+def translate_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> int:
+    """How many consecutive source pages to translate in one text call.
+
+    Output is the limiter (interlinear HTML). Flash often stops after 1–2 pages if asked for 6.
+    GLM / ox-alpha keep a small n because thinking eats the completion cap.
+    """
+    from app.config import get_settings as _gs
+
+    cap = max(1, int(getattr(_gs(), "translate_batch_pages", 6) or 6))
+    cap = min(cap, 8)
+    plan = plan if plan is not None else model_plan_primary_only()
+    or_models = " ".join(plan.get("openrouter") or []).lower()
+    if "glm" in or_models or "ox-alpha" in or_models or "stealth/" in or_models:
+        return min(cap, 2)
+    gemini = [str(m) for m in (plan.get("gemini") or [])]
+    if gemini:
+        blob = " ".join(gemini).lower()
+        gem_n = 3 if "flash" in blob else 6
+        return min(cap, gem_n)
+    if plan.get("anthropic"):
+        return min(cap, 4)
+    if plan.get("openai"):
+        return min(cap, 3)
+    return 1
+
+
+def page_too_large_for_batch(source_html: str) -> bool:
+    """True if this page is already split into intra-page LLM chunks."""
+    src = (source_html or "").strip()
+    if not src:
+        return True
+    return len(chunk_page_html(src)) > 1
+
+
+def pack_translate_runs(
+    pages: list[Any],
+    *,
+    max_n: int,
+    source_cap: int = TRANSLATE_BATCH_SOURCE_CAP,
+) -> list[list[Any]]:
+    """Group consecutive pages; isolate oversized leaves; cap combined source size."""
+    if max_n <= 1:
+        return [[p] for p in pages]
+    runs: list[list[Any]] = []
+    buf: list[Any] = []
+    buf_chars = 0
+    prev_no: int | None = None
+    for p in pages:
+        no = int(getattr(p, "page_no"))
+        src = (getattr(p, "source_html", None) or "").strip()
+        solo = page_too_large_for_batch(src)
+        if solo:
+            if buf:
+                runs.append(buf)
+                buf = []
+                buf_chars = 0
+            runs.append([p])
+            prev_no = no
+            continue
+        can_join = (
+            buf
+            and prev_no is not None
+            and no == prev_no + 1
+            and len(buf) < max_n
+            and buf_chars + len(src) <= source_cap
+        )
+        if can_join:
+            buf.append(p)
+            buf_chars += len(src)
+        else:
+            if buf:
+                runs.append(buf)
+            buf = [p]
+            buf_chars = len(src)
+        prev_no = no
+    if buf:
+        runs.append(buf)
+    return runs
 
 
 def validate_translation_html(html: str, *, source_html: str | None = None) -> str:
@@ -122,18 +212,80 @@ def translate_from_source(
     return html, model, _sum_usage(usages)
 
 
-def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
+def translate_from_sources(
+    pages: list[dict[str, Any]],
+    *,
+    cfg: dict[str, Any],
+) -> tuple[dict[int, str], str, dict[str, Any]]:
+    """Translate one or more consecutive source pages. Returns (html_by_page_no, model, usage)."""
+    if not pages:
+        raise ValueError("no pages")
+    if len(pages) == 1:
+        p = pages[0]
+        html, model, usage = translate_from_source(
+            source_html=p["source_html"],
+            cfg=cfg,
+            current_html=None,
+            directive=None,
+        )
+        return {int(p["page_no"]): html}, model, usage
+
+    labeled: list[tuple[int, str]] = []
+    for p in pages:
+        no = int(p["page_no"])
+        src = (p.get("source_html") or "").strip()
+        if not src:
+            raise ValueError(f"empty Sanskrit source for page {no}")
+        labeled.append((no, src))
+    nos = [n for n, _ in labeled]
+    prompt = build_translate_batch_prompt(pages=labeled, cfg=cfg)
+    n = len(labeled)
+    max_tokens = min(32768, max(8192, 8000 * n))
+    timeout = 240.0 if n > 2 else 180.0
+    raw, model, usage = run_text_prompt(prompt, max_tokens=max_tokens, timeout=timeout)
+    blocks = split_batch_page_html(raw, page_nos=nos)
+    out: dict[int, str] = {}
+    errors: list[str] = []
+    src_by_no = {n: s for n, s in labeled}
+    for no in nos:
+        chunk = blocks.get(no)
+        if not chunk:
+            errors.append(f"page {no} missing from batch")
+            continue
+        try:
+            out[no] = validate_translation_html(chunk, source_html=src_by_no[no])
+        except ValueError as exc:
+            errors.append(f"page {no}: {exc}")
+    if not out:
+        raise RuntimeError("; ".join(errors) or "batch translate produced no pages")
+    return out, model, usage
+
+
+def run_text_prompt(
+    user_text: str,
+    *,
+    max_tokens: int | None = None,
+    timeout: float | None = None,
+) -> tuple[str, str, dict[str, Any]]:
     settings = get_settings()
     plan = model_plan_primary_only()
     _require_keys_for_plan(settings, plan)
     errors: list[str] = []
+    to = float(timeout or 180)
 
     for model in _uniq(plan.get("openrouter") or []):
         try:
             text, usage = _call_openrouter_text(
-                effective_openrouter_key(), settings.openrouter_base_url, model, user_text
+                effective_openrouter_key(),
+                effective_openrouter_base_url(),
+                model,
+                user_text,
+                max_tokens=max_tokens,
+                timeout=to,
             )
-            usage = {**usage, "network": "openrouter", "model": model}
+            usage = {**usage, "network": (
+                "haimaker" if "haimaker.ai" in (effective_openrouter_base_url() or "") else "openrouter"
+            ), "model": model}
             return text, f"openrouter:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
             raise
@@ -143,7 +295,12 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     for model in _uniq(plan.get("anthropic") or []):
         try:
             text, usage = _call_anthropic_text(
-                effective_proxyapi_key(), settings.anthropic_base_url, model, user_text
+                effective_proxyapi_key(),
+                settings.anthropic_base_url,
+                model,
+                user_text,
+                max_tokens=max_tokens,
+                timeout=to,
             )
             usage = {**usage, "network": "anthropic", "model": model}
             return text, f"anthropic:{model}", usage
@@ -154,7 +311,7 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
 
     for model in _uniq(plan.get("gemini") or []):
         try:
-            text, usage = _call_gemini_text(model, user_text)
+            text, usage = _call_gemini_text(model, user_text, max_tokens=max_tokens, timeout=to)
             usage = {**usage, "network": "gemini", "model": model}
             return text, f"gemini:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
@@ -165,7 +322,12 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     for model in _uniq(plan.get("openai") or []):
         try:
             text, usage = _call_openai_text(
-                effective_proxyapi_key(), settings.openai_base_url, model, user_text
+                effective_proxyapi_key(),
+                settings.openai_base_url,
+                model,
+                user_text,
+                max_tokens=max_tokens,
+                timeout=to,
             )
             usage = {**usage, "network": "openai", "model": model}
             return text, f"openai:{model}", usage
@@ -177,15 +339,23 @@ def run_text_prompt(user_text: str) -> tuple[str, str, dict[str, Any]]:
     raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
 
 
-def _call_openrouter_text(api_key: str, base_url: str, model: str, user_text: str):
+def _call_openrouter_text(
+    api_key: str,
+    base_url: str,
+    model: str,
+    user_text: str,
+    *,
+    max_tokens: int | None = None,
+    timeout: float = 180,
+):
     url = f"{base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
     }
-    apply_ox_chat_options(payload, model, task=TASK_TRANSLATE)
+    apply_ox_chat_options(payload, model, task=TASK_TRANSLATE, max_tokens=max_tokens)
     data = post_openrouter_chat(
-        url, headers=openrouter_headers(api_key), payload=payload, timeout=180
+        url, headers=openrouter_headers(api_key), payload=payload, timeout=timeout
     )
     choices = data.get("choices") or []
     if not choices:
@@ -196,11 +366,19 @@ def _call_openrouter_text(api_key: str, base_url: str, model: str, user_text: st
     return text, parse_openai_usage(data)
 
 
-def _call_anthropic_text(api_key: str, base_url: str, model: str, user_text: str):
+def _call_anthropic_text(
+    api_key: str,
+    base_url: str,
+    model: str,
+    user_text: str,
+    *,
+    max_tokens: int | None = None,
+    timeout: float = 180,
+):
     url = f"{base_url.rstrip('/')}/v1/messages"
     payload: dict[str, Any] = {
         "model": model,
-        "max_tokens": 8192,
+        "max_tokens": max(1024, int(max_tokens or 8192)),
         "thinking": {"type": "disabled"},
         "messages": [{"role": "user", "content": [{"type": "text", "text": user_text}]}],
     }
@@ -213,7 +391,7 @@ def _call_anthropic_text(api_key: str, base_url: str, model: str, user_text: str
             "Content-Type": "application/json",
         },
         json=payload,
-        timeout=180,
+        timeout=timeout,
     )
     if resp.status_code == 400 and "thinking" in (resp.text or "").lower():
         payload.pop("thinking", None)
@@ -226,7 +404,7 @@ def _call_anthropic_text(api_key: str, base_url: str, model: str, user_text: str
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=180,
+            timeout=timeout,
         )
     if resp.status_code != 200:
         body = resp.text[:400]
@@ -243,28 +421,46 @@ def _call_anthropic_text(api_key: str, base_url: str, model: str, user_text: str
     return text, parse_anthropic_usage(data)
 
 
-def _call_gemini_text(model: str, user_text: str):
+def _call_gemini_text(
+    model: str,
+    user_text: str,
+    *,
+    max_tokens: int | None = None,
+    timeout: float = 180,
+):
     from app.services.gemini_client import generate_gemini_content
 
+    kwargs: dict[str, Any] = {"timeout": timeout}
+    if max_tokens:
+        kwargs["max_output_tokens"] = max(1024, int(max_tokens))
     return generate_gemini_content(
         model=model,
         parts=[{"text": user_text}],
+        **kwargs,
     )
 
 
-def _call_openai_text(api_key: str, base_url: str, model: str, user_text: str):
+def _call_openai_text(
+    api_key: str,
+    base_url: str,
+    model: str,
+    user_text: str,
+    *,
+    max_tokens: int | None = None,
+    timeout: float = 180,
+):
     url = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
         "model": model,
         "temperature": 0,
-        "max_tokens": 8192,
+        "max_tokens": max(1024, int(max_tokens or 8192)),
         "messages": [{"role": "user", "content": user_text}],
     }
     resp = httpx.post(
         url,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json=payload,
-        timeout=180,
+        timeout=timeout,
     )
     if resp.status_code != 200:
         body = resp.text[:400]

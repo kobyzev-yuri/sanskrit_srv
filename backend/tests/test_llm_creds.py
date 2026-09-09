@@ -67,6 +67,7 @@ def test_personal_keys_override_route(tmp_path, monkeypatch):
         llm_route="gemini",
         proxyapi_key="px-expert-9999",
         openrouter_api_key="sk-or-expert",
+        openrouter_model="stealth/ox-alpha",
     )
     with llm_user_context(user):
         assert get_route() == "gemini"
@@ -77,6 +78,40 @@ def test_personal_keys_override_route(tmp_path, monkeypatch):
         assert creds.key_source == "personal"
         assert creds.openai_api_key.endswith("9999")
         assert creds.key_hint == "9999"
+        assert creds.openrouter_model == ""
+
+
+def test_personal_openrouter_typed_model(tmp_path, monkeypatch):
+    from app.services import llm_route as lr
+
+    monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
+    user = _user(
+        use_default_llm=False,
+        llm_route="openrouter",
+        openrouter_api_key="sk-or-expert",
+        openrouter_model="google/gemini-2.5-flash",
+    )
+    with llm_user_context(user):
+        plan = model_plan_primary_only()
+        assert plan["openrouter"] == ["google/gemini-2.5-flash"]
+        require_keys_for_plan(plan)
+
+
+def test_personal_openrouter_alpha_is_empty(tmp_path, monkeypatch):
+    from app.services import llm_route as lr
+
+    monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
+    user = _user(
+        use_default_llm=False,
+        llm_route="openrouter",
+        openrouter_api_key="sk-or-expert",
+        openrouter_model="stealth/ox-alpha",
+    )
+    with llm_user_context(user):
+        plan = model_plan_primary_only()
+        assert plan["openrouter"] == []
+        with pytest.raises(RuntimeError, match="не задана"):
+            require_keys_for_plan(plan)
 
 
 def test_denied_default_requires_own_key(tmp_path, monkeypatch):

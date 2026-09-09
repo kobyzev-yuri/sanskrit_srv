@@ -123,6 +123,8 @@
 | `OPENROUTER_MODEL` | нет | По умолчанию `stealth/ox-alpha` |
 | `OPENROUTER_MAX_TOKENS` | нет | Лимит completion OpenRouter |
 | `GEMINI_API_KEY` | да* | Ключ [Google AI Studio](https://aistudio.google.com/apikey) для Gemini (`*` нужен для LLM по умолчанию) |
+| `GEMINI_API_KEYS` | нет | Дополнительные ключи Studio через запятую (`label:key`). На каждый — ~20 запросов/день; исчерпанный пропускается до полуночи Калифорнии |
+| `GEMINI_KEYS_FILE` | нет | Файл с ключами на сервере (не в git). Формат: ключ / метка / ключ |
 | `GEMINI_BASE_URL` | нет | По умолчанию `https://generativelanguage.googleapis.com` |
 | `GEMINI_MODEL` | нет | По умолчанию `gemini-3.1-pro-preview`. **Не** ставьте сюда `claude-*` |
 | `OPENAI_API_KEY` | нет* | Ключ ProxyAPI — нужен только для маршрута Opus |

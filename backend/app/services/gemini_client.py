@@ -9,12 +9,19 @@ from typing import Any, Callable
 import httpx
 
 from app.config import get_settings
+from app.services.gemini_keys import (
+    key_log_label,
+    mark_daily_exhausted,
+    note_studio_success,
+    pick_studio_key,
+    studio_keys_to_try,
+)
 from app.services.llm_status import (
     GEMINI_CREDITS_MSG,
-    GEMINI_RATE_LIMIT_MSG,
     LlmQuotaError,
     LlmRateLimitError,
     gemini_quota_wait_message,
+    is_gemini_daily_quota,
     is_quota_response,
     set_quota_alert,
 )
@@ -34,20 +41,19 @@ def is_google_studio_base(base_url: str) -> bool:
 
 
 def resolve_gemini_endpoint() -> tuple[str, str]:
-    """Return (api_key, base_url). Studio key wins over ProxyAPI."""
-    from app.services.llm_route import current_creds
+    """Return (api_key, base_url). Studio key wins unless the ProxyAPI Gemini model is selected."""
+    from app.services.llm_route import current_creds, gemini_uses_proxyapi
 
     settings = get_settings()
     creds = current_creds()
     studio = (getattr(creds, "gemini_api_key", None) or "").strip()
-    if studio:
+    if studio and not gemini_uses_proxyapi():
         base = (settings.gemini_base_url or "").strip().rstrip("/")
         if not base or "proxyapi.ru" in base.lower():
             base = GOOGLE_GEMINI_BASE
         return studio, base
     proxy = (creds.openai_api_key or "").strip()
-    base = (settings.gemini_base_url or PROXY_GEMINI_BASE).strip().rstrip("/")
-    return proxy, base
+    return proxy, PROXY_GEMINI_BASE
 
 
 def gemini_headers(api_key: str, base_url: str) -> dict[str, str]:
@@ -109,6 +115,7 @@ def generate_gemini_content(
     base_url: str | None = None,
     sleep: Callable[[float], None] = time.sleep,
     post: Callable[..., Any] | None = None,
+    timeout: float = 180,
 ) -> tuple[str, dict[str, Any]]:
     if not api_key or not base_url:
         resolved_key, resolved_base = resolve_gemini_endpoint()
@@ -123,51 +130,77 @@ def generate_gemini_content(
         "generationConfig": {"temperature": 0, "maxOutputTokens": int(max_output_tokens)},
     }
     do_post = post or httpx.post
-    waits = [0, *_BACKOFF_S]
+    keys = [api_key]
+    pool: set[str] = set()
+    if studio:
+        from app.services.gemini_keys import configured_studio_entries
+
+        pool = {item for _, item in configured_studio_entries()}
+        start = pick_studio_key() or api_key if api_key in pool else api_key
+        keys = studio_keys_to_try(start) or [api_key]
     last_err = ""
     resp: httpx.Response | None = None
-    for attempt, wait in enumerate(waits):
-        if wait:
-            log.warning("Gemini retry in %ss (%s)", wait, last_err[:180])
-            sleep(wait)
-        resp = do_post(
-            url,
-            headers=gemini_headers(api_key, base_url),
-            json=payload,
-            timeout=180,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            cands = data.get("candidates") or []
-            if not cands:
-                raise RuntimeError("empty candidates")
-            content_parts = cands[0].get("content", {}).get("parts") or []
-            text = "".join(p.get("text", "") for p in content_parts if isinstance(p, dict))
-            if not text.strip():
-                raise RuntimeError("empty text")
-            return text, parse_gemini_usage(data)
-        body = resp.text or ""
-        if is_quota_response(resp.status_code, body):
-            msg = GEMINI_CREDITS_MSG if studio else "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
-            set_quota_alert(msg)
-            raise LlmQuotaError(msg)
-        if resp.status_code in _RETRY_STATUSES:
-            last_err = f"HTTP {resp.status_code} {body[:200]}"
-            log.warning("Gemini %s", last_err[:240])
-            retry_s = _retry_after_seconds(resp, 0)
-            if studio and resp.status_code == 429 and retry_s > 180:
-                raise LlmRateLimitError(gemini_quota_wait_message(body, retry_s))
-            if attempt + 1 < len(waits):
-                waits[attempt + 1] = max(
-                    waits[attempt + 1],
-                    retry_s if retry_s else waits[attempt + 1],
-                )
-                if waits[attempt + 1] > 120:
-                    waits[attempt + 1] = 120
-            continue
-        raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
+    for ki, key in enumerate(keys):
+        last_key = ki == len(keys) - 1
+        waits = [0, *_BACKOFF_S] if last_key else [0]
+        for attempt, wait in enumerate(waits):
+            if wait:
+                log.warning("Gemini retry in %ss (%s)", wait, last_err[:180])
+                sleep(wait)
+            resp = do_post(
+                url,
+                headers=gemini_headers(key, base_url),
+                json=payload,
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                cands = data.get("candidates") or []
+                if not cands:
+                    raise RuntimeError("empty candidates")
+                content_parts = cands[0].get("content", {}).get("parts") or []
+                text = "".join(p.get("text", "") for p in content_parts if isinstance(p, dict))
+                if not text.strip():
+                    raise RuntimeError("empty text")
+                note_studio_success(key)
+                return text, parse_gemini_usage(data)
+            body = resp.text or ""
+            if is_quota_response(resp.status_code, body):
+                msg = GEMINI_CREDITS_MSG if studio else "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
+                set_quota_alert(msg)
+                raise LlmQuotaError(msg)
+            if resp.status_code in _RETRY_STATUSES:
+                last_err = f"HTTP {resp.status_code} {body[:200]}"
+                retry_s = _retry_after_seconds(resp, 0)
+                daily = studio and resp.status_code == 429 and is_gemini_daily_quota(body, retry_s)
+                if daily:
+                    if key in pool:
+                        mark_daily_exhausted(key)
+                    log.warning(
+                        "Gemini %s daily quota, %s",
+                        key_log_label(key),
+                        "trying next key" if not last_key else "no keys left",
+                    )
+                    break
+                log.warning("Gemini %s", last_err[:240])
+                if last_key and attempt + 1 < len(waits):
+                    waits[attempt + 1] = max(
+                        waits[attempt + 1],
+                        retry_s if retry_s else waits[attempt + 1],
+                    )
+                    if waits[attempt + 1] > 120:
+                        waits[attempt + 1] = 120
+                    continue
+                if not last_key:
+                    log.warning(
+                        "Gemini %s rate-limited, trying next key",
+                        key_log_label(key),
+                    )
+                    break
+                continue
+            raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
     if studio:
         wait_s = _retry_after_seconds(resp, 60) if resp is not None else 60
         body = (resp.text if resp is not None else "") or last_err
-        raise LlmRateLimitError(gemini_quota_wait_message(body, wait_s))
+        raise LlmRateLimitError(gemini_quota_wait_message(body, wait_s, keys_tried=len(keys)))
     raise LlmRateLimitError(last_err or "Gemini rate limited")

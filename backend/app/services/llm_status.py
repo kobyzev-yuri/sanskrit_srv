@@ -61,10 +61,11 @@ def seconds_until_pacific_midnight() -> int:
     return max(60, int((nxt - now).total_seconds()))
 
 
-def gemini_quota_wait_message(body: str, retry_after_s: int | None = None) -> str:
-    """Human wait hint for Studio 429 (Free RPM/TPM/RPD, not prepaid credits)."""
+def is_gemini_daily_quota(body: str, retry_after_s: int | None = None) -> bool:
+    """True for free-tier RPD (not prepaid credits, not RPM)."""
+    if is_quota_response(429, body or ""):
+        return False
     low = (body or "").lower()
-    wait = int(retry_after_s) if retry_after_s and retry_after_s > 0 else None
     daily = any(
         m in low
         for m in (
@@ -85,6 +86,20 @@ def gemini_quota_wait_message(body: str, retry_after_s: int | None = None) -> st
             "requests per minute",
         )
     )
+    wait = int(retry_after_s) if retry_after_s and retry_after_s > 0 else None
+    long_wait = wait is not None and wait > 180
+    return bool(daily or (long_wait and not per_min))
+
+
+def gemini_quota_wait_message(
+    body: str,
+    retry_after_s: int | None = None,
+    *,
+    keys_tried: int | None = None,
+) -> str:
+    """Human wait hint for Studio 429 (Free RPM/TPM/RPD, not prepaid credits)."""
+    low = (body or "").lower()
+    wait = int(retry_after_s) if retry_after_s and retry_after_s > 0 else None
     tokens = any(
         m in low
         for m in (
@@ -93,11 +108,17 @@ def gemini_quota_wait_message(body: str, retry_after_s: int | None = None) -> st
             "inputtokencount",
         )
     )
-    long_wait = wait is not None and wait > 180
-    if daily or (long_wait and not per_min):
+    n_keys = int(keys_tried) if keys_tried and keys_tried > 1 else 0
+    if is_gemini_daily_quota(body, retry_after_s):
         wait_s = wait or seconds_until_pacific_midnight()
+        if n_keys:
+            return (
+                f"Суточный лимит бесплатного Gemini на всех {n_keys} ключах AI Studio "
+                f"(по 20 запросов). Подождите {format_wait_ru(wait_s)} "
+                "до полуночи по Калифорнии."
+            )
         return (
-            "Суточный лимит бесплатного Gemini Flash (20 запросов). "
+            "Суточный лимит бесплатного Gemini (20 запросов на ключ). "
             f"Подождите {format_wait_ru(wait_s)} и повторите "
             "(сброс в полночь по Калифорнии)."
         )
@@ -141,12 +162,18 @@ def is_quota_response(status_code: int, body: str) -> bool:
     return any(m in low for m in markers)
 
 
-def set_quota_alert(message: str, *, balance: float | None = None) -> None:
+def set_quota_alert(
+    message: str,
+    *,
+    balance: float | None = None,
+    route: str | None = None,
+) -> None:
     payload = {
         "active": True,
         "code": "llm_quota",
         "message": message,
         "balance": balance,
+        "route": route,
         "updated_at": time.time(),
     }
     path = _alert_path()
@@ -158,7 +185,14 @@ def clear_quota_alert() -> None:
     if path.exists():
         path.write_text(
             json.dumps(
-                {"active": False, "code": None, "message": None, "balance": None, "updated_at": time.time()},
+                {
+                    "active": False,
+                    "code": None,
+                    "message": None,
+                    "balance": None,
+                    "route": None,
+                    "updated_at": time.time(),
+                },
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -174,6 +208,17 @@ def read_alert() -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {"active": False}
+
+
+def alert_matches_route(alert: dict[str, Any], route: str) -> bool:
+    """Paywall banner is per gateway. OpenRouter 402 must not look like a GLM failure."""
+    if not alert.get("active"):
+        return False
+    stored = str(alert.get("route") or "").strip()
+    if stored:
+        return stored == route
+    # Legacy alerts had no route field and were OpenRouter / ProxyAPI.
+    return route not in ("glm", "gemini")
 
 
 def fetch_balance() -> dict[str, Any]:
@@ -216,7 +261,7 @@ def fetch_balance() -> dict[str, Any]:
 
 
 def llm_status() -> dict[str, Any]:
-    from app.services.llm_route import current_creds, describe_route, get_route
+    from app.services.llm_route import current_creds, describe_route, effective_openrouter_key, get_route
 
     creds = current_creds()
     desc = describe_route(effective=True)
@@ -227,6 +272,12 @@ def llm_status() -> dict[str, Any]:
         live = f"свой ключ · {live}"
     else:
         live = f"бэкофис · {live}"
+    if route == "gemini" and creds.key_source != "personal":
+        from app.services.gemini_keys import pool_summary
+
+        summ = pool_summary()
+        if summ["n"] > 1:
+            live = f"{live} · ключи {summ['available']}/{summ['n']}"
 
     def attach(payload: dict[str, Any]) -> dict[str, Any]:
         payload["route"] = route
@@ -234,6 +285,8 @@ def llm_status() -> dict[str, Any]:
         payload["route_model"] = f"{primary.get('provider')}:{primary.get('model')}"
         payload["key_source"] = creds.key_source
         payload["use_default"] = creds.use_default
+        payload["gemini_keys"] = desc.get("gemini_keys") or 0
+        payload["gemini_keys_available"] = desc.get("gemini_keys_available") or 0
         if not payload.get("message"):
             payload["message"] = live
         elif payload.get("ok") and not payload.get("warning"):
@@ -241,22 +294,29 @@ def llm_status() -> dict[str, Any]:
         return payload
 
     alert = read_alert()
-    if route == "openrouter":
-        or_ok = bool(creds.openrouter_api_key)
+    if route in ("openrouter", "glm") and not alert_matches_route(alert, route):
+        alert = {"active": False}
+    if route in ("openrouter", "glm"):
+        or_ok = bool(effective_openrouter_key() if route == "glm" else creds.openrouter_api_key)
         if not or_ok:
+            missing = (
+                "HAIMAKER_API_KEY не задан в .env (тест GLM 5V)."
+                if route == "glm"
+                else (
+                    "В кабинете не задан ключ OpenRouter."
+                    if creds.key_source == "personal"
+                    else "OPENROUTER_API_KEY не задан в .env."
+                )
+            )
             return attach(
                 {
                     "ok": False,
                     "warning": True,
                     "code": "llm_key",
-                    "message": (
-                        "В кабинете не задан ключ OpenRouter."
-                        if creds.key_source == "personal"
-                        else "OPENROUTER_API_KEY не задан в .env."
-                    ),
+                    "message": missing,
                     "balance": None,
                     "balance_ok": False,
-                    "balance_error": "OPENROUTER_API_KEY missing",
+                    "balance_error": "HAIMAKER_API_KEY missing" if route == "glm" else "OPENROUTER_API_KEY missing",
                 }
             )
         if alert.get("active"):
@@ -284,7 +344,7 @@ def llm_status() -> dict[str, Any]:
         )
 
     if route == "gemini" and creds.gemini_api_key:
-        if alert.get("active"):
+        if alert_matches_route(alert, route):
             return attach(
                 {
                     "ok": False,
@@ -344,6 +404,10 @@ def settings_key_ok() -> bool:
     creds = current_creds()
     if get_route() == "openrouter":
         return bool(creds.openrouter_api_key)
+    if get_route() == "glm":
+        from app.services.llm_route import effective_openrouter_key
+
+        return bool(effective_openrouter_key())
     if get_route() == "gemini":
         return bool(creds.gemini_api_key or creds.openai_api_key)
     return bool(creds.openai_api_key)

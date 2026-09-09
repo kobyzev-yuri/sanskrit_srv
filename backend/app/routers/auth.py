@@ -80,12 +80,14 @@ def _me_llm_out(user: User) -> MeLlmOut:
         has_proxyapi_key=bool((user.proxyapi_key or "").strip()),
         openrouter_hint=_key_hint(user.openrouter_api_key),
         proxyapi_hint=_key_hint(user.proxyapi_key),
+        openrouter_model=str(getattr(user, "openrouter_model", None) or ""),
         options=list(effective.get("options") or []),
         default_route=str(default.get("route") or "gemini"),
         default_label=str(default.get("label") or ""),
         default_openrouter_key=bool(default.get("openrouter_key")),
         default_proxyapi_key=bool(default.get("proxyapi_key")),
         default_gemini_key=bool(default.get("gemini_key")),
+        default_gemini_keys=int(default.get("gemini_keys") or 0),
     )
 
 
@@ -119,6 +121,11 @@ def patch_me_llm(
         key = body.openrouter_api_key.strip()
         user.openrouter_api_key = key or None
         if key:
+            user.use_default_llm = False
+    if body.openrouter_model is not None:
+        model = body.openrouter_model.strip()
+        user.openrouter_model = model or None
+        if model:
             user.use_default_llm = False
     if body.proxyapi_key is not None:
         key = body.proxyapi_key.strip()

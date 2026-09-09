@@ -90,6 +90,7 @@ class MeLlmUpdateIn(BaseModel):
     use_default_llm: bool | None = None
     llm_route: str | None = None
     openrouter_api_key: str | None = None
+    openrouter_model: str | None = None
     proxyapi_key: str | None = None
 
 
@@ -104,12 +105,14 @@ class MeLlmOut(BaseModel):
     has_proxyapi_key: bool
     openrouter_hint: str | None = None
     proxyapi_hint: str | None = None
+    openrouter_model: str = ""
     options: list[dict[str, Any]] = []
     default_route: str
     default_label: str
     default_openrouter_key: bool
     default_proxyapi_key: bool
     default_gemini_key: bool = False
+    default_gemini_keys: int = 0
 
 
 class JobOut(BaseModel):
@@ -385,9 +388,15 @@ class LlmRouteOut(BaseModel):
     openrouter_key: bool = False
     proxyapi_key: bool = False
     gemini_key: bool = False
+    gemini_keys: int = 0
+    gemini_keys_available: int = 0
     key_source: str = "default"
     use_default: bool = True
+    proxyapi_model: str = ""
+    proxyapi_models: list[dict[str, str]] = Field(default_factory=list)
+    openrouter_model: str = ""
 
 
 class LlmRouteIn(BaseModel):
     route: str
+    proxyapi_model: str | None = None

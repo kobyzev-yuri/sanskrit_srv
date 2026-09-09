@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db import get_db
 from app.deps import get_current_user, require_roles
@@ -46,7 +47,12 @@ from app.services.llm_translate import translate_from_source
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
 from app.services.source_sync import sync_sanskrit_to_digitize
-from app.services.translation_style import project_task, translation_agreed, translation_cfg
+from app.services.translation_style import (
+    lock_translation_template,
+    project_task,
+    translation_agreed,
+    translation_cfg,
+)
 
 router = APIRouter(tags=["pages"])
 
@@ -393,10 +399,9 @@ def _apply_translate_revision(
     if page.status == PageStatus.expert_done:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
     if not translation_agreed(project):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Сначала согласуйте шаблон перевода с экспертом",
-        )
+        lock_translation_template(project, user)
+        flag_modified(project, "settings")
+        db.commit()
     source_html = (page.source_html or "").strip()
     if not source_html:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет выверенного санскрита на этой странице")
@@ -437,6 +442,9 @@ def _apply_llm_revision(
     project = db.get(Project, page.project_id)
     if project is not None and project_task(project) == "translate":
         return _apply_translate_revision(db, page, user, directive)
+    if not ensure_page_scan(db, page):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet — pipeline still running")
+    db.refresh(page)
     if not page.scan_path or not Path(page.scan_path).exists():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet — pipeline still running")
 

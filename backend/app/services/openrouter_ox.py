@@ -35,6 +35,23 @@ _COMPLETION_CAP = {
     TASK_DRAFT: 16384,
 }
 
+HAIMAKER_402_MSG = (
+    "Haimaker GLM (не OpenRouter): HTTP 402 — нет средств на эту модель. "
+    "Бесплатный промо — текстовый glm-5.3; glm-5v-turbo для сканов платный "
+    "($1.20 / $4 за 1M токенов). Пополните баланс на haimaker.ai "
+    "или в бэкофисе вернитесь на Gemini."
+)
+OPENROUTER_402_MSG = "Лимит OpenRouter / оплата (HTTP 402)."
+
+
+def is_haimaker_url(url: str) -> bool:
+    return "haimaker.ai" in (url or "").lower()
+
+
+def quota_message_for_url(url: str) -> str:
+    return HAIMAKER_402_MSG if is_haimaker_url(url) else OPENROUTER_402_MSG
+
+
 _RETRY_STATUSES = frozenset({429, 502, 503, 504})
 _BACKOFF_S = (20, 45, 90, 120)
 
@@ -42,6 +59,12 @@ _BACKOFF_S = (20, 45, 90, 120)
 def is_ox_model(model: str) -> bool:
     mid = (model or "").lower()
     return "ox-alpha" in mid or mid.startswith("stealth/")
+
+
+def is_glm_model(model: str) -> bool:
+    """Haimaker / z-ai GLM-5.x including vision (glm-5v-turbo). Thinking is always on."""
+    mid = (model or "").lower()
+    return "glm-5" in mid or "glm-4.6v" in mid or "glm-4.5v" in mid or mid.startswith("z-ai/")
 
 
 def completion_cap(task: str) -> int:
@@ -62,10 +85,21 @@ def apply_ox_chat_options(
     model: str,
     *,
     task: str,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
-    """Attach ox-alpha reasoning/completion options (or generic max_tokens)."""
+    """Attach ox-alpha / GLM-5.3 reasoning/completion options (or generic max_tokens)."""
     limit = completion_cap(task)
-    if is_ox_model(model):
+    if max_tokens:
+        raised = int(max_tokens)
+        env = int(get_settings().openrouter_max_tokens or 0)
+        if env >= 1024:
+            raised = min(raised, env)
+        limit = min(32768, max(limit, raised))
+    if is_glm_model(model):
+        # Haimaker: omitted reasoning_effort defaults to max and can starve HTML.
+        payload["max_completion_tokens"] = limit
+        payload["reasoning_effort"] = reasoning_effort(task)
+    elif is_ox_model(model):
         payload["max_completion_tokens"] = limit
         # exclude=False: some replies put the HTML only in `reasoning`; callers parse that.
         payload["reasoning"] = {
@@ -121,8 +155,8 @@ def post_openrouter_chat(
             return data
         body = (resp.text or "")[:400]
         if is_quota_response(resp.status_code, body):
-            msg = "Лимит OpenRouter / оплата (HTTP 402)."
-            set_quota_alert(msg)
+            msg = quota_message_for_url(url)
+            set_quota_alert(msg, route="glm" if is_haimaker_url(url) else "openrouter")
             raise LlmQuotaError(msg)
         if resp.status_code in _RETRY_STATUSES:
             last_err = f"HTTP {resp.status_code} {body[:200]}"

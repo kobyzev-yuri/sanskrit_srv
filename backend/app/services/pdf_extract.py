@@ -11,6 +11,8 @@ from app.services.storage import page_png_path
 
 # Avg extractable chars on sampled pages above this → born-digital / text PDF (skip LLM).
 TEXT_PDF_AVG_CHARS = 60
+# A page-sized raster (scan / photo) even with an OCR text overlay → treat as scan.
+SCAN_IMAGE_COVERAGE = 0.30
 
 
 def pdf_page_count(pdf_path: Path) -> int:
@@ -18,15 +20,57 @@ def pdf_page_count(pdf_path: Path) -> int:
         return doc.page_count
 
 
-def classify_pdf(pdf_path: Path, sample_pages: int = 8) -> dict:
-    """Return {kind: 'scan'|'text', avg_chars, samples, page_count}.
+def _page_image_coverage(page) -> float:
+    """Largest image-block area as a fraction of the page. 1.0 ≈ full-page plate."""
+    pw = abs(page.rect.width) or 1.0
+    ph = abs(page.rect.height) or 1.0
+    page_area = pw * ph
+    best = 0.0
+    try:
+        blocks = (page.get_text("dict") or {}).get("blocks") or []
+    except Exception:
+        blocks = []
+    for block in blocks:
+        if block.get("type") != 1:
+            continue
+        bbox = block.get("bbox") or [0, 0, 0, 0]
+        area = abs((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+        best = max(best, area / page_area)
+    if best >= SCAN_IMAGE_COVERAGE:
+        return best
+    try:
+        images = page.get_images(full=True) or []
+    except Exception:
+        images = []
+    for img in images:
+        xref = img[0]
+        try:
+            info = page.parent.extract_image(xref)
+        except Exception:
+            continue
+        w = int(info.get("width") or 0)
+        h = int(info.get("height") or 0)
+        if w >= 400 and h >= 400:
+            return max(best, 0.5)
+    return best
 
-    Text PDFs have a real text layer; scans are image-only (or near-empty text).
+
+def classify_pdf(pdf_path: Path, sample_pages: int = 8) -> dict:
+    """Return {kind: 'scan'|'text', avg_chars, avg_image_coverage, samples, page_count}.
+
+    Text PDFs have a real text layer and no page-sized raster.
+    Scans are image-only, or a photographed page with an OCR overlay.
     """
     with fitz.open(pdf_path) as doc:
         total = doc.page_count
         if total <= 0:
-            return {"kind": "scan", "avg_chars": 0, "samples": [], "page_count": 0}
+            return {
+                "kind": "scan",
+                "avg_chars": 0,
+                "avg_image_coverage": 0,
+                "samples": [],
+                "page_count": 0,
+            }
         step = max(1, total // sample_pages)
         indices = list(range(0, total, step))[:sample_pages]
         if total - 1 not in indices:
@@ -35,14 +79,25 @@ def classify_pdf(pdf_path: Path, sample_pages: int = 8) -> dict:
         for i in indices:
             page = doc.load_page(i)
             text = page.get_text("text") or ""
-            # ignore tiny OCR garbage layers
             chars = len(re.sub(r"\s+", "", text))
-            samples.append({"page": i + 1, "chars": chars})
+            coverage = _page_image_coverage(page)
+            samples.append(
+                {
+                    "page": i + 1,
+                    "chars": chars,
+                    "image_coverage": round(coverage, 3),
+                }
+            )
         avg = sum(s["chars"] for s in samples) / max(1, len(samples))
-        kind = "text" if avg >= TEXT_PDF_AVG_CHARS else "scan"
+        avg_cov = sum(s["image_coverage"] for s in samples) / max(1, len(samples))
+        if avg_cov >= SCAN_IMAGE_COVERAGE:
+            kind = "scan"
+        else:
+            kind = "text" if avg >= TEXT_PDF_AVG_CHARS else "scan"
         return {
             "kind": kind,
             "avg_chars": round(avg, 1),
+            "avg_image_coverage": round(avg_cov, 3),
             "samples": samples,
             "page_count": total,
         }

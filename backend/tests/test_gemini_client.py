@@ -141,3 +141,160 @@ def test_format_wait_ru():
     assert format_wait_ru(20) == "20 сек"
     assert "мин" in format_wait_ru(120)
     assert format_wait_ru(7200) == "2 ч"
+
+
+def test_resolve_uses_proxyapi_when_gemini_on_opus_route(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import gemini_client as gc
+    from app.services import llm_route as lr
+
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    settings = SimpleNamespace(
+        storage_root=storage,
+        openrouter_model="stealth/ox-alpha",
+        anthropic_model="claude-opus-5",
+        gemini_model="gemini-3.5-flash",
+        gemini_api_key="studio-key",
+        gemini_base_url="https://generativelanguage.googleapis.com",
+        openai_model="gpt-4o-mini",
+        openrouter_api_key="",
+        openai_api_key="px-key",
+        openrouter_base_url="",
+    )
+    monkeypatch.setattr(lr, "get_settings", lambda: settings)
+    monkeypatch.setattr(gc, "get_settings", lambda: settings)
+    lr.set_route("gemini", updated_by="t")
+    key, base = gc.resolve_gemini_endpoint()
+    assert key == "studio-key"
+    assert "generativelanguage" in base
+    lr.set_route("opus", proxyapi_model="gemini-2.5-flash", updated_by="t")
+    key, base = gc.resolve_gemini_endpoint()
+    assert key == "px-key"
+    assert base == gc.PROXY_GEMINI_BASE
+
+
+def test_daily_quota_rotates_to_next_studio_key(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import gemini_keys as gk
+
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    k1 = "AQ." + "a" * 40
+    k2 = "AQ." + "b" * 40
+    settings = SimpleNamespace(
+        storage_root=storage,
+        gemini_api_key=k1,
+        gemini_api_keys=f"sanskrit_srv_1:{k2}",
+        gemini_keys_file="",
+    )
+    monkeypatch.setattr(gk, "get_settings", lambda: settings)
+
+    daily = (
+        '{"error":{"code":429,"message":"You exceeded your current quota",'
+        '"details":[{"retryDelay":"7200s"},'
+        '{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}]}}'
+    )
+    ok = {"candidates": [{"content": {"parts": [{"text": "OK"}]}}], "usageMetadata": {}}
+    seen: list[str] = []
+
+    def fake_post(*_a, **kwargs):
+        key = kwargs["headers"]["x-goog-api-key"]
+        seen.append(key)
+        if key == k1:
+            return _Resp(429, daily, json_data=__import__("json").loads(daily))
+        return _Resp(200, json_data=ok)
+
+    slept: list[float] = []
+    text, _usage = generate_gemini_content(
+        model="gemini-3.5-flash",
+        parts=[{"text": "hi"}],
+        api_key=k1,
+        base_url="https://generativelanguage.googleapis.com",
+        sleep=slept.append,
+        post=fake_post,
+    )
+    assert text == "OK"
+    assert seen == [k1, k2]
+    assert slept == []
+    assert gk.is_key_exhausted(k1)
+    assert not gk.is_key_exhausted(k2)
+
+
+def test_rpm_429_rotates_without_waiting(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import gemini_keys as gk
+
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    k1 = "AQ." + "c" * 40
+    k2 = "AQ." + "d" * 40
+    settings = SimpleNamespace(
+        storage_root=storage,
+        gemini_api_key=k1,
+        gemini_api_keys=f"sanskrit_srv_1:{k2}",
+        gemini_keys_file="",
+    )
+    monkeypatch.setattr(gk, "get_settings", lambda: settings)
+    ok = {"candidates": [{"content": {"parts": [{"text": "OK"}]}}], "usageMetadata": {}}
+    seen: list[str] = []
+
+    def fake_post(*_a, **kwargs):
+        key = kwargs["headers"]["x-goog-api-key"]
+        seen.append(key)
+        if key == k1:
+            return _Resp(429, "RESOURCE_EXHAUSTED", headers={"Retry-After": "1"})
+        return _Resp(200, json_data=ok)
+
+    slept: list[float] = []
+    text, _usage = generate_gemini_content(
+        model="gemini-3.5-flash",
+        parts=[{"text": "hi"}],
+        api_key=k1,
+        base_url="https://generativelanguage.googleapis.com",
+        sleep=slept.append,
+        post=fake_post,
+    )
+    assert text == "OK"
+    assert seen == [k1, k2]
+    assert slept == []
+
+
+def test_all_studio_keys_daily_quota_raises(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import gemini_keys as gk
+
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    k1 = "AQ." + "e" * 40
+    k2 = "AQ." + "f" * 40
+    settings = SimpleNamespace(
+        storage_root=storage,
+        gemini_api_key=k1,
+        gemini_api_keys=f"sanskrit_srv_1:{k2}",
+        gemini_keys_file="",
+    )
+    monkeypatch.setattr(gk, "get_settings", lambda: settings)
+    daily = (
+        '{"error":{"code":429,"message":"You exceeded your current quota",'
+        '"details":[{"retryDelay":"7200s"},'
+        '{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}]}}'
+    )
+
+    def always(*_a, **_k):
+        return _Resp(429, daily, json_data=__import__("json").loads(daily))
+
+    with pytest.raises(LlmRateLimitError, match="всех 2 ключах"):
+        generate_gemini_content(
+            model="gemini-3.5-flash",
+            parts=[{"text": "hi"}],
+            api_key=k1,
+            base_url="https://generativelanguage.googleapis.com",
+            sleep=lambda _s: None,
+            post=always,
+        )
+

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260826srcsync1" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260909tr" />
 </head>
 <body>
   <div class="app-shell">
@@ -49,7 +49,7 @@
             <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" placeholder="my-book" /></label>
             <label>Название <input name="title" required placeholder="Название книги" /></label>
             <label>Название (sa) <input name="title_sa" class="sa" placeholder="देवनागरी" /></label>
-            <p class="muted">Автоперевод скана — только если в PDF <strong>не больше 10 страниц</strong>. Большую книгу загружаем страницами-заглушками: оцифровывайте по одной, затем «Перевод на русский».</p>
+            <p class="muted">Автооцифровка скана — только если в PDF <strong>не больше 10 страниц</strong>. Большую книгу загружаем страницами-заглушками: оцифровывайте по одной, затем при необходимости «Перевод на русский».</p>
             <label>PDF <input name="file" type="file" accept="application/pdf" required /></label>
             <button class="primary" id="btn-upload" type="submit">Загрузить PDF</button>
             <p id="upload-status" class="muted" hidden></p>
@@ -60,10 +60,10 @@
           <div class="modal-card">
             <h2>Большая книга</h2>
             <p id="large-book-text" class="muted"></p>
-            <p>Перевести <strong>все страницы</strong>? Для скана это LLM по каждой странице (время; Gemini 3.1 Pro через Google AI Studio, Opus — расход ProxyAPI).</p>
+            <p>Оцифровать <strong>все страницы</strong>? Для скана это LLM по каждой странице (время и расход токенов бэкофиса).</p>
             <div class="edit-actions" style="border:0;padding:0;background:transparent">
-              <button type="button" class="primary" id="btn-confirm-whole-book">Да, перевести всю книгу</button>
-              <button type="button" id="btn-cancel-whole-book">Пока не переводить</button>
+              <button type="button" class="primary" id="btn-confirm-whole-book">Да, оцифровать всю книгу</button>
+              <button type="button" id="btn-cancel-whole-book">Пока не оцифровывать</button>
             </div>
           </div>
         </div>
@@ -79,7 +79,7 @@
                 <strong>Страницы</strong>
                 <span class="muted" id="thumb-count">0</span>
               </div>
-              <label class="thumb-filter" title="Скрыть страницы со статусом «согласовано»">
+              <label class="thumb-filter" title="Скрыть согласованные. Кнопки оцифровки, перевода и смысловой проверки тогда идут только по видимым страницам.">
                 <input type="checkbox" id="thumb-filter-open" />
                 только несогласованные
               </label>
@@ -121,7 +121,7 @@
 
             <div class="toolbar extract-bar" id="pipeline-bar">
               <span id="pipeline-info" class="muted">Конвейер: —</span>
-              <button type="button" id="btn-start-pipeline" hidden>Перевести всю книгу заново</button>
+              <button type="button" id="btn-start-pipeline" hidden>Оцифровать всю книгу</button>
               <button type="button" class="primary" id="btn-open-translate" hidden>Перевод на русский</button>
               <button type="button" id="btn-back-source" hidden>← К оцифровке</button>
             </div>
@@ -137,7 +137,7 @@
                 <option value="drop">англ. убрать</option>
               </select>
               <input id="style-notes" type="text" placeholder="Заметки эксперта к шаблону" />
-              <button type="button" class="primary" id="btn-agree-style">Согласовать шаблон</button>
+              <button type="button" class="primary" id="btn-agree-style" hidden>Согласовать шаблон</button>
               <button type="button" id="btn-revoke-style" hidden>Отозвать шаблон</button>
               <button type="button" class="primary" id="btn-translate-all" hidden>Перевести все</button>
               <button type="button" id="btn-proofread-all" hidden>Смысловая проверка всех</button>
@@ -185,16 +185,18 @@
                     <textarea id="html-editor" spellcheck="false" placeholder="HTML черновик страницы…"></textarea>
                   </div>
                 </div>
-                <div id="accepted-box" class="directive-box" hidden>
-                  <p style="margin:0">Страница <strong>согласована</strong>. Чтобы править — отзовите согласие. PDF доступен всегда.</p>
-                  <p class="muted" id="proof-pending-note" hidden style="margin:0.5rem 0 0"></p>
-                  <div class="edit-actions" style="padding:0;border:0;background:transparent">
-                    <button type="button" id="btn-revoke">Отозвать согласие</button>
+                <div class="preview-footer">
+                  <div id="accepted-box" class="directive-box" hidden>
+                    <p style="margin:0">Страница <strong>согласована</strong>. Чтобы править — отзовите согласие. PDF доступен всегда.</p>
+                    <p class="muted" id="proof-pending-note" hidden style="margin:0.5rem 0 0"></p>
+                    <div class="edit-actions" style="padding:0;border:0;background:transparent">
+                      <button type="button" id="btn-revoke">Отозвать согласие</button>
+                    </div>
                   </div>
-                </div>
-                <div id="preview-save" class="edit-actions">
-                  <button type="button" id="btn-save">Сохранить правку</button>
-                  <button class="primary" type="button" id="btn-accept">Сохранить и согласовать</button>
+                  <div id="preview-save" class="edit-actions">
+                    <button type="button" id="btn-save">Сохранить правку</button>
+                    <button class="primary" type="button" id="btn-accept">Сохранить и согласовать</button>
+                  </div>
                 </div>
               </section>
               <section class="panel agent-pane" id="agent-panel">
@@ -209,10 +211,10 @@
                     <div id="edit-tools">
                       <div class="directive-box">
                         <label for="directive-input">Замечание / задание</label>
-                        <textarea id="directive-input" rows="3" placeholder="С чем не согласны — или: пересмотри страницу."></textarea>
+                        <textarea id="directive-input" rows="3" placeholder="Задание к странице — или нажмите «Оцифровать страницу»."></textarea>
                         <div class="edit-actions" style="padding:0;border:0;background:transparent">
                           <button class="primary" type="button" id="btn-revise">Отправить задание</button>
-                          <button type="button" id="btn-review-again">Пересмотри страницу</button>
+                          <button type="button" id="btn-review-again">Оцифровать страницу</button>
                           <button type="button" id="btn-translate-page" hidden>Перевести страницу</button>
                           <button type="button" id="btn-proofread" title="Второй проход: смысловая проверка">Смысловая проверка</button>
                           <span class="muted" id="revise-status"></span>
@@ -270,9 +272,13 @@
               <p class="muted" id="account-default-hint"></p>
               <label>Ключ OpenRouter <input name="openrouter_api_key" type="password" autocomplete="off" placeholder="оставить пустым — не менять" /></label>
               <p class="muted" id="account-or-hint"></p>
+              <label>Модель OpenRouter (свой id, без списка)
+                <input name="openrouter_model" id="account-openrouter-model" autocomplete="off" placeholder="например google/gemini-2.5-flash" />
+              </label>
+              <p class="muted">ox-alpha больше нет. Списка моделей OpenRouter нет — только то, что впишете.</p>
               <label>Ключ ProxyAPI <input name="proxyapi_key" type="password" autocomplete="off" placeholder="оставить пустым — не менять" /></label>
               <p class="muted" id="account-px-hint"></p>
-              <p class="muted">Своя сеть (если не бэкофис):</p>
+              <p class="muted">Своя сеть (если не бэкофис). Модель ProxyAPI задаётся в бэкофисе, блок «Маршрут LLM».</p>
               <div id="account-llm-route-box" class="llm-route-box"></div>
               <div class="edit-actions" style="border:0;padding:0;background:transparent">
                 <button class="primary" type="submit">Сохранить ключи</button>
@@ -372,7 +378,7 @@
           </div>
           <div class="admin-section">
             <h2>Маршрут LLM</h2>
-            <p class="muted">Это и есть выбранная сеть для перевода, заданий и проверки — не путать со списком вариантов. Сейчас активна та радиокнопка, что отмечена ниже (файл на сервере, его читает воркер).</p>
+            <p class="muted">Сети: бесплатный Gemini в Google AI Studio (по умолчанию) и платный ProxyAPI.ru. Тест Haimaker — только vision-модель <code>z-ai/glm-5v-turbo</code> (сканы). Текстовая glm-5.3 из чата LSE сюда не подходит. OpenRouter: ox-alpha снят, эксперт со своим ключом может вписать id в кабинете.</p>
             <div id="llm-route-box" class="llm-route-box"></div>
             <p class="muted" id="llm-route-status">—</p>
           </div>
@@ -380,7 +386,7 @@
             <h2>Каталог LLM</h2>
             <p class="muted" id="llm-note"></p>
             <ul id="llm-catalog"></ul>
-            <p class="muted">Ключи в <code>.env</code>: <code>GEMINI_API_KEY</code> (AI Studio, маршрут по умолчанию) и при необходимости <code>OPENROUTER_API_KEY</code> / <code>OPENAI_API_KEY</code> (ProxyAPI). Id: <code>GEMINI_MODEL</code> / <code>OPENROUTER_MODEL</code> / <code>ANTHROPIC_MODEL</code>.</p>
+            <p class="muted">Ключи в <code>.env</code>: <code>GEMINI_API_KEY</code> / <code>GEMINI_API_KEYS</code> (AI Studio, несколько ключей с fallback) и при необходимости <code>OPENROUTER_API_KEY</code> / <code>OPENAI_API_KEY</code> (ProxyAPI). Id Studio: <code>GEMINI_MODEL</code>. Модель ProxyAPI — список в «Маршрут LLM». OpenRouter: без каталога, ox-alpha снят.</p>
           </div>
         </div>
       </section>
@@ -389,7 +395,7 @@
   <div id="translate-modal" class="modal" hidden>
     <div class="modal-card wide">
       <h2>Перевод на русский</h2>
-      <p class="muted">Создаётся <strong>новый проект</strong> из выверенного санскрита этой книги. Слева останется санскрит, справа — русский по шаблону. Автоперевод всей книги не запускается: после согласования шаблона эксперт переводит <strong>по страницам</strong>.</p>
+      <p class="muted">Создаётся <strong>новый проект</strong> из выверенного санскрита этой книги. Слева останется санскрит, справа — русский по шаблону. После создания можно сразу переводить страницу или всю книгу.</p>
       <form id="translate-form" class="form-col">
         <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" /></label>
         <label>Название <input name="title" required /></label>
@@ -417,6 +423,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260826quota1"></script>
+  <script src="/assets/app.js?v=20260909tr"></script>
 </body>
 </html>

@@ -7,8 +7,6 @@ import time
 import uuid
 from pathlib import Path
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
@@ -41,6 +39,8 @@ from app.services.translation_style import (
     ENGLISH_POLICIES,
     STYLES,
     default_translation_settings,
+    lock_translation_template,
+    persist_translation_cfg,
     project_task,
     translation_agreed,
     translation_cfg,
@@ -247,6 +247,8 @@ async def create_project(
             settings["source_project_id"] = str(src.id)
             settings["source_kind"] = "html"
             project.settings = settings
+            lock_translation_template(project, user)
+            flag_modified(project, "settings")
             db.commit()
             _copy_pages_as_translation_source(db, src, project)
             project.status = "in_progress"
@@ -393,6 +395,7 @@ def spawn_translation(
         settings=settings,
         created_by=user.id,
     )
+    lock_translation_template(dest, user)
     db.add(dest)
     db.flush()
     _copy_pages_as_translation_source(db, src, dest)
@@ -413,7 +416,6 @@ def update_translation_style(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
     if project_task(project) != "translate":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Не проект перевода")
-    settings = dict(project.settings or {})
     cfg = translation_cfg(project)
     if body.style is not None:
         if body.style not in STYLES:
@@ -425,16 +427,16 @@ def update_translation_style(
         cfg["english_comments"] = body.english_comments
     if body.notes is not None:
         cfg["notes"] = body.notes.strip()[:4000]
+    persist_translation_cfg(project, cfg)
     if body.agree is True:
-        cfg["agreed"] = True
-        cfg["agreed_by"] = str(user.id)
-        cfg["agreed_at"] = datetime.now(timezone.utc).isoformat()
+        lock_translation_template(project, user)
     elif body.agree is False:
+        cfg = translation_cfg(project)
         cfg["agreed"] = False
         cfg["agreed_by"] = None
         cfg["agreed_at"] = None
-    settings["translation"] = cfg
-    project.settings = settings
+        persist_translation_cfg(project, cfg)
+    flag_modified(project, "settings")
     db.commit()
     db.refresh(project)
     return _project_out(db, project)
@@ -474,7 +476,7 @@ def start_pipeline(
     """Start / restart pipeline.
 
     Digitize: extract + LLM draft (admin only).
-    Translate: batch Russian translation (admin/expert/scholar; style must be agreed).
+    Translate: batch Russian translation (admin/expert/scholar).
     proofread=true (translate only): sense-check existing drafts; auto-fix high-severity holes.
 
     open_only=true → only pages that are not expert_done / scholar_review / published.
@@ -492,11 +494,8 @@ def start_pipeline(
                 detail="Смысловая проверка всего документа — только для проекта перевода",
             )
     elif is_translate:
-        if not translation_agreed(project):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail="Сначала согласуйте шаблон перевода с экспертом",
-            )
+        lock_translation_template(project, user)
+        flag_modified(project, "settings")
     else:
         if user.role != Role.admin:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Only admin can restart digitize pipeline")

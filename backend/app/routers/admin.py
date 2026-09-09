@@ -28,9 +28,9 @@ AdminUser = Depends(require_roles(Role.admin))
 
 
 DEFAULT_LLM_CATALOG = [
-    {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (Google AI Studio, text+image)"},
-    {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (Google AI Studio)"},
-    {"provider": "openrouter", "model": "stealth/ox-alpha", "label": "Ox Alpha (OpenRouter — каталог может быть пуст)"},
+    {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (id для Studio или ProxyAPI Google)"},
+    {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (id для Studio или ProxyAPI Google)"},
+    {"provider": "haimaker", "model": "z-ai/glm-5v-turbo", "label": "GLM 5V Turbo (Haimaker, vision для сканов)"},
     {"provider": "anthropic", "model": "claude-opus-5", "label": "Claude Opus 5 (ProxyAPI)"},
     {"provider": "anthropic", "model": "claude-opus-4-6", "label": "Claude Opus 4.6 (ProxyAPI)"},
     {"provider": "openai", "model": "gpt-4o-mini", "label": "GPT-4o mini (ProxyAPI)"},
@@ -108,20 +108,26 @@ def update_user(
 
 @router.get("/llm-catalog", response_model=LlmCatalogOut)
 def llm_catalog(_: User = AdminUser):
+    from app.services.gemini_keys import pool_summary
+
     settings = get_settings()
     route = describe_route()
+    pool = pool_summary(settings)
     or_ok = bool((settings.openrouter_api_key or "").strip())
     px_ok = bool((settings.openai_api_key or "").strip())
-    ge_ok = bool((settings.gemini_api_key or "").strip())
+    ge_ok = bool((settings.gemini_api_key or "").strip()) or bool(pool["n"])
     keys = []
-    keys.append("Gemini AI Studio ключ задан." if ge_ok else "GEMINI_API_KEY MISSING — нужен для Gemini 3.1 Pro.")
+    if pool["n"] > 1:
+        keys.append(f"Gemini AI Studio: {pool['available']}/{pool['n']} ключей доступны.")
+    else:
+        keys.append("Gemini AI Studio ключ задан." if ge_ok else "GEMINI_API_KEY не задан (маршрут Google AI Studio).")
     keys.append("OpenRouter ключ задан." if or_ok else "OPENROUTER_API_KEY не задан (маршрут OpenRouter).")
-    keys.append("ProxyAPI ключ задан." if px_ok else "OPENAI_API_KEY (ProxyAPI) не задан — Opus недоступен.")
+    keys.append("ProxyAPI ключ задан." if px_ok else "OPENAI_API_KEY (ProxyAPI) не задан — платный маршрут недоступен.")
     return LlmCatalogOut(
         models=DEFAULT_LLM_CATALOG,
         note=(
             f"Сейчас: {route['label']} ({route['primary']['provider']}:{route['primary']['model']}). "
-            "Переключение — блок «Маршрут LLM» ниже. "
+            "Переключение сети — радиокнопки в «Маршрут LLM»; модель ProxyAPI — список там же. "
             + " ".join(keys)
         ),
     )
@@ -138,9 +144,13 @@ def put_llm_route(body: LlmRouteIn, user: User = AdminUser):
     if route not in ROUTES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail="route must be 'openrouter', 'gemini' or 'opus'",
+            detail="route must be 'openrouter', 'gemini', 'opus' or 'glm'",
         )
-    return set_route(route, updated_by=user.email)  # type: ignore[arg-type]
+    return set_route(
+        route,  # type: ignore[arg-type]
+        proxyapi_model=body.proxyapi_model,
+        updated_by=user.email,
+    )
 
 
 @router.get("/usage", response_model=AdminUsageOut)

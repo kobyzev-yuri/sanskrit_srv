@@ -60,6 +60,7 @@ class User(Base):
     use_default_llm: Mapped[bool] = mapped_column(default=True)
     llm_route: Mapped[str | None] = mapped_column(String(32), nullable=True)
     openrouter_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    openrouter_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     proxyapi_key: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

@@ -19,6 +19,7 @@ from app.services.openrouter_ox import (
     post_openrouter_chat,
 )
 from app.services.llm_route import (
+    effective_openrouter_base_url,
     effective_openrouter_key,
     effective_proxyapi_key,
     model_plan,
@@ -134,6 +135,11 @@ GARBAGE_ANYWHERE = re.compile(
     re.I,
 )
 AVAGRAHA_RUN = re.compile(r"ऽ{4,}")
+PAGE_BATCH_MARK = re.compile(
+    r"(?:\*{0,2})={2,}\s*PAGE\s+(\d+)\s*={2,}(?:\*{0,2})",
+    re.I,
+)
+_ARTICLE_BLOCK = re.compile(r"<article\b.*?</article>", re.I | re.S)
 
 
 def image_to_jpeg_b64(path: Path, max_px: int = 2048) -> str:
@@ -230,6 +236,74 @@ def validate_html(html: str, *, strip_svara: bool = True) -> str:
     return cleaned
 
 
+def split_batch_page_html(text: str, page_nos: list[int] | None = None) -> dict[int, str]:
+    """Parse ===PAGE n=== blocks from a multi-page digitize response."""
+    raw = text or ""
+    marks = list(PAGE_BATCH_MARK.finditer(raw))
+    out: dict[int, str] = {}
+    if marks:
+        for i, m in enumerate(marks):
+            no = int(m.group(1))
+            start = m.end()
+            end = marks[i + 1].start() if i + 1 < len(marks) else len(raw)
+            chunk = raw[start:end].strip()
+            if chunk:
+                out[no] = chunk
+        return out
+    nos = [int(n) for n in (page_nos or [])]
+    if not nos:
+        return {}
+    articles = _ARTICLE_BLOCK.findall(raw)
+    if len(articles) == len(nos):
+        return dict(zip(nos, [a.strip() for a in articles], strict=True))
+    return {}
+
+
+def digitize_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> int:
+    """How many consecutive scan pages to send in one vision call.
+
+    1M input easily holds 10 JPEGs. The limit is *output*: dense Devanagari HTML
+    is 3–8k tokens/page. Flash often stops after 1–2 pages if asked for 6.
+    GLM-5V stays at 1 (weaker vision + thinking).
+    """
+    from app.config import get_settings as _gs
+
+    cap = max(1, int(getattr(_gs(), "digitize_batch_pages", 6) or 6))
+    cap = min(cap, 8)
+    plan = plan if plan is not None else model_plan_primary_only()
+    or_models = " ".join(plan.get("openrouter") or []).lower()
+    if "glm" in or_models:
+        return 1
+    gemini = [str(m) for m in (plan.get("gemini") or [])]
+    if gemini:
+        blob = " ".join(gemini).lower()
+        gem_n = 3 if "flash" in blob else 6
+        return min(cap, gem_n)
+    if plan.get("anthropic"):
+        return min(cap, 4)
+    if plan.get("openai"):
+        return min(cap, 3)
+    return 1
+
+
+def consecutive_page_runs(page_nos: list[int], *, max_n: int) -> list[list[int]]:
+    """Group increasing page numbers into consecutive runs of at most max_n."""
+    if max_n <= 1:
+        return [[n] for n in page_nos]
+    runs: list[list[int]] = []
+    buf: list[int] = []
+    for n in page_nos:
+        if buf and n == buf[-1] + 1 and len(buf) < max_n:
+            buf.append(n)
+        else:
+            if buf:
+                runs.append(buf)
+            buf = [n]
+    if buf:
+        runs.append(buf)
+    return runs
+
+
 def revise_from_scan(
     scan_path: Path,
     *,
@@ -305,12 +379,14 @@ def revise_from_scan(
         try:
             html, usage = _call_openrouter(
                 effective_openrouter_key(),
-                settings.openrouter_base_url,
+                effective_openrouter_base_url(),
                 model,
                 user_text,
                 image_b64,
             )
-            usage = {**usage, "network": "openrouter", "model": model}
+            usage = {**usage, "network": (
+                "haimaker" if "haimaker.ai" in (effective_openrouter_base_url() or "") else "openrouter"
+            ), "model": model}
             return validate_html(html, strip_svara=strip_svara), f"openrouter:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
             raise
@@ -358,6 +434,160 @@ def revise_from_scan(
     raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
 
 
+def _draft_raw_from_images(
+    user_text: str,
+    images: list[str],
+    *,
+    max_tokens: int,
+    timeout: float,
+) -> tuple[str, str, dict[str, Any]]:
+    settings = get_settings()
+    plan = model_plan_primary_only()
+    require_keys_for_plan(plan)
+    errors: list[str] = []
+    for model in _uniq(plan.get("openrouter") or []):
+        try:
+            html, usage = _call_openrouter(
+                effective_openrouter_key(),
+                effective_openrouter_base_url(),
+                model,
+                user_text,
+                images,
+            )
+            usage = {
+                **usage,
+                "network": (
+                    "haimaker"
+                    if "haimaker.ai" in (effective_openrouter_base_url() or "")
+                    else "openrouter"
+                ),
+                "model": model,
+            }
+            return html, f"openrouter:{model}", usage
+        except (LlmQuotaError, LlmRateLimitError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"openrouter:{model}: {exc}")
+    for model in _uniq(plan.get("anthropic") or []):
+        try:
+            html, usage = _call_anthropic(
+                effective_proxyapi_key(),
+                settings.anthropic_base_url,
+                model,
+                user_text,
+                images,
+                max_tokens=max_tokens,
+            )
+            usage = {**usage, "network": "anthropic", "model": model}
+            return html, f"anthropic:{model}", usage
+        except (LlmQuotaError, LlmRateLimitError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"anthropic:{model}: {exc}")
+    for model in _uniq(plan.get("gemini") or []):
+        try:
+            html, usage = _call_gemini(
+                model,
+                user_text,
+                images,
+                max_output_tokens=max_tokens,
+                timeout=timeout,
+            )
+            usage = {**usage, "network": "gemini", "model": model}
+            return html, f"gemini:{model}", usage
+        except (LlmQuotaError, LlmRateLimitError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"gemini:{model}: {exc}")
+    for model in _uniq(plan.get("openai") or []):
+        try:
+            html, usage = _call_openai(
+                effective_proxyapi_key(),
+                settings.openai_base_url,
+                model,
+                user_text,
+                images,
+                max_tokens=max_tokens,
+            )
+            usage = {**usage, "network": "openai", "model": model}
+            return html, f"openai:{model}", usage
+        except (LlmQuotaError, LlmRateLimitError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"openai:{model}: {exc}")
+    raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
+
+
+def revise_from_scans(
+    pages: list[dict[str, Any]],
+) -> tuple[dict[int, str], str, dict[str, Any]]:
+    """Digitize one or more consecutive scan pages. Returns (html_by_page_no, model, usage)."""
+    if not pages:
+        raise ValueError("no pages")
+    if len(pages) == 1:
+        p = pages[0]
+        html, model, usage = revise_from_scan(
+            Path(p["scan_path"]),
+            page_no=int(p["page_no"]),
+            current_html=p.get("current_html"),
+            directive=p.get("directive")
+            or "Сделай полный HTML-черновик всей страницы по скану, сохранив стиль и компоновку книги.",
+            available_figures=p.get("available_figures"),
+        )
+        return {int(p["page_no"]): html}, model, usage
+
+    nos = [int(p["page_no"]) for p in pages]
+    images = [image_to_jpeg_b64(Path(p["scan_path"])) for p in pages]
+    parts = [
+        BASE_PROMPT,
+        (
+            f"You are given {len(pages)} consecutive scan images, in order: "
+            f"pages {nos[0]}–{nos[-1]}. Image 1 is page {nos[0]}, image 2 is page {nos[1] if len(nos) > 1 else nos[0]}, and so on."
+        ),
+        "Use neighbors for hyphenation, running headers, and verse continuation. "
+        "Do not copy body text from one page onto another.",
+        f"You MUST emit a block for EVERY page {nos[0]}–{nos[-1]} — do not stop after the first. "
+        "A short or blank leaf still gets its own block.",
+        "Output ONLY labeled HTML. For every page emit exactly these two lines of structure:",
+        "===PAGE N===",
+        "<article …>…</article>",
+        "No commentary, markdown fences, or extra headings outside those blocks.",
+    ]
+    for p in pages:
+        no = int(p["page_no"])
+        figs = p.get("available_figures") or []
+        if figs:
+            fig_s = ", ".join(
+                f"data-fig={f['index']} ({f.get('w')}×{f.get('h')})" for f in figs
+            )
+            parts.append(f"Page {no} embedded figures: {fig_s}")
+        cur = p.get("current_html")
+        if cur and looks_like_page_html(cur) and len(cur.strip()) > 200:
+            parts.append(f"Current draft for page {no} (fix from the scan):\n{cur.strip()}")
+    user_text = "\n\n".join(parts)
+    n = len(pages)
+    max_tokens = min(32768, max(8192, 8000 * n))
+    timeout = 240.0 if n > 2 else 180.0
+    raw, model, usage = _draft_raw_from_images(
+        user_text, images, max_tokens=max_tokens, timeout=timeout
+    )
+    blocks = split_batch_page_html(raw, page_nos=nos)
+    out: dict[int, str] = {}
+    errors: list[str] = []
+    for no in nos:
+        chunk = blocks.get(no)
+        if not chunk:
+            errors.append(f"page {no} missing from batch")
+            continue
+        try:
+            out[no] = validate_html(chunk, strip_svara=True)
+        except ValueError as exc:
+            errors.append(f"page {no}: {exc}")
+    if not out:
+        raise RuntimeError("; ".join(errors) or "batch digitize produced no pages")
+    return out, model, usage
+
+
 def run_vision_prompt(
     scan_path: Path,
     user_text: str,
@@ -389,12 +619,14 @@ def run_vision_prompt(
         try:
             text, usage = _call_openrouter(
                 effective_openrouter_key(),
-                settings.openrouter_base_url,
+                effective_openrouter_base_url(),
                 model,
                 user_text,
                 image_b64,
             )
-            usage = {**usage, "network": "openrouter", "model": model}
+            usage = {**usage, "network": (
+                "haimaker" if "haimaker.ai" in (effective_openrouter_base_url() or "") else "openrouter"
+            ), "model": model}
             return text, f"openrouter:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
             raise
@@ -467,34 +699,40 @@ def _openai_message_text(message: dict[str, Any] | None) -> str:
         joined = "".join(parts)
         if joined.strip():
             return joined
-    reasoning = msg.get("reasoning")
-    if isinstance(reasoning, str) and reasoning.strip():
+    # GLM-5.3 (Haimaker) often leaves content empty and puts the answer in reasoning_content.
+    for key in ("reasoning_content", "reasoning"):
+        reasoning = msg.get(key)
+        if not (isinstance(reasoning, str) and reasoning.strip()):
+            continue
         extracted = extract_html_only(reasoning)
         if looks_like_page_html(extracted):
             return extracted
         if "<article" in extracted.lower() and not GARBAGE_ANYWHERE.search(extracted):
             return extracted
+        stripped = reasoning.strip()
+        if stripped.startswith("{") or '"suggestions"' in stripped:
+            return stripped
     return ""
 
 
+def _image_list(image_b64: str | list[str]) -> list[str]:
+    if isinstance(image_b64, list):
+        return [x for x in image_b64 if x]
+    return [image_b64] if image_b64 else []
+
+
 def _call_openrouter(
-    api_key: str, base_url: str, model: str, user_text: str, image_b64: str
+    api_key: str, base_url: str, model: str, user_text: str, image_b64: str | list[str]
 ) -> tuple[str, dict[str, Any]]:
     url = f"{base_url.rstrip('/')}/chat/completions"
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+    for blob in _image_list(image_b64):
+        content.append(
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{blob}"}}
+        )
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                    },
-                ],
-            }
-        ],
+        "messages": [{"role": "user", "content": content}],
     }
     apply_ox_chat_options(payload, model, task=TASK_DRAFT)
     data = post_openrouter_chat(
@@ -520,30 +758,30 @@ def _uniq(items: list[str]) -> list[str]:
 
 
 def _call_anthropic(
-    api_key: str, base_url: str, model: str, user_text: str, image_b64: str
+    api_key: str,
+    base_url: str,
+    model: str,
+    user_text: str,
+    image_b64: str | list[str],
+    *,
+    max_tokens: int = 8192,
 ) -> tuple[str, dict[str, Any]]:
     url = f"{base_url.rstrip('/')}/v1/messages"
+    images = _image_list(image_b64)
+    content: list[dict[str, Any]] = [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": blob},
+        }
+        for blob in images
+    ]
+    content.append({"type": "text", "text": user_text})
     # Opus 5+: no temperature (deprecated); thinking off so we get a text/JSON block.
     payload: dict[str, Any] = {
         "model": model,
-        "max_tokens": 8192,
+        "max_tokens": max(1024, int(max_tokens)),
         "thinking": {"type": "disabled"},
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": image_b64,
-                        },
-                    },
-                    {"type": "text", "text": user_text},
-                ],
-            }
-        ],
+        "messages": [{"role": "user", "content": content}],
     }
     resp = httpx.post(
         url,
@@ -595,39 +833,46 @@ def _call_anthropic(
 
 
 def _call_gemini(
-    model: str, user_text: str, image_b64: str
+    model: str,
+    user_text: str,
+    image_b64: str | list[str],
+    *,
+    max_output_tokens: int | None = None,
+    timeout: float = 180,
 ) -> tuple[str, dict[str, Any]]:
-    from app.services.gemini_client import generate_gemini_content
+    from app.services.gemini_client import GEMINI_MAX_OUTPUT_TOKENS, generate_gemini_content
 
+    parts: list[dict[str, Any]] = [{"text": user_text}]
+    for blob in _image_list(image_b64):
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": blob}})
     return generate_gemini_content(
         model=model,
-        parts=[
-            {"text": user_text},
-            {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
-        ],
+        parts=parts,
+        max_output_tokens=int(max_output_tokens or GEMINI_MAX_OUTPUT_TOKENS),
+        timeout=timeout,
     )
 
 
 def _call_openai(
-    api_key: str, base_url: str, model: str, user_text: str, image_b64: str
+    api_key: str,
+    base_url: str,
+    model: str,
+    user_text: str,
+    image_b64: str | list[str],
+    *,
+    max_tokens: int = 8192,
 ) -> tuple[str, dict[str, Any]]:
     url = f"{base_url.rstrip('/')}/chat/completions"
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+    for blob in _image_list(image_b64):
+        content.append(
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{blob}"}}
+        )
     payload = {
         "model": model,
         "temperature": 0,
-        "max_tokens": 8192,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                    },
-                ],
-            }
-        ],
+        "max_tokens": max(1024, int(max_tokens)),
+        "messages": [{"role": "user", "content": content}],
     }
     resp = httpx.post(
         url,
