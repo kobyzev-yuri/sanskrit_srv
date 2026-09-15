@@ -76,7 +76,7 @@ def test_sync_snapshots_then_writes_new_version():
         ).all()
     )
     assert [v.html for v in vers] == ["OLD", "NEW"]
-    assert vers[0].note == "snapshot before translation sync"
+    assert vers[0].note == "snapshot before source sync"
     assert "from translation book-ru p.3" in (vers[1].note or "")
     assert "manual edit" in (vers[1].note or "")
     assert vers[1].source == VersionSource.expert
@@ -145,3 +145,28 @@ def test_sync_does_not_follow_wrong_page_no():
         reason="manual edit",
     )
     assert db.get(Page, src_page.id).current_html == "OLD"
+
+
+def test_sync_from_transliterate_project():
+    db = _session()
+    user, _src, tr, src_page, tr_page = _pair(db)
+    tr.settings = {**tr.settings, "task": "transliterate"}
+    db.flush()
+    assert sync_sanskrit_to_digitize(
+        db,
+        translate_project=tr,
+        translate_page=tr_page,
+        html="IAST-SRC",
+        user=user,
+        reason="iast edit",
+    )
+    db.commit()
+    page = db.get(Page, src_page.id)
+    assert page.current_html == "IAST-SRC"
+    vers = list(
+        db.scalars(
+            select(PageVersion).where(PageVersion.page_id == src_page.id).order_by(PageVersion.version)
+        ).all()
+    )
+    assert vers[-1].html == "IAST-SRC"
+    assert "from transliteration" in (vers[-1].note or "")

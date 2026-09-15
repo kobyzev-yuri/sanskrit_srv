@@ -43,13 +43,17 @@ from app.services.llm_proofread import (
     split_by_target,
 )
 from app.services.llm_status import GEMINI_RATE_LIMIT_MSG, LlmQuotaError, LlmRateLimitError
-from app.services.llm_translate import translate_from_source
+from app.services.llm_translate import translate_from_source, transliterate_from_source
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
 from app.services.source_sync import sync_sanskrit_to_digitize
 from app.services.translation_style import (
+    is_source_html_task,
     lock_translation_template,
+    lock_transliteration_template,
     project_task,
+    transliteration_agreed,
+    transliteration_cfg,
     translation_agreed,
     translation_cfg,
 )
@@ -147,7 +151,7 @@ def search_project_draft(
         db.scalars(select(Page).where(Page.project_id == pid).order_by(Page.page_no)).all()
     )
     return DraftSearchOut.model_validate(
-        search_pages(pages, query, include_source=project_task(project) == "translate")
+        search_pages(pages, query, include_source=is_source_html_task(project))
     )
 
 
@@ -157,13 +161,13 @@ def get_page(page_id: str, user: User = Depends(get_current_user), db: Session =
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
     project = db.get(Project, page.project_id)
-    if project is not None and project_task(project) != "translate":
+    if project is not None and not is_source_html_task(project):
         ensure_page_scan(db, page)
         db.refresh(page)
-    # Translate drafts: LLM often corrupts figure UUIDs — restore from source_html.
+    # Derived drafts: LLM often corrupts figure UUIDs — restore from source_html.
     if (
         project is not None
-        and project_task(project) == "translate"
+        and is_source_html_task(project)
         and (page.source_html or "").strip()
         and (page.current_html or "").strip()
     ):
@@ -232,11 +236,11 @@ def save_html(
 
     page.current_html = body.html
     project = db.get(Project, page.project_id)
-    is_translate = project is not None and project_task(project) == "translate"
-    if is_translate and (page.source_html or "").strip():
+    is_derived = project is not None and is_source_html_task(project)
+    if is_derived and (page.source_html or "").strip():
         page.current_html = preserve_figure_srcs(page.source_html or "", page.current_html or "")
 
-    incoming_source = body.source_html if is_translate else None
+    incoming_source = body.source_html if is_derived else None
     source_changed = False
     if incoming_source is not None and incoming_source.strip():
         if incoming_source != (page.source_html or ""):
@@ -327,6 +331,9 @@ def _save_page_html(
     note: str,
     status: PageStatus = PageStatus.expert_review,
 ) -> Page:
+    project = db.get(Project, page.project_id)
+    if project is not None and is_source_html_task(project) and (page.source_html or "").strip():
+        html = preserve_figure_srcs(page.source_html or "", html)
     page.current_html = html
     page.status = status
     next_ver = (
@@ -358,8 +365,11 @@ def draft_one_page(
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
     project = db.get(Project, page.project_id)
-    if project is not None and project_task(project) == "translate":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Это проект перевода — используйте «Перевести страницу»")
+    if project is not None and is_source_html_task(project):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Это проект перевода или транслитерации — используйте кнопку страницы",
+        )
     if page.status == PageStatus.expert_done:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
     try:
@@ -433,6 +443,67 @@ def _apply_translate_revision(
     return _save_page_html(db, page, user, html, source=VersionSource.llm, note=note)
 
 
+@router.post("/pages/{page_id}/transliterate", response_model=PageDetailOut)
+def transliterate_one_page(
+    page_id: str,
+    body: PageTranslateIn = PageTranslateIn(),
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """LLM IAST transliteration of this page's Sanskrit source HTML."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    page = _apply_transliterate_revision(db, page, user, body.directive)
+    return get_page(str(page.id), user, db)
+
+
+def _apply_transliterate_revision(
+    db: Session,
+    page: Page,
+    user: User,
+    directive: str | None,
+) -> Page:
+    project = db.get(Project, page.project_id)
+    if project is None or project_task(project) != "transliterate":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Не проект транслитерации")
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
+    if not transliteration_agreed(project):
+        lock_transliteration_template(project, user)
+        flag_modified(project, "settings")
+        db.commit()
+    source_html = (page.source_html or "").strip()
+    if not source_html:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет выверенного санскрита на этой странице")
+    cfg = transliteration_cfg(project)
+    try:
+        html, model, usage = transliterate_from_source(
+            source_html=source_html,
+            cfg=cfg,
+            current_html=page.current_html,
+            directive=directive,
+        )
+    except (LlmQuotaError, LlmRateLimitError) as exc:
+        _raise_llm_http(exc)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Transliterate failed: {exc}") from exc
+
+    record_usage(
+        db,
+        project_id=page.project_id,
+        page_id=page.id,
+        network=str(usage.get("network") or "openrouter"),
+        model=str(usage.get("model") or model.split(":", 1)[-1]),
+        usage=usage,
+        operation="transliterate",
+    )
+    note = f"transliterate {cfg.get('style')} | {model}"
+    if directive:
+        note = f"{note} | {directive[:300]}"
+    return _save_page_html(db, page, user, html, source=VersionSource.llm, note=note)
+
+
 def _apply_llm_revision(
     db: Session,
     page: Page,
@@ -442,6 +513,8 @@ def _apply_llm_revision(
     project = db.get(Project, page.project_id)
     if project is not None and project_task(project) == "translate":
         return _apply_translate_revision(db, page, user, directive)
+    if project is not None and project_task(project) == "transliterate":
+        return _apply_transliterate_revision(db, page, user, directive)
     if not ensure_page_scan(db, page):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet — pipeline still running")
     db.refresh(page)
@@ -702,8 +775,8 @@ def apply_proofread(
         )
 
     project = db.get(Project, page.project_id)
-    is_translate = project is not None and project_task(project) == "translate"
-    if is_translate and (page.source_html or "").strip():
+    is_derived = project is not None and is_source_html_task(project)
+    if is_derived and (page.source_html or "").strip():
         if applied_src:
             page.source_html = source_html
         html = preserve_figure_srcs(page.source_html or "", html)
@@ -743,7 +816,7 @@ def apply_proofread(
             note=note[:500],
         )
     )
-    if is_translate:
+    if is_derived:
         leftover = [s.model_dump() for s in (body.accepted or [])]
         # Keep stored items that were not in this apply payload (user left them unchecked).
         stored = load_page_proofread(page.project_id, page.id)

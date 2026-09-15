@@ -153,6 +153,10 @@ textarea {
   background: #e4eee6;
   color: var(--accent-2);
 }
+.task-pill.iast {
+  background: #e8e4f2;
+  color: #4a3f7a;
+}
 
 .reader-shell {
   display: grid;
@@ -645,6 +649,10 @@ mark.draft-hl-current {
   outline-color: #3d6b4a;
   background: #f3f8f3;
 }
+.wysiwyg-preview .wy-edit.wy-iast {
+  outline-color: #5a4a8a;
+  background: #f6f4fb;
+}
 .wysiwyg-preview .wy-lock {
   cursor: default;
 }
@@ -727,6 +735,18 @@ mark.draft-hl-current {
   margin: 0.15rem auto 0.85rem;
   padding-bottom: 0.35rem;
   border-bottom: 1px dashed #e0d6c4;
+}
+.html-preview .iast {
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+  font-style: italic;
+  color: #3a3358;
+}
+.html-preview p.iast {
+  text-align: left;
+  max-width: 36rem;
+  margin: 0.1rem auto 0.85rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px dashed #d8d2e8;
 }
 .html-preview .page-num {
   text-align: center;

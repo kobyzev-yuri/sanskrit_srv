@@ -24,6 +24,7 @@ from app.schemas import (
     ProjectSettingsIn,
     ProjectUsageOut,
     SpawnTranslationIn,
+    SpawnTransliterationIn,
     TranslationStyleIn,
 )
 from app.services import storage
@@ -39,11 +40,16 @@ from app.services.translation_style import (
     ENGLISH_POLICIES,
     NOTES_MAX,
     STYLES,
+    TRANSLIT_ENGLISH_POLICIES,
+    TRANSLIT_STYLES,
     default_translation_settings,
+    default_transliteration_settings,
     lock_translation_template,
+    lock_transliteration_template,
     persist_translation_cfg,
+    persist_transliteration_cfg,
     project_task,
-    translation_agreed,
+    transliteration_cfg,
     translation_cfg,
 )
 
@@ -130,6 +136,9 @@ def _project_out(db: Session, project: Project) -> ProjectOut:
         bool(pages_n) and pages_n > threshold and job is None and project_task(project) == "digitize"
     )
     trans = settings.get("translation") if isinstance(settings.get("translation"), dict) else None
+    translit = (
+        settings.get("transliteration") if isinstance(settings.get("transliteration"), dict) else None
+    )
     src_pid = settings.get("source_project_id")
     return ProjectOut(
         id=project.id,
@@ -146,6 +155,7 @@ def _project_out(db: Session, project: Project) -> ProjectOut:
         task=project_task(project),
         manual_pages=manual,
         translation=trans,
+        transliteration=translit,
         source_project_id=str(src_pid) if src_pid else None,
         confirm_required=False,
         pipeline=JobOut.model_validate(job) if job else None,
@@ -375,8 +385,8 @@ def spawn_translation(
     src = db.get(Project, _uid(project_id))
     if src is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
-    if project_task(src) == "translate":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Это уже проект перевода")
+    if project_task(src) != "digitize":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Перевод создаётся из проекта оцифровки")
     slug = body.slug.strip().lower()
     _unique_slug(db, slug)
     settings = _default_settings()
@@ -397,6 +407,49 @@ def spawn_translation(
         created_by=user.id,
     )
     lock_translation_template(dest, user)
+    db.add(dest)
+    db.flush()
+    _copy_pages_as_translation_source(db, src, dest)
+    db.refresh(dest)
+    return _project_out(db, dest)
+
+
+@router.post("/{project_id}/spawn-transliteration", response_model=ProjectOut, status_code=201)
+def spawn_transliteration(
+    project_id: str,
+    body: SpawnTransliterationIn,
+    user: User = Depends(require_roles(Role.admin, Role.expert)),
+    db: Session = Depends(get_db),
+):
+    """New IAST project whose left pane is this book's current Sanskrit HTML."""
+    src = db.get(Project, _uid(project_id))
+    if src is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if project_task(src) != "digitize":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Транслитерация создаётся из проекта оцифровки",
+        )
+    slug = body.slug.strip().lower()
+    _unique_slug(db, slug)
+    settings = _default_settings()
+    settings["task"] = "transliterate"
+    settings["source_kind"] = "html"
+    settings["source_project_id"] = str(src.id)
+    settings["transliteration"] = default_transliteration_settings(
+        style=body.style,
+        english_comments=body.english_comments,
+        notes=body.notes,
+    )
+    dest = Project(
+        slug=slug,
+        title=(body.title or f"{src.title} · IAST").strip(),
+        title_sa=src.title_sa,
+        status="in_progress",
+        settings=settings,
+        created_by=user.id,
+    )
+    lock_transliteration_template(dest, user)
     db.add(dest)
     db.flush()
     _copy_pages_as_translation_source(db, src, dest)
@@ -443,6 +496,45 @@ def update_translation_style(
     return _project_out(db, project)
 
 
+@router.patch("/{project_id}/transliteration-style", response_model=ProjectOut)
+def update_transliteration_style(
+    project_id: str,
+    body: TranslationStyleIn,
+    user: User = Depends(require_roles(Role.admin, Role.expert)),
+    db: Session = Depends(get_db),
+):
+    """Set the IAST template. LLM transliterate requires agreed=true."""
+    project = db.get(Project, _uid(project_id))
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if project_task(project) != "transliterate":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Не проект транслитерации")
+    cfg = transliteration_cfg(project)
+    if body.style is not None:
+        if body.style not in TRANSLIT_STYLES:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown transliteration style")
+        cfg["style"] = body.style
+    if body.english_comments is not None:
+        if body.english_comments not in TRANSLIT_ENGLISH_POLICIES:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown english_comments policy")
+        cfg["english_comments"] = body.english_comments
+    if body.notes is not None:
+        cfg["notes"] = body.notes.strip()[:NOTES_MAX]
+    persist_transliteration_cfg(project, cfg)
+    if body.agree is True:
+        lock_transliteration_template(project, user)
+    elif body.agree is False:
+        cfg = transliteration_cfg(project)
+        cfg["agreed"] = False
+        cfg["agreed_by"] = None
+        cfg["agreed_at"] = None
+        persist_transliteration_cfg(project, cfg)
+    flag_modified(project, "settings")
+    db.commit()
+    db.refresh(project)
+    return _project_out(db, project)
+
+
 @router.get("/{project_id}", response_model=ProjectOut)
 def get_project(project_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     project = db.get(Project, _uid(project_id))
@@ -474,20 +566,24 @@ def start_pipeline(
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Start / restart pipeline.
+    """Start / restart pipeline on **unagreed** pages only.
 
     Digitize: extract + LLM draft (admin only).
     Translate: batch Russian translation (admin/expert/scholar).
+    Transliterate: batch IAST (admin/expert/scholar).
     proofread=true (translate only): sense-check existing drafts; auto-fix high-severity holes.
 
-    open_only=true → only pages that are not expert_done / scholar_review / published.
-    open_only=false + force → all pages (including agreed; drafts overwritten).
+    Agreed pages (expert_done / scholar_review / published) are never rewritten.
+    ``force`` / ``open_only`` query flags are kept for older clients; open_only is always on.
     """
     project = db.get(Project, _uid(project_id))
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    is_translate = project_task(project) == "translate"
+    task = project_task(project)
+    is_translate = task == "translate"
+    is_transliterate = task == "transliterate"
+    is_derived = is_translate or is_transliterate
     if proofread:
         if not is_translate:
             raise HTTPException(
@@ -496,6 +592,9 @@ def start_pipeline(
             )
     elif is_translate:
         lock_translation_template(project, user)
+        flag_modified(project, "settings")
+    elif is_transliterate:
+        lock_transliteration_template(project, user)
         flag_modified(project, "settings")
     else:
         if user.role != Role.admin:
@@ -518,15 +617,14 @@ def start_pipeline(
     project.settings = settings
     db.commit()
 
-    # Re-run selected pages: force when rewriting all, or when filtering to open pages.
-    page_force = force or open_only
+    # Mass jobs never touch agreed pages. Unagreed leaves still re-draft (even with leftover HTML).
     enqueue_project_pipeline(
         db,
         project.id,
-        force=page_force,
+        force=True,
         force_llm=force_llm,
-        open_only=open_only,
-        translate=is_translate and not proofread,
+        open_only=True,
+        translate=is_derived and not proofread,
         proofread=proofread,
         user_id=user.id,
     )

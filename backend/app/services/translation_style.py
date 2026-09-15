@@ -60,10 +60,41 @@ def default_translation_settings(
     }
 
 
+TASK_DIGITIZE = "digitize"
+TASK_TRANSLATE = "translate"
+TASK_TRANSLITERATE = "transliterate"
+SOURCE_HTML_TASKS = (TASK_TRANSLATE, TASK_TRANSLITERATE)
+
+STYLE_IAST_PLAIN = "iast_plain"
+STYLE_IAST_BLOCK = "iast_block"
+TRANSLIT_STYLES = (STYLE_IAST_PLAIN, STYLE_IAST_BLOCK)
+ENGLISH_KEEP = "keep"
+TRANSLIT_ENGLISH_POLICIES = (ENGLISH_KEEP, ENGLISH_DROP)
+
+TRANSLIT_STYLES_CATALOG: list[dict[str, str]] = [
+    {
+        "id": STYLE_IAST_PLAIN,
+        "label": "Только IAST",
+        "hint": "Страница целиком латиницей IAST (без деванагари в черновике).",
+    },
+    {
+        "id": STYLE_IAST_BLOCK,
+        "label": "Шлока + блок IAST",
+        "hint": "После каждого санскритского блока — тот же текст транслитерацией IAST.",
+    },
+]
+
+
 def project_task(project) -> str:
     settings = (getattr(project, "settings", None) or {}) if project is not None else {}
     task = str(settings.get("task") or "digitize").strip().lower()
-    return "translate" if task == "translate" else "digitize"
+    if task in SOURCE_HTML_TASKS:
+        return task
+    return TASK_DIGITIZE
+
+
+def is_source_html_task(project) -> bool:
+    return project_task(project) in SOURCE_HTML_TASKS
 
 
 def translation_cfg(project) -> dict[str, Any]:
@@ -282,3 +313,185 @@ def build_translate_batch_prompt(
     """One prompt for several consecutive source pages (===PAGE n=== output)."""
     system, user = build_translate_batch_messages(pages=pages, cfg=cfg)
     return system + "\n\n" + user
+
+
+def default_transliteration_settings(
+    *,
+    style: str = STYLE_IAST_BLOCK,
+    english_comments: str = ENGLISH_DROP,
+    notes: str = "",
+) -> dict[str, Any]:
+    st = style if style in TRANSLIT_STYLES else STYLE_IAST_BLOCK
+    en = english_comments if english_comments in TRANSLIT_ENGLISH_POLICIES else ENGLISH_DROP
+    return {
+        "style": st,
+        "english_comments": en,
+        "notes": (notes or "").strip()[:NOTES_MAX],
+        "agreed": True,
+        "agreed_by": None,
+        "agreed_at": None,
+    }
+
+
+def transliteration_cfg(project) -> dict[str, Any]:
+    settings = (getattr(project, "settings", None) or {}) if project is not None else {}
+    raw = settings.get("transliteration") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    base = default_transliteration_settings()
+    base.update({k: raw[k] for k in base if k in raw})
+    return base
+
+
+def transliteration_agreed(project) -> bool:
+    return bool(transliteration_cfg(project).get("agreed"))
+
+
+def persist_transliteration_cfg(project, cfg: dict[str, Any]) -> None:
+    settings = dict(getattr(project, "settings", None) or {})
+    settings["transliteration"] = cfg
+    project.settings = settings
+
+
+def lock_transliteration_template(project, user: Any = None) -> dict[str, Any]:
+    cfg = transliteration_cfg(project)
+    if cfg.get("agreed"):
+        return cfg
+    cfg["agreed"] = True
+    uid = getattr(user, "id", None)
+    cfg["agreed_by"] = str(uid) if uid else None
+    cfg["agreed_at"] = datetime.now(timezone.utc).isoformat()
+    persist_transliteration_cfg(project, cfg)
+    return cfg
+
+
+def _translit_style_prompt(style: str) -> str:
+    if style == STYLE_IAST_PLAIN:
+        return """TEMPLATE iast_plain (mandatory):
+- Output IAST only. Do NOT keep Devanagari body text in the draft.
+- One source block → one <p class="iast" lang="sa-Latn"> (or h1/h2/li with the same class/lang).
+- Scholarly IAST: ā ī ū ṛ ṝ ḷ ḹ ṅ ñ ṭ ḍ ṇ ś ṣ ḥ ṃ; anusvāra ṃ; visarga ḥ; avagraha '.
+- Do not invent sandhi splits or 'correct' Vedic/old spellings unless expert notes say so.
+- Headings, running heads, page numbers, figures: keep structure; transliterate Sanskrit captions.
+- Wrapper: <article class="page-style" lang="sa-Latn">."""
+    return """TEMPLATE iast_block (mandatory):
+- Keep each Sanskrit verse/prose block in Devanagari exactly as in the source
+  (<p class="sa shloka" lang="sa"> or class="sa" for prose; headings keep class="sa").
+- The IMMEDIATE next block is the IAST transliteration of THAT same line:
+  <p class="iast" lang="sa-Latn">.
+- Do not merge several pādas into one IAST paragraph unless the source is already one prose block.
+- Keep verse numbers on the Devanagari line; repeat them on the IAST line if they are part of the printed line.
+- Wrapper: <article class="page-style" lang="sa">."""
+
+
+def _translit_english_prompt(policy: str) -> str:
+    if policy == ENGLISH_KEEP:
+        return """ENGLISH (and other non-Sanskrit Latin commentary in the source):
+- Keep it as <p class="note" lang="en"> (or the original block tag). Do not convert English into IAST.
+- Sanskrit in the same block still becomes IAST (plain) or Devanagari+IAST (block)."""
+    return """ENGLISH (and other non-Sanskrit Latin commentary in the source):
+- Omit it entirely. Do not transliterate English as if it were Sanskrit."""
+
+
+def _translit_engine_system(*, style: str, policy: str, notes: str) -> str:
+    parts = [
+        "You produce an IAST transliteration HTML fragment of a Sanskrit page already restored as HTML.",
+        "Start the reply with <article. Output ONLY the HTML fragment — no analysis, plans, or commentary.",
+        "Output ONLY an HTML fragment: <article class=\"page-style\" …> … </article>. No markdown, no preface.",
+        "How IAST relates to Devanagari is defined ONLY by the TEMPLATE. Do not mix templates.",
+        "Layout only via classes (sa, shloka, iast, note, indent, centered, running-head, page-num). No inline style=, flex, float.",
+        "FIGURES / IMAGES: copy every <img …> and <figure …> from the SOURCE HTML with the src= URL "
+        "CHARACTER-FOR-CHARACTER identical (full /api/v1/pages/<uuid>/figures/crop-NN.png or emb-NN.png). "
+        "Do not invent, shorten, or 'fix' UUIDs. Do not use blob: URLs.",
+        _translit_style_prompt(style),
+        _translit_english_prompt(policy),
+    ]
+    if notes:
+        parts.append("EXPERT NOTES (binding):\n" + notes[:NOTES_MAX])
+    return "\n\n".join(parts)
+
+
+def _translit_user_extras(
+    *,
+    directive: str | None,
+    current_html: str | None,
+    chunk_index: int | None,
+    chunk_total: int | None,
+) -> list[str]:
+    extra: list[str] = []
+    if (
+        chunk_index is not None
+        and chunk_total is not None
+        and chunk_total > 1
+        and chunk_index >= 1
+    ):
+        extra.append(
+            f"CHUNK {chunk_index} of {chunk_total} of ONE printed page. "
+            "Transliterate ONLY this SOURCE fragment. Do not invent content from other chunks. "
+            "Output one <article>…</article> covering just this part; parts will be concatenated."
+        )
+    if (directive or "").strip():
+        extra.append("ADDITIONAL DIRECTIVE for this page:\n" + directive.strip()[:NOTES_MAX])
+    if (current_html or "").strip():
+        extra.append(
+            "PREVIOUS IAST DRAFT (revise it; do not start from scratch unless the directive says so):\n"
+            + current_html.strip()[:20000]
+        )
+    return extra
+
+
+def build_transliterate_messages(
+    *,
+    source_html: str,
+    cfg: dict[str, Any],
+    current_html: str | None = None,
+    directive: str | None = None,
+    chunk_index: int | None = None,
+    chunk_total: int | None = None,
+) -> tuple[str, str]:
+    style = str(cfg.get("style") or STYLE_IAST_BLOCK)
+    policy = str(cfg.get("english_comments") or ENGLISH_DROP)
+    notes = (cfg.get("notes") or "").strip()
+    system = _translit_engine_system(style=style, policy=policy, notes=notes)
+    extras = _translit_user_extras(
+        directive=directive,
+        current_html=current_html,
+        chunk_index=chunk_index,
+        chunk_total=chunk_total,
+    )
+    source = (source_html or "").strip()[:40000]
+    user_parts = [
+        "The SOURCE HTML is diplomatic Devanagari. Transliterate into scholarly IAST. "
+        "Do NOT 'correct' Vedic/old spellings unless the template or notes say otherwise.",
+        *extras,
+        "SOURCE HTML:\n" + source,
+    ]
+    return system, "\n\n".join(user_parts)
+
+
+def build_transliterate_batch_messages(
+    *,
+    pages: list[tuple[int, str]],
+    cfg: dict[str, Any],
+) -> tuple[str, str]:
+    style = str(cfg.get("style") or STYLE_IAST_BLOCK)
+    policy = str(cfg.get("english_comments") or ENGLISH_DROP)
+    notes = (cfg.get("notes") or "").strip()
+    nos = [int(n) for n, _ in pages]
+    first, last = nos[0], nos[-1]
+    system = _translit_engine_system(style=style, policy=policy, notes=notes)
+    user_parts = [
+        f"You are given {len(pages)} consecutive pages {first}–{last}. "
+        "Use neighbors for verse continuation. Do not copy body text from one page onto another.",
+        f"You MUST emit a block for EVERY page {first}–{last} — do not stop after the first. "
+        "A short or blank leaf still gets its own block.",
+        "Output ONLY labeled HTML. For every page emit exactly these two lines of structure:",
+        "===PAGE N===",
+        '<article class="page-style" lang="sa-Latn">…</article>'
+        if style == STYLE_IAST_PLAIN
+        else '<article class="page-style" lang="sa">…</article>',
+        "No commentary, markdown fences, or extra headings outside those blocks.",
+    ]
+    for no, src in pages:
+        user_parts.append(f"SOURCE HTML for page {no}:\n" + (src or "").strip()[:40000])
+    return system, "\n\n".join(user_parts)

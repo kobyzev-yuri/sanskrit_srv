@@ -1,4 +1,4 @@
-"""Copy Sanskrit HTML from a translate page back onto the linked digitize page.
+"""Copy Sanskrit HTML from a translate/transliterate page back onto digitize.
 
 The digitize `current_html` is replaced only after the previous text is stored
 as a PageVersion, so a bad sync can be rolled back from history.
@@ -11,11 +11,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Page, PageStatus, PageVersion, Project, Role, User, VersionSource
-from app.services.translation_style import project_task
+from app.services.translation_style import is_source_html_task, project_task
 
 
 def linked_digitize_page(db: Session, translate_project: Project | None, page_no: int) -> Page | None:
-    if translate_project is None or project_task(translate_project) != "translate":
+    if translate_project is None or not is_source_html_task(translate_project):
         return None
     raw = (translate_project.settings or {}).get("source_project_id")
     if not raw:
@@ -25,7 +25,7 @@ def linked_digitize_page(db: Session, translate_project: Project | None, page_no
     except ValueError:
         return None
     src = db.get(Project, pid)
-    if src is None or project_task(src) == "translate":
+    if src is None or project_task(src) != "digitize":
         return None
     return db.scalar(select(Page).where(Page.project_id == pid, Page.page_no == int(page_no)))
 
@@ -72,7 +72,7 @@ def _snapshot_if_needed(db: Session, page: Page, user: User | None) -> None:
     )
     if last is not None and last.html == current:
         return
-    _add_version(db, page, user, current, "snapshot before translation sync")
+    _add_version(db, page, user, current, "snapshot before source sync")
 
 
 def sync_sanskrit_to_digitize(
@@ -106,7 +106,9 @@ def sync_sanskrit_to_digitize(
     elif dest.status in (PageStatus.pending, PageStatus.llm_draft, PageStatus.ocr, PageStatus.extracting):
         dest.status = PageStatus.expert_review
 
-    slug = getattr(translate_project, "slug", None) or "translate"
-    note = f"from translation {slug} p.{translate_page.page_no} | {reason}"
+    task = project_task(translate_project) if translate_project is not None else "translate"
+    kind = "transliteration" if task == "transliterate" else "translation"
+    slug = getattr(translate_project, "slug", None) or kind
+    note = f"from {kind} {slug} p.{translate_page.page_no} | {reason}"
     _add_version(db, dest, user, incoming, note)
     return True

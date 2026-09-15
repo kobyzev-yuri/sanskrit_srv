@@ -32,12 +32,16 @@ from app.services.llm_proofread import (
 )
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, set_quota_alert
 from app.services.llm_translate import (
+    BLANK_IAST_ARTICLE,
     BLANK_RU_ARTICLE,
     looks_like_translation_html,
+    looks_like_transliteration_html,
     pack_translate_runs,
     translate_batch_size_for_plan,
     translate_from_source,
     translate_from_sources,
+    transliterate_from_source,
+    transliterate_from_sources,
     visible_html_text,
 )
 from app.services.llm_usage import record_usage
@@ -49,7 +53,10 @@ from app.services.pdf_extract import (
 )
 from app.services.translation_style import (
     lock_translation_template,
+    lock_transliteration_template,
     project_task,
+    transliteration_agreed,
+    transliteration_cfg,
     translation_agreed,
     translation_cfg,
 )
@@ -143,6 +150,26 @@ def agree_nonempty_translations(db: Session, project: Project) -> list[int]:
         html = page.current_html or ""
         cyr = sum(1 for c in html if "\u0400" <= c <= "\u04ff")
         if cyr >= 8 and looks_like_translation_html(html, page.source_html):
+            page.status = PageStatus.expert_done
+            marked.append(page.page_no)
+    if marked:
+        db.commit()
+    return marked
+
+
+def agree_nonempty_transliterations(db: Session, project: Project) -> list[int]:
+    """Согласовать страницы, где уже лежит настоящая транслитерация IAST."""
+    marked: list[int] = []
+    cfg = transliteration_cfg(project)
+    style = str(cfg.get("style") or "iast_block")
+    pages = list(
+        db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+    )
+    for page in pages:
+        if page_is_agreed(page):
+            continue
+        html = page.current_html or ""
+        if looks_like_transliteration_html(html, page.source_html, style=style):
             page.status = PageStatus.expert_done
             marked.append(page.page_no)
     if marked:
@@ -289,6 +316,16 @@ def _translate_wait_heartbeat(job_id: uuid.UUID, page_no: int, stop: threading.E
             return
 
 
+def _looks_like_derived_html(html: str, source_html: str | None, project: Project | None) -> bool:
+    task = project_task(project)
+    if task == "transliterate":
+        cfg = transliteration_cfg(project)
+        return looks_like_transliteration_html(
+            html, source_html, style=str(cfg.get("style") or "iast_block")
+        )
+    return looks_like_translation_html(html, source_html)
+
+
 def process_one_translate_page(
     db: Session,
     page: Page,
@@ -296,11 +333,18 @@ def process_one_translate_page(
     job_id: uuid.UUID | None = None,
     auto_agree: bool = False,
 ) -> str:
-    """LLM Russian translation from verified Sanskrit source_html."""
+    """LLM Russian translation or IAST transliteration from verified Sanskrit source_html."""
     project = db.get(Project, page.project_id)
-    if project is None or project_task(project) != "translate":
-        raise RuntimeError("not a translate project")
-    if not translation_agreed(project):
+    task = project_task(project)
+    if project is None or task not in ("translate", "transliterate"):
+        raise RuntimeError("not a translate/transliterate project")
+    is_iast = task == "transliterate"
+    if is_iast:
+        if not transliteration_agreed(project):
+            lock_transliteration_template(project)
+            flag_modified(project, "settings")
+            db.commit()
+    elif not translation_agreed(project):
         lock_translation_template(project)
         flag_modified(project, "settings")
         db.commit()
@@ -311,19 +355,20 @@ def process_one_translate_page(
         _save_version(
             db,
             page,
-            BLANK_RU_ARTICLE,
+            BLANK_IAST_ARTICLE if is_iast else BLANK_RU_ARTICLE,
             VersionSource.llm,
             "empty source page",
             status=PageStatus.expert_review,
         )
-        return "translate:empty_source"
+        return ("transliterate" if is_iast else "translate") + ":empty_source"
 
     if _already_translated_this_job(db, page, job_id):
         return "skip_already_this_job"
 
     page.status = PageStatus.llm_draft
     db.commit()
-    cfg = translation_cfg(project)
+    cfg = transliteration_cfg(project) if is_iast else translation_cfg(project)
+    op = "transliterate" if is_iast else "translate"
     recorded: list[int] = []
     stop_wait = threading.Event()
     if job_id is not None:
@@ -342,7 +387,7 @@ def process_one_translate_page(
             network=str(usage.get("network") or "openrouter"),
             model=str(usage.get("model") or model.split(":", 1)[-1]),
             usage=usage,
-            operation="translate",
+            operation=op,
         )
         recorded.append(index)
         if job_id is None:
@@ -361,7 +406,8 @@ def process_one_translate_page(
         )
 
     try:
-        html, model, usage = translate_from_source(
+        runner = transliterate_from_source if is_iast else translate_from_source
+        html, model, usage = runner(
             source_html=source_html,
             cfg=cfg,
             current_html=None,
@@ -379,17 +425,17 @@ def process_one_translate_page(
             network=str(usage.get("network") or "openrouter"),
             model=str(usage.get("model") or model.split(":", 1)[-1]),
             usage=usage,
-            operation="translate",
+            operation=op,
         )
     _save_version(
         db,
         page,
         html,
         VersionSource.llm,
-        f"batch translate {cfg.get('style')} | {model}",
+        f"batch {op} {cfg.get('style')} | {model}",
         status=translate_accept_status(auto_agree=auto_agree),
     )
-    return f"translate:{model}"
+    return f"{op}:{model}"
 
 
 def _already_translated_this_job(db: Session, page: Page, job_id: uuid.UUID | None) -> bool:
@@ -404,7 +450,7 @@ def _already_translated_this_job(db: Session, page: Page, job_id: uuid.UUID | No
         and job.created_at
         and page.updated_at >= job.created_at
         and page.status in (PageStatus.expert_review, PageStatus.expert_done)
-        and looks_like_translation_html(page.current_html or "", page.source_html)
+        and _looks_like_derived_html(page.current_html or "", page.source_html, db.get(Project, page.project_id))
     )
 
 
@@ -414,6 +460,8 @@ def _revert_empty_translate_drafts(db: Session, pages: list[Page]) -> None:
         if page is None or page.status != PageStatus.llm_draft:
             continue
         if looks_like_translation_html(page.current_html or "", page.source_html):
+            continue
+        if looks_like_transliteration_html(page.current_html or "", page.source_html):
             continue
         page.status = PageStatus.pending
     db.commit()
@@ -449,7 +497,10 @@ def translate_one_by_one(
             log.exception("single-page translate failed page %s", p.page_no)
             notes.append(f"fail:{p.page_no}")
             page = db.get(Page, p.id)
-            if page is not None and not looks_like_translation_html(page.current_html or "", page.source_html):
+            if page is not None and not (
+                looks_like_translation_html(page.current_html or "", page.source_html)
+                or looks_like_transliteration_html(page.current_html or "", page.source_html)
+            ):
                 page.status = PageStatus.pending
                 db.commit()
     return notes
@@ -469,9 +520,16 @@ def process_translate_run(
         return process_one_translate_page(db, pages[0], job_id=job_id, auto_agree=auto_agree)
 
     project = db.get(Project, pages[0].project_id)
-    if project is None or project_task(project) != "translate":
-        raise RuntimeError("not a translate project")
-    if not translation_agreed(project):
+    task = project_task(project)
+    if project is None or task not in ("translate", "transliterate"):
+        raise RuntimeError("not a translate/transliterate project")
+    is_iast = task == "transliterate"
+    if is_iast:
+        if not transliteration_agreed(project):
+            lock_transliteration_template(project)
+            flag_modified(project, "settings")
+            db.commit()
+    elif not translation_agreed(project):
         lock_translation_template(project)
         flag_modified(project, "settings")
         db.commit()
@@ -492,9 +550,11 @@ def process_translate_run(
     if len(payloads) <= 1:
         return ",".join(translate_one_by_one(db, pages, job_id=job_id, auto_agree=auto_agree))
 
-    cfg = translation_cfg(project)
+    cfg = transliteration_cfg(project) if is_iast else translation_cfg(project)
+    batch_runner = transliterate_from_sources if is_iast else translate_from_sources
+    op = "transliterate" if is_iast else "translate"
     try:
-        html_by_no, model, usage = translate_from_sources(
+        html_by_no, model, usage = batch_runner(
             [{k: v for k, v in row.items() if k != "page"} for row in payloads],
             cfg=cfg,
         )
@@ -528,14 +588,14 @@ def process_translate_run(
             network=str(usage.get("network") or "openrouter"),
             model=str(usage.get("model") or model.split(":", 1)[-1]),
             usage=piece,
-            operation="translate_batch",
+            operation=f"{op}_batch",
         )
         _save_version(
             db,
             page,
             html,
             VersionSource.llm,
-            f"batch translate {cfg.get('style')} {pages[0].page_no}–{pages[-1].page_no} | {model}",
+            f"batch {op} {cfg.get('style')} {pages[0].page_no}–{pages[-1].page_no} | {model}",
             status=translate_accept_status(auto_agree=auto_agree),
         )
         done_nos.add(page.page_no)
@@ -905,7 +965,9 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
     force_llm = bool(payload.get("force_llm"))
     open_only = bool(payload.get("open_only"))
     proofread = bool(payload.get("proofread"))
-    translate = (bool(payload.get("translate")) or project_task(project) == "translate") and not proofread
+    translate = (
+        bool(payload.get("translate")) or project_task(project) in ("translate", "transliterate")
+    ) and not proofread
 
     try:
         if proofread:
@@ -1078,7 +1140,20 @@ def _run_translate_pipeline(
     *,
     open_only: bool,
 ) -> None:
-    if not translation_agreed(project):
+    task = project_task(project)
+    if task == "transliterate":
+        if not transliteration_agreed(project):
+            user = None
+            raw = (job.payload or {}).get("user_id")
+            if raw:
+                try:
+                    user = db.get(User, uuid.UUID(str(raw)))
+                except (ValueError, TypeError):
+                    user = None
+            lock_transliteration_template(project, user)
+            flag_modified(project, "settings")
+            db.commit()
+    elif not translation_agreed(project):
         user = None
         raw = (job.payload or {}).get("user_id")
         if raw:
@@ -1094,11 +1169,17 @@ def _run_translate_pipeline(
         db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
     )
     if open_only:
-        agreed_now = agree_nonempty_translations(db, project)
+        if task == "transliterate":
+            agreed_now = agree_nonempty_transliterations(db, project)
+            kind = "transliteration"
+        else:
+            agreed_now = agree_nonempty_translations(db, project)
+            kind = "translation"
         if agreed_now:
             log.info(
-                "open_only: auto-agreed %s existing translation(s): %s",
+                "open_only: auto-agreed %s existing %s(s): %s",
                 len(agreed_now),
+                kind,
                 agreed_now[:40],
             )
         pages = list(

@@ -160,9 +160,10 @@ class ProjectOut(BaseModel):
     draft_ready: int = 0
     accepted: int = 0
     source_kind: str = "scan"  # scan | text
-    task: str = "digitize"  # digitize | translate
+    task: str = "digitize"  # digitize | translate | transliterate
     manual_pages: bool = False  # True when auto whole-book pipeline was skipped (>N pages)
     translation: dict[str, Any] | None = None
+    transliteration: dict[str, Any] | None = None
     source_project_id: str | None = None
     confirm_required: bool = False  # unused; kept for older UI
     pipeline: JobOut | None = None
@@ -290,6 +291,14 @@ class SpawnTranslationIn(BaseModel):
     title: str | None = None
     style: str = "interlinear"
     english_comments: str = "replace"
+    notes: str = Field(default="", max_length=NOTES_MAX)
+
+
+class SpawnTransliterationIn(BaseModel):
+    slug: str = Field(min_length=2, max_length=128, pattern=r"^[a-z0-9][a-z0-9\-]*$")
+    title: str | None = None
+    style: str = "iast_block"
+    english_comments: str = "drop"
     notes: str = Field(default="", max_length=NOTES_MAX)
 
 

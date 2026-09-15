@@ -162,14 +162,15 @@ async function loadProjects() {
   box.innerHTML = state.projects
     .map((p) => {
       const task = p.task || p.settings?.task || "digitize";
-      const pill = task === "translate" ? "перевод" : "оцифровка";
-      const pillClass = task === "translate" ? "task-pill ru" : "task-pill";
+      const pill = task === "translate" ? "перевод" : task === "transliterate" ? "IAST" : "оцифровка";
+      const pillClass =
+        task === "translate" ? "task-pill ru" : task === "transliterate" ? "task-pill iast" : "task-pill";
       return `
     <article class="project-card" data-id="${p.id}">
       <div class="${pillClass}">${pill}</div>
       <h3>${escapeHtml(p.title)}</h3>
       <div class="meta sa">${escapeHtml(p.title_sa || "")}</div>
-      <div class="meta">${task === "translate" ? "стр." : "PDF"} ${p.pdf_pages ?? p.page_count ?? "?"} · согласовано ${p.accepted ?? 0} · на правке ${p.draft_ready ?? 0}</div>
+      <div class="meta">${task === "digitize" ? "PDF" : "стр."} ${p.pdf_pages ?? p.page_count ?? "?"} · согласовано ${p.accepted ?? 0} · на правке ${p.draft_ready ?? 0}</div>
       <div class="meta">${pipelineLabel(p)} · ${escapeHtml(p.slug)}</div>
     </article>`;
     })
@@ -279,7 +280,7 @@ async function confirmWholeBook() {
   if (!project) return;
   try {
     $("#btn-confirm-whole-book").disabled = true;
-    const q = project.source_kind === "text" ? "?force_llm=true" : "";
+    const q = project.source_kind === "text" ? "?open_only=true&force_llm=true" : "?open_only=true";
     state.project = await api(`/projects/${project.id}/pipeline${q}`, { method: "POST" });
     $("#large-book-modal").hidden = true;
     state.pendingConfirmProject = null;
@@ -312,7 +313,7 @@ function projectHasHtml() {
 }
 
 function isDigitizeTextPdf() {
-  return !isTranslate() && state.project?.source_kind === "text";
+  return !isDerived() && state.project?.source_kind === "text";
 }
 
 function pipelineLabel(p) {
@@ -348,6 +349,26 @@ function pipelineLabel(p) {
     }
     return `перевод на русский · ${total} стр.`;
   }
+  if (task === "transliterate") {
+    if (pipe && (pipe.status === "running" || pipe.status === "queued")) {
+      const pr = pipe.progress || {};
+      const scope = pr.open_only ? "несогласованные" : "все";
+      const pack = pr.batch_pages > 1 ? `, пакет по ${pr.batch_pages}` : "";
+      const wait = pr.wait_s ? `, ждём ${pr.wait_s}с` : "";
+      return `транслитерация IAST · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"}${pack}${wait}${pr.rate_limited ? ", пауза шлюза" : ""})`;
+    }
+    if (pipe?.status === "failed") {
+      const err = pipe.progress?.last_error || pipe.error || "";
+      return `транслитерация IAST · ошибка — ${String(err).slice(0, 80)}`;
+    }
+    if (pipe?.status === "done") {
+      const pr = pipe.progress || {};
+      const skip = pr.skipped ? ` · пропущено ${pr.skipped}` : "";
+      const err = pr.last_error ? ` · ${String(pr.last_error).slice(0, 70)}` : "";
+      return `транслитерация IAST · готово ${pr.done ?? total}/${pr.total ?? total}${skip}${err}`;
+    }
+    return `транслитерация IAST · ${total} стр.`;
+  }
   const kind = sourceKindLabel(p);
   if (p.manual_pages && !pipe) {
     return `${kind} · ${total} стр. · постранично (автооцифровка всей книги не запускалась)`;
@@ -381,7 +402,18 @@ function isTranslate() {
   return (state.project?.task || state.project?.settings?.task) === "translate";
 }
 
+function isTransliterate() {
+  return (state.project?.task || state.project?.settings?.task) === "transliterate";
+}
+
+function isDerived() {
+  return isTranslate() || isTransliterate();
+}
+
 function translationCfg() {
+  if (isTransliterate()) {
+    return state.project?.transliteration || state.project?.settings?.transliteration || {};
+  }
   return state.project?.translation || state.project?.settings?.translation || {};
 }
 
@@ -397,8 +429,16 @@ function childTranslation() {
   );
 }
 
+function childTransliteration() {
+  const id = state.project?.id;
+  if (!id) return null;
+  return (state.projects || []).find(
+    (p) => String(p.source_project_id || "") === String(id) && (p.task || p.settings?.task) === "transliterate"
+  );
+}
+
 function syncExportButtons() {
-  const tr = isTranslate();
+  const derived = isDerived();
   const pdf = $("#btn-export-pdf");
   const pdfI = $("#btn-export-interleave");
   const docx = $("#btn-export-docx");
@@ -407,44 +447,88 @@ function syncExportButtons() {
   const trDocx = $("#btn-export-tr-docx");
   if (pdf) pdf.hidden = false;
   if (docx) docx.hidden = false;
-  if (pdfI) pdfI.hidden = tr;
-  if (docxI) docxI.hidden = tr;
+  if (pdfI) pdfI.hidden = derived;
+  if (docxI) docxI.hidden = derived;
   if (trPdf) trPdf.hidden = true;
   if (trDocx) trDocx.hidden = true;
 }
 
+function fillStyleSelect() {
+  const sel = $("#style-select");
+  const eng = $("#style-english");
+  const label = $("#style-bar-label");
+  if (!sel) return;
+  const iast = isTransliterate();
+  const options = iast
+    ? [
+        ["iast_block", "Шлока + блок IAST"],
+        ["iast_plain", "Только IAST"],
+      ]
+    : [
+        ["interlinear", "Шлока + строка перевода"],
+        ["iast_gloss", "Пословно: рус. (IAST)"],
+        ["samasa_gloss", "Самаса в скобках"],
+        ["custom", "Свой шаблон"],
+      ];
+  const prev = sel.value;
+  sel.innerHTML = options.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  const want = translationCfg().style;
+  if (want && options.some(([v]) => v === want)) sel.value = want;
+  else if (options.some(([v]) => v === prev)) sel.value = prev;
+  if (label) label.textContent = iast ? "Шаблон IAST" : "Шаблон перевода";
+  if (eng) {
+    const engOpts = iast
+      ? [
+          ["drop", "англ. убрать"],
+          ["keep", "англ. оставить"],
+        ]
+      : [
+          ["replace", "англ. → русский"],
+          ["drop", "англ. убрать"],
+        ];
+    const engPrev = eng.value;
+    eng.innerHTML = engOpts.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+    const engWant = translationCfg().english_comments;
+    if (engWant && engOpts.some(([v]) => v === engWant)) eng.value = engWant;
+    else if (engOpts.some(([v]) => v === engPrev)) eng.value = engPrev;
+  }
+}
+
 function syncTaskUi() {
   const tr = isTranslate();
+  const iast = isTransliterate();
+  const derived = tr || iast;
   const p = state.project;
   const cfg = translationCfg();
   const agreed = Boolean(cfg.agreed);
   const layout = $("#editor-layout");
-  if (layout) layout.classList.toggle("translate", tr);
+  if (layout) layout.classList.toggle("translate", derived);
   const leftTitle = $("#left-pane-title");
   const leftSub = $("#left-pane-sub");
   const rightSub = $("#right-pane-sub");
-  if (leftTitle) leftTitle.textContent = tr ? "Санскрит" : "Скан";
-  if (leftSub) leftSub.textContent = tr ? "выверенный текст" : "как в PDF";
+  if (leftTitle) leftTitle.textContent = derived ? "Санскрит" : "Скан";
+  if (leftSub) leftSub.textContent = derived ? "выверенный текст" : "как в PDF";
   if (rightSub) {
-    rightSub.textContent = tr ? "русский" : "देवनागरी";
-    rightSub.classList.toggle("sa", !tr);
+    rightSub.textContent = tr ? "русский" : iast ? "IAST" : "देवनागरी";
+    rightSub.classList.toggle("sa", !derived);
   }
   const scanWrap = $("#left-scan-wrap");
   const sourceBox = $("#left-source-html");
   const srcTabs = $("#source-tabs");
   const srcEditor = $("#left-source-editor");
-  if (scanWrap) scanWrap.hidden = tr;
-  if (sourceBox) sourceBox.hidden = !tr || $("#left-panel")?.classList.contains("source-tab-html");
-  if (srcTabs) srcTabs.hidden = !tr;
-  if (!tr) {
+  if (scanWrap) scanWrap.hidden = derived;
+  if (sourceBox) sourceBox.hidden = !derived || $("#left-panel")?.classList.contains("source-tab-html");
+  if (srcTabs) srcTabs.hidden = !derived;
+  if (!derived) {
     $("#left-panel")?.classList.remove("source-tab-html");
     if (srcEditor) srcEditor.hidden = true;
     if (sourceBox) sourceBox.hidden = true;
   }
 
   const styleBar = $("#style-bar");
-  if (styleBar) styleBar.hidden = !tr;
-  if (tr) {
+  if (styleBar) styleBar.hidden = !derived;
+  if (derived) {
+    fillStyleSelect();
     const sel = $("#style-select");
     const eng = $("#style-english");
     const notes = $("#style-notes");
@@ -470,49 +554,67 @@ function syncTaskUi() {
     const hasHtml = Boolean((state.page?.current_html || "").trim());
     dir.placeholder = tr
       ? "Замечание к переводу — или нажмите «Перевести страницу»."
-      : hasHtml
-        ? "С чем не согласны — или нажмите «Пересмотри страницу»."
-        : "Задание к странице — или нажмите «Оцифровать страницу».";
+      : iast
+        ? "Замечание к IAST — или нажмите «Транслитерировать страницу»."
+        : hasHtml
+          ? "С чем не согласны — или нажмите «Пересмотри страницу»."
+          : "Задание к странице — или нажмите «Оцифровать страницу».";
   }
   const proof = $("#btn-proofread");
   if (proof) {
-    proof.hidden = false;
+    proof.hidden = iast;
     proof.title = tr
       ? "Смысловая проверка перевода: обрывы, стык страниц, санскрит, смысл"
       : "Второй проход: смысловая проверка со сканом";
   }
   const review = $("#btn-review-again");
   if (review) {
-    review.hidden = tr;
+    review.hidden = derived;
     const hasHtml = Boolean((state.page?.current_html || "").trim());
     review.textContent = hasHtml ? "Пересмотри страницу" : "Оцифровать страницу";
   }
   const trPage = $("#btn-translate-page");
   if (trPage) {
-    trPage.hidden = !tr;
+    trPage.hidden = !derived;
     trPage.disabled = false;
-    trPage.title = agreed
-      ? "LLM переводит эту страницу по шаблону"
-      : "Зафиксирует шаблон и переведёт эту страницу";
+    trPage.textContent = iast ? "Транслитерировать страницу" : "Перевести страницу";
+    trPage.title = iast
+      ? agreed
+        ? "LLM транслитерирует эту страницу в IAST"
+        : "Зафиксирует шаблон и сделает IAST этой страницы"
+      : agreed
+        ? "LLM переводит эту страницу по шаблону"
+        : "Зафиксирует шаблон и переведёт эту страницу";
   }
   syncTranslateAllButtons();
   syncProofreadAllButtons();
 
   const openTr = $("#btn-open-translate");
+  const openIast = $("#btn-open-iast");
   const back = $("#btn-back-source");
+  const canSpawn = canAgreeStyle();
   if (openTr) {
-    if (tr) {
+    if (derived) {
       openTr.hidden = true;
     } else {
       const child = childTranslation();
-      const canSpawn = canAgreeStyle();
       openTr.hidden = !child && (!canSpawn || !projectHasHtml());
       openTr.textContent = child ? "Открыть перевод" : "Перевод на русский";
       openTr.classList.toggle("primary", !child);
     }
   }
+  if (openIast) {
+    if (derived) {
+      openIast.hidden = true;
+    } else {
+      const child = childTransliteration();
+      openIast.hidden = !child && (!canSpawn || !projectHasHtml());
+      openIast.textContent = child ? "Открыть IAST" : "Транслитерация IAST";
+      openIast.classList.toggle("primary", !child);
+    }
+  }
   if (back) {
-    back.hidden = !tr || !p?.source_project_id;
+    back.hidden = !derived || !p?.source_project_id;
   }
   syncExportButtons();
 }
@@ -533,26 +635,22 @@ function isProofreadJob() {
 }
 
 function syncTranslateAllButtons() {
-  const tr = isTranslate();
+  const derived = isDerived();
+  const iast = isTransliterate();
   const can = canRunTranslateAll();
   const busy = pipelineBusy();
   const proofBusy = busy && isProofreadJob();
-  const openOnly = state.thumbFilter === "open";
   const label = busy && !proofBusy
-    ? "Идёт перевод…"
-    : openOnly
-      ? "Перевести несогласованные"
-      : "Перевести все";
+    ? iast ? "Идёт IAST…" : "Идёт перевод…"
+    : iast ? "IAST несогласованных" : "Перевести несогласованные";
   const title = busy
-    ? "Идёт перевод"
-    : openOnly
-      ? "Страницы без согласия. Удачный черновик сразу считается согласованным."
-      : "Перевести все страницы книги";
+    ? iast ? "Идёт транслитерация" : "Идёт перевод"
+    : "Только страницы без согласия. Согласованные не перезаписываются.";
   const ids = ["btn-translate-all"];
   for (const id of ids) {
     const el = $(`#${id}`);
     if (!el) continue;
-    el.hidden = !tr || !can;
+    el.hidden = !derived || !can;
     el.disabled = busy;
     el.textContent = label;
     el.title = title;
@@ -563,15 +661,8 @@ function syncProofreadAllButtons() {
   const tr = isTranslate();
   const busy = pipelineBusy();
   const proofBusy = busy && isProofreadJob();
-  const openOnly = state.thumbFilter === "open";
-  const label = proofBusy
-    ? "Идёт проверка…"
-    : openOnly
-      ? "Проверить несогласованные"
-      : "Смысловая проверка всех";
-  const title = openOnly
-    ? "Смысловая проверка страниц без согласия (фильтр включён)"
-    : "Пройти весь перевод: грубые обрывы исправить, тонкие — пометить";
+  const label = proofBusy ? "Идёт проверка…" : "Проверить несогласованные";
+  const title = "Только страницы без согласия. Согласованные не перезаписываются.";
   for (const id of ["btn-proofread-all"]) {
     const el = $(`#${id}`);
     if (!el) continue;
@@ -587,7 +678,7 @@ function updatePipelineBar() {
   if (!p) return;
   $("#pipeline-info").textContent = pipelineLabel(p);
   const btn = $("#btn-start-pipeline");
-  const tr = isTranslate();
+  const tr = isDerived();
   const busy = p.pipeline && ["queued", "running"].includes(p.pipeline.status);
 
   if (tr) {
@@ -605,31 +696,23 @@ function updatePipelineBar() {
   }
   btn.hidden = false;
   btn.disabled = !!busy;
-  const openOnly = state.thumbFilter === "open" || Boolean(p.pipeline?.progress?.open_only);
+  const safeTitle = "Только страницы без согласия. Согласованные не перезаписываются.";
   if (p.confirm_required || p.status === "awaiting_confirm") {
     btn.disabled = false;
-    btn.textContent = openOnly
-      ? "Оцифровать несогласованные"
-      : "Подтвердить оцифровку всей книги";
-    btn.title = openOnly
-      ? "Страницы без согласия. Удачный черновик сразу считается согласованным."
-      : "Запустить оцифровку всех страниц книги";
+    btn.textContent = "Оцифровать несогласованные";
+    btn.title = safeTitle;
     syncTaskUi();
     return;
   }
   if (busy) {
-    btn.textContent = openOnly ? "Идёт оцифровка несогласованных…" : "Идёт оцифровка всей книги…";
-  } else if (openOnly) {
-    btn.textContent = isDigitizeTextPdf()
-      ? "Оцифровать несогласованные по скану"
-      : "Оцифровать несогласованные";
-    btn.title = "Страницы без согласия. Удачный черновик сразу считается согласованным.";
+    btn.textContent = "Идёт оцифровка несогласованных…";
+    btn.title = safeTitle;
   } else if (isDigitizeTextPdf()) {
-    btn.textContent = "Оцифровать по скану (LLM)";
-    btn.title = "Все страницы, включая согласованные";
+    btn.textContent = "Оцифровать несогласованные по скану";
+    btn.title = safeTitle;
   } else {
-    btn.textContent = "Оцифровать всю книгу";
-    btn.title = "Все страницы, включая согласованные";
+    btn.textContent = "Оцифровать несогласованные";
+    btn.title = safeTitle;
   }
   syncTaskUi();
 }
@@ -706,7 +789,7 @@ async function openProject(id) {
   const pipeBusy =
     state.project.pipeline &&
     ["queued", "running"].includes(state.project.pipeline.status);
-  if (pipeBusy || !isTranslate()) {
+  if (pipeBusy || !isDerived()) {
     startPipelinePoll();
   } else if (pipelineTimer) {
     clearInterval(pipelineTimer);
@@ -1020,7 +1103,7 @@ function updateEditMode() {
   if (proofBtn) {
     proofBtn.disabled = accepted || !hasHtml;
   }
-  if (isTranslate()) {
+  if (isDerived()) {
     const trPage = $("#btn-translate-page");
     if (trPage) trPage.disabled = accepted;
     const revise = $("#btn-revise");
@@ -1032,7 +1115,7 @@ function updateEditMode() {
     if (review) review.disabled = accepted;
   }
   const reviewBtn = $("#btn-review-again");
-  if (reviewBtn && !isTranslate()) {
+  if (reviewBtn && !isDerived()) {
     reviewBtn.textContent = hasHtml ? "Пересмотри страницу" : "Оцифровать страницу";
   }
 }
@@ -1083,7 +1166,9 @@ function renderPreview(html) {
   if (!src) {
     box.innerHTML = isTranslate()
       ? `<p class="muted">Русский черновик ещё не готов. Согласуйте шаблон и нажмите «Перевести страницу».</p>`
-      : `<p class="muted">Черновик ещё не готов. Нажмите «Оцифровать страницу» справа внизу — модель разберёт скан.</p>`;
+      : isTransliterate()
+        ? `<p class="muted">IAST ещё не готов. Нажмите «Транслитерировать страницу».</p>`
+        : `<p class="muted">Черновик ещё не готов. Нажмите «Оцифровать страницу» справа внизу — модель разберёт скан.</p>`;
     return;
   }
   // Draft HTML is trusted content from our pipeline / LLM, not arbitrary user HTML from the open web.
@@ -1130,7 +1215,7 @@ function setDraftHtml(html) {
 function draftTab() {
   // Digitize: stay on preview vs scan. Wysiwyg flush of figures can empty the editor
   // and then «Сохранить и согласовать» looks like it does nothing.
-  return isTranslate() ? "wysiwyg" : "preview";
+  return isDerived() ? "wysiwyg" : "preview";
 }
 
 function isWysiwygActive() {
@@ -1140,8 +1225,8 @@ function isWysiwygActive() {
 function serializeWysiwyg(box) {
   const clone = box.cloneNode(true);
   clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
-  clone.querySelectorAll(".wy-edit, .wy-lock, .wy-sa, .wy-ru").forEach((el) => {
-    el.classList.remove("wy-edit", "wy-lock", "wy-sa", "wy-ru");
+  clone.querySelectorAll(".wy-edit, .wy-lock, .wy-sa, .wy-ru, .wy-iast").forEach((el) => {
+    el.classList.remove("wy-edit", "wy-lock", "wy-sa", "wy-ru", "wy-iast");
     if (!el.getAttribute("class")?.trim()) el.removeAttribute("class");
   });
   clone.querySelectorAll("span[style], font").forEach((el) => {
@@ -1184,7 +1269,7 @@ function setSourceHtml(html) {
 
 function currentSourceHtml() {
   const ed = $("#left-source-editor");
-  if (ed && isTranslate()) return ed.value;
+  if (ed && isDerived()) return ed.value;
   return state.page?.source_html || "";
 }
 
@@ -1195,18 +1280,18 @@ function switchSourceTab(name) {
   const htmlOn = name === "html";
   if (panel) panel.classList.toggle("source-tab-html", htmlOn);
   $$("#source-tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.sourceTab === name));
-  if (preview) preview.hidden = !isTranslate() || htmlOn;
-  if (editor) editor.hidden = !isTranslate() || !htmlOn;
+  if (preview) preview.hidden = !isDerived() || htmlOn;
+  if (editor) editor.hidden = !isDerived() || !htmlOn;
   const sub = $("#left-pane-sub");
-  if (sub && isTranslate()) {
+  if (sub && isDerived()) {
     sub.textContent = htmlOn ? "в оцифровку — новой версией" : "выверенный текст";
   }
-  if (!htmlOn && isTranslate()) renderLeftPane();
+  if (!htmlOn && isDerived()) renderLeftPane();
 }
 
 function pageSavePayload(note) {
   const payload = { html: currentDraftHtml(), note };
-  if (isTranslate()) {
+  if (isDerived()) {
     const src = currentSourceHtml();
     if ((src || "").trim() && src !== (state.page?.source_html || "")) {
       payload.source_html = src;
@@ -1220,12 +1305,23 @@ function looksRussian(el) {
 }
 
 function isSaLine(el) {
-  if (el.classList.contains("ru") || el.classList.contains("tr") || el.classList.contains("note")) {
+  if (
+    el.classList.contains("ru") ||
+    el.classList.contains("tr") ||
+    el.classList.contains("note") ||
+    el.classList.contains("iast")
+  ) {
     return false;
   }
   if ((el.getAttribute("lang") || "").toLowerCase() === "ru") return false;
+  if ((el.getAttribute("lang") || "").toLowerCase() === "sa-latn") return false;
   if (looksRussian(el) && !el.classList.contains("sa")) return false;
   return el.classList.contains("sa") || (el.getAttribute("lang") || "").toLowerCase() === "sa";
+}
+
+function isIastLine(el) {
+  if (el.classList.contains("iast")) return true;
+  return (el.getAttribute("lang") || "").toLowerCase() === "sa-latn";
 }
 
 function wysiwygBlocks(root) {
@@ -1256,12 +1352,13 @@ function setWysiwygEditable(el, enabled) {
 
 function markWysiwygEditable(root, enabled) {
   root.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
-  root.querySelectorAll(".wy-edit, .wy-lock, .wy-sa, .wy-ru").forEach((el) => {
-    el.classList.remove("wy-edit", "wy-lock", "wy-sa", "wy-ru");
+  root.querySelectorAll(".wy-edit, .wy-lock, .wy-sa, .wy-ru, .wy-iast").forEach((el) => {
+    el.classList.remove("wy-edit", "wy-lock", "wy-sa", "wy-ru", "wy-iast");
   });
   const blocks = wysiwygBlocks(root);
   blocks.forEach((el) => {
     if (isSaLine(el)) el.classList.add("wy-sa");
+    else if (isIastLine(el)) el.classList.add("wy-iast");
     else if (
       el.classList.contains("ru") ||
       el.classList.contains("tr") ||
@@ -1292,6 +1389,23 @@ function seedRuAfterSa(html) {
   return wrap.innerHTML;
 }
 
+function seedIastAfterSa(html) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html || "";
+  const blocks = wysiwygBlocks(wrap);
+  for (const el of blocks) {
+    if (isIastLine(el) || el.classList.contains("ru") || el.classList.contains("tr")) continue;
+    const next = el.nextElementSibling;
+    if (next && (isIastLine(next) || next.classList.contains("ru") || next.classList.contains("tr"))) continue;
+    const iast = document.createElement("p");
+    iast.className = "iast";
+    iast.setAttribute("lang", "sa-Latn");
+    iast.appendChild(document.createElement("br"));
+    el.insertAdjacentElement("afterend", iast);
+  }
+  return wrap.innerHTML;
+}
+
 function renderWysiwyg(html) {
   const box = $("#html-wysiwyg");
   const hint = $("#wysiwyg-hint");
@@ -1299,18 +1413,30 @@ function renderWysiwyg(html) {
   if (hint) {
     hint.textContent = isTranslate()
       ? "Можно править и санскрит, и русский (разный цвет рамки). Теги не показываются."
-      : "Правите санскрит прямо в строках, как в книге. Скан слева, теги не показываются.";
+      : isTransliterate()
+        ? "Можно править санскрит слева (пишется в оцифровку) и IAST справа. Теги не показываются."
+        : "Правите санскрит прямо в строках, как в книге. Скан слева, теги не показываются.";
   }
   let src = (html || "").trim();
   if (!src && isTranslate() && (state.page?.source_html || "").trim()) {
     src = seedRuAfterSa(state.page.source_html);
+    $("#html-editor").value = src;
+  } else if (
+    !src &&
+    isTransliterate() &&
+    translationCfg().style !== "iast_plain" &&
+    (state.page?.source_html || "").trim()
+  ) {
+    src = seedIastAfterSa(state.page.source_html);
     $("#html-editor").value = src;
   }
   if (!src) {
     box.innerHTML = `<p class="muted wy-empty">${
       isTranslate()
         ? "Черновика ещё нет — согласуйте шаблон и нажмите «Перевести страницу»."
-        : "Черновик ещё готовится или пуст."
+        : isTransliterate()
+          ? "Черновика ещё нет — нажмите «Транслитерировать страницу»."
+          : "Черновик ещё готовится или пуст."
     }</p>`;
     return;
   }
@@ -1561,7 +1687,7 @@ async function loadPage(pageId) {
   const accepted =
     state.page.status === "expert_done" && Boolean((state.page.current_html || "").trim());
   switchTab(accepted ? "preview" : draftTab());
-  if (isTranslate() && $("#left-panel")?.classList.contains("source-tab-html")) {
+  if (isDerived() && $("#left-panel")?.classList.contains("source-tab-html")) {
     switchSourceTab("html");
   }
   updateEditMode();
@@ -1588,7 +1714,7 @@ async function renderLeftPane() {
   const img = $("#scan-img");
   const empty = $("#scan-empty");
   const sourceBox = $("#left-source-html");
-  if (isTranslate()) {
+  if (isDerived()) {
     if (img) {
       img.removeAttribute("src");
       img.hidden = true;
@@ -1729,7 +1855,11 @@ async function runRevision(directive) {
   if (proofBtn) proofBtn.disabled = true;
   const trBtn = $("#btn-translate-page");
   if (trBtn) trBtn.disabled = true;
-  st.textContent = isTranslate() ? "LLM переводит страницу… до 1–2 мин" : "LLM смотрит скан… до 1–2 мин";
+  st.textContent = isTranslate()
+    ? "LLM переводит страницу… до 1–2 мин"
+    : isTransliterate()
+      ? "LLM делает IAST… до 1–2 мин"
+      : "LLM смотрит скан… до 1–2 мин";
   try {
     state.page = await api(`/pages/${state.page.id}/revise`, {
       method: "POST",
@@ -1758,7 +1888,9 @@ async function revisePage() {
     toast(
       isTranslate()
         ? "Опишите правку или нажмите «Перевести страницу»"
-        : "Опишите задание или нажмите «Оцифровать страницу»",
+        : isTransliterate()
+          ? "Опишите правку или нажмите «Транслитерировать страницу»"
+          : "Опишите задание или нажмите «Оцифровать страницу»",
       true
     );
     return;
@@ -1809,22 +1941,24 @@ async function ensureTranslationAgreed() {
 async function translatePage() {
   if (!state.page) return;
   if (!(await ensureTranslationAgreed())) return;
+  const iast = isTransliterate();
   const st = $("#revise-status");
   const trBtn = $("#btn-translate-page");
   const reviseBtn = $("#btn-revise");
   if (trBtn) trBtn.disabled = true;
   if (reviseBtn) reviseBtn.disabled = true;
-  st.textContent = "LLM переводит страницу… до 1–2 мин";
+  st.textContent = iast ? "LLM делает IAST… до 1–2 мин" : "LLM переводит страницу… до 1–2 мин";
   try {
     const directive = $("#directive-input").value.trim();
-    state.page = await api(`/pages/${state.page.id}/translate`, {
+    const path = iast ? "transliterate" : "translate";
+    state.page = await api(`/pages/${state.page.id}/${path}`, {
       method: "POST",
       json: { directive: directive.length >= 3 ? directive : null },
     });
     setDraftHtml(state.page.current_html || "");
     switchTab("wysiwyg");
     $("#page-status").textContent = state.page.status;
-    toast("Черновик перевода готов");
+    toast(iast ? "Черновик IAST готов" : "Черновик перевода готов");
     st.textContent = "готово";
     if (state.project?.id) {
       state.pages = await api(`/projects/${state.project.id}/pages`);
@@ -1877,6 +2011,76 @@ async function onOpenTranslate() {
   openTranslateModal();
 }
 
+function showIastModal(show) {
+  const modal = $("#iast-modal");
+  if (modal) modal.hidden = !show;
+}
+
+function openIastModal() {
+  const p = state.project;
+  if (!p) return;
+  const form = $("#iast-form");
+  if (!form) {
+    toast("Форма транслитерации не найдена", true);
+    return;
+  }
+  const slug = formField(form, "slug");
+  const title = formField(form, "title");
+  const style = formField(form, "style");
+  const english = formField(form, "english_comments");
+  const notes = formField(form, "notes");
+  if (slug) slug.value = `${p.slug}-iast`.slice(0, 128);
+  if (title) title.value = `${p.title} · IAST`;
+  if (style) style.value = "iast_block";
+  if (english) english.value = "drop";
+  if (notes) notes.value = "";
+  showIastModal(true);
+}
+
+async function onOpenIast() {
+  const child = childTransliteration();
+  if (child) {
+    await openProject(child.id);
+    return;
+  }
+  openIastModal();
+}
+
+async function spawnIast(ev) {
+  ev.preventDefault();
+  if (!state.project) return;
+  const form = ev.target;
+  const btn = $("#btn-spawn-iast");
+  const body = {
+    slug: String(formField(form, "slug")?.value || "").trim().toLowerCase(),
+    title: String(formField(form, "title")?.value || "").trim(),
+    style: String(formField(form, "style")?.value || "iast_block"),
+    english_comments: String(formField(form, "english_comments")?.value || "drop"),
+    notes: String(formField(form, "notes")?.value || "").trim(),
+  };
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Копируем санскрит…";
+  }
+  toast("Создаём проект IAST — для большой книги это может занять минуту");
+  try {
+    const dest = await api(`/projects/${state.project.id}/spawn-transliteration`, {
+      method: "POST",
+      json: body,
+    });
+    showIastModal(false);
+    toast("Проект транслитерации создан — можно делать IAST по страницам");
+    await openProject(dest.id);
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Создать проект IAST";
+    }
+  }
+}
+
 async function spawnTranslation(ev) {
   ev.preventDefault();
   if (!state.project) return;
@@ -1921,10 +2125,13 @@ async function patchTranslationStyle(agree) {
   };
   if (agree === true || agree === false) payload.agree = agree;
   try {
-    state.project = await api(`/projects/${state.project.id}/translation-style`, {
-      method: "PATCH",
-      json: payload,
-    });
+    state.project = await api(
+      `/projects/${state.project.id}/${isTransliterate() ? "transliteration-style" : "translation-style"}`,
+      {
+        method: "PATCH",
+        json: payload,
+      }
+    );
     updatePipelineBar();
     updateEditMode();
     syncTaskUi();
@@ -2073,7 +2280,7 @@ function renderProofreadPanel(result) {
   switchTab("preview");
   renderPreview($("#html-editor").value);
   const left = $("#left-source-html");
-  if (left && isTranslate()) {
+  if (left && isDerived()) {
     const srcItems = state.proofSuggestions.filter(
       (s) => s.target === "source" || s.target === "both"
     );
@@ -2129,7 +2336,7 @@ async function applySelectedProofs() {
     clearProofread();
     setDraftHtml(state.page.current_html || "");
     setSourceHtml(state.page.source_html || "");
-    if (isTranslate()) await renderLeftPane();
+    if (isDerived()) await renderLeftPane();
     switchTab("preview");
     const srcN = accepted.filter((s) => s.target === "source" || s.target === "both").length;
     toast(
@@ -2158,50 +2365,39 @@ function setProofSelection(all) {
 
 async function startPipeline() {
   if (!state.project) return;
-  const openOnly = state.thumbFilter === "open";
-  const openCount = state.pages.filter((p) => !pageIsAgreed(p)).length;
-  const total = state.pages.length;
-  const n = openOnly ? openCount : total;
+  const n = state.pages.filter((p) => !pageIsAgreed(p)).length;
   if (!n) {
-    toast(openOnly ? "Нет несогласованных страниц" : "Нет страниц", true);
+    toast("Нет несогласованных страниц", true);
     return;
   }
   const tr = isTranslate();
+  const iast = isTransliterate();
   let msg;
   if (tr) {
-    msg = openOnly
-      ? `Перевести ${n} несогласованных страниц?`
-      : `Перевести все ${n} страниц, включая согласованные? Черновики будут перезаписаны.`;
-  } else if (state.project.confirm_required || state.project.status === "awaiting_confirm") {
-    msg = `Подтвердить оцифровку всей книги (${n} стр.)?`;
+    msg = `Перевести ${n} несогласованных страниц? Согласованные не изменятся.`;
+  } else if (iast) {
+    msg = `Транслитерировать ${n} несогласованных страниц в IAST? Согласованные не изменятся.`;
   } else if (isDigitizeTextPdf()) {
-    msg = openOnly
-      ? `Оцифровать ${n} несогласованных страниц по скану (LLM)?`
-      : `Оцифровать все ${n} страниц по скану (LLM)? Черновики будут перезаписаны.`;
+    msg = `Оцифровать ${n} несогласованных страниц по скану (LLM)? Согласованные не изменятся.`;
   } else {
-    msg = openOnly
-      ? `Оцифровать ${n} несогласованных страниц?`
-      : `Оцифровать все ${n} страниц, включая согласованные? Черновики будут перезаписаны.`;
+    msg = `Оцифровать ${n} несогласованных страниц? Согласованные не изменятся.`;
   }
   if (!confirm(msg)) return;
-  if (tr && !(await ensureTranslationAgreed())) return;
+  if ((tr || iast) && !(await ensureTranslationAgreed())) return;
 
   const params = new URLSearchParams();
-  params.set("open_only", openOnly ? "true" : "false");
-  if (!openOnly) params.set("force", "true");
-  if (!tr && isDigitizeTextPdf()) params.set("force_llm", "true");
+  params.set("open_only", "true");
+  if (!tr && !iast && isDigitizeTextPdf()) params.set("force_llm", "true");
   try {
     state.project = await api(`/projects/${state.project.id}/pipeline?${params}`, {
       method: "POST",
     });
     toast(
       tr
-        ? openOnly
-          ? "Запущен перевод несогласованных страниц"
-          : "Запущен перевод страниц"
-        : openOnly
-          ? "Запущена оцифровка несогласованных страниц"
-          : "Запущена оцифровка всей книги"
+        ? "Запущен перевод несогласованных страниц"
+        : iast
+          ? "Запущена транслитерация несогласованных страниц"
+          : "Запущена оцифровка несогласованных страниц"
     );
     updatePipelineBar();
     startPipelinePoll();
@@ -2212,26 +2408,23 @@ async function startPipeline() {
 
 async function startProofreadAll() {
   if (!state.project || !isTranslate()) return;
-  const openOnly = state.thumbFilter === "open";
-  const n = openOnly
-    ? state.pages.filter((p) => !pageIsAgreed(p) && p.has_html).length
-    : state.pages.filter((p) => p.has_html).length;
+  const n = state.pages.filter((p) => !pageIsAgreed(p) && p.has_html).length;
   if (!n) {
-    toast(openOnly ? "Нет несогласованных страниц с переводом" : "Нет страниц с переводом", true);
+    toast("Нет несогласованных страниц с переводом", true);
     return;
   }
-  const msg = openOnly
-    ? `Смысловая проверка ${n} несогласованных страниц?\nГрубые обрывы перевода будут исправлены; тонкие замечания появятся в списке на странице.`
-    : `Проверить все ${n} страниц (включая согласованные)?\nНа согласованных правки не применятся сами — только пометки. Грубые обрывы на несогласованных исправятся.`;
+  const msg =
+    `Смысловая проверка ${n} несогласованных страниц?\n` +
+    "Грубые обрывы перевода будут исправлены; тонкие замечания появятся в списке на странице. Согласованные не изменятся.";
   if (!confirm(msg)) return;
   const params = new URLSearchParams();
   params.set("proofread", "true");
-  params.set("open_only", openOnly ? "true" : "false");
+  params.set("open_only", "true");
   try {
     state.project = await api(`/projects/${state.project.id}/pipeline?${params}`, {
       method: "POST",
     });
-    toast("Запущена смысловая проверка перевода");
+    toast("Запущена смысловая проверка несогласованных страниц");
     updatePipelineBar();
     startPipelinePoll();
   } catch (e) {
@@ -2350,7 +2543,9 @@ async function loadAdmin() {
 }
 
 function taskLabel(task) {
-  return task === "translate" ? "перевод" : "оцифровка";
+  if (task === "translate") return "перевод";
+  if (task === "transliterate") return "IAST";
+  return "оцифровка";
 }
 
 function networkLabel(net) {
@@ -2737,6 +2932,8 @@ function wire() {
   if (btnProofreadAll) btnProofreadAll.onclick = startProofreadAll;
   const btnOpenTr = $("#btn-open-translate");
   if (btnOpenTr) btnOpenTr.onclick = () => onOpenTranslate();
+  const btnOpenIast = $("#btn-open-iast");
+  if (btnOpenIast) btnOpenIast.onclick = () => onOpenIast();
   const btnBackSrc = $("#btn-back-source");
   if (btnBackSrc) {
     btnBackSrc.onclick = () => {
@@ -2759,12 +2956,17 @@ function wire() {
     $("#translate-notes-file"),
     formField($("#translate-form"), "notes")
   );
+  bindPromptFileInput($("#iast-notes-file"), formField($("#iast-form"), "notes"));
   const btnTrPage = $("#btn-translate-page");
   if (btnTrPage) btnTrPage.onclick = translatePage;
   const trForm = $("#translate-form");
   if (trForm) trForm.onsubmit = spawnTranslation;
   const btnCancelTr = $("#btn-cancel-translate");
   if (btnCancelTr) btnCancelTr.onclick = () => showTranslateModal(false);
+  const iastForm = $("#iast-form");
+  if (iastForm) iastForm.onsubmit = spawnIast;
+  const btnCancelIast = $("#btn-cancel-iast");
+  if (btnCancelIast) btnCancelIast.onclick = () => showIastModal(false);
   $("#btn-export-pdf").onclick = (e) => exportPdf("text", { rebuild: e.shiftKey });
   $("#btn-export-interleave").onclick = (e) =>
     exportPdf("interleave", { rebuild: e.shiftKey });

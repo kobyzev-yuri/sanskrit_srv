@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260912prompt" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260915iast" />
 </head>
 <body>
   <div class="app-shell">
@@ -79,7 +79,7 @@
                 <strong>Страницы</strong>
                 <span class="muted" id="thumb-count">0</span>
               </div>
-              <label class="thumb-filter" title="Скрыть согласованные. Кнопки оцифровки, перевода и смысловой проверки тогда идут только по видимым страницам.">
+              <label class="thumb-filter" title="Только вид списка. Массовые кнопки и так не трогают согласованные страницы.">
                 <input type="checkbox" id="thumb-filter-open" />
                 только несогласованные
               </label>
@@ -121,13 +121,14 @@
 
             <div class="toolbar extract-bar" id="pipeline-bar">
               <span id="pipeline-info" class="muted">Конвейер: —</span>
-              <button type="button" id="btn-start-pipeline" hidden>Оцифровать всю книгу</button>
+              <button type="button" id="btn-start-pipeline" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Оцифровать несогласованные</button>
               <button type="button" class="primary" id="btn-open-translate" hidden>Перевод на русский</button>
+              <button type="button" class="primary" id="btn-open-iast" hidden>Транслитерация IAST</button>
               <button type="button" id="btn-back-source" hidden>← К оцифровке</button>
             </div>
             <div class="toolbar extract-bar" id="style-bar" hidden>
-              <span class="muted">Шаблон перевода</span>
-              <select id="style-select" aria-label="Шаблон перевода">
+              <span class="muted" id="style-bar-label">Шаблон перевода</span>
+              <select id="style-select" aria-label="Шаблон">
                 <option value="interlinear">Шлока + строка перевода</option>
                 <option value="iast_gloss">Пословно: рус. (IAST)</option>
                 <option value="samasa_gloss">Самаса в скобках</option>
@@ -139,8 +140,8 @@
               </select>
               <button type="button" class="primary" id="btn-agree-style" hidden>Согласовать шаблон</button>
               <button type="button" id="btn-revoke-style" hidden>Отозвать шаблон</button>
-              <button type="button" class="primary" id="btn-translate-all" hidden>Перевести все</button>
-              <button type="button" id="btn-proofread-all" hidden>Смысловая проверка всех</button>
+              <button type="button" class="primary" id="btn-translate-all" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Перевести несогласованные</button>
+              <button type="button" id="btn-proofread-all" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Проверить несогласованные</button>
               <span class="muted" id="style-agreed-mark"></span>
               <div class="style-notes-wrap">
                 <textarea id="style-notes" rows="4" maxlength="20000" placeholder="Заметки или свой промпт к шаблону — можно загрузить из файла"></textarea>
@@ -175,7 +176,7 @@
                 <header>
                   <div class="tabs preview-tabs">
                     <button type="button" class="tab active" data-tab="preview">Превью</button>
-                    <button type="button" class="tab" data-tab="wysiwyg" title="Правка санскрита и русского без HTML-тегов">Текст</button>
+                    <button type="button" class="tab" data-tab="wysiwyg" title="Правка текста без HTML-тегов">Текст</button>
                     <button type="button" class="tab" data-tab="source">HTML</button>
                   </div>
                   <span class="muted sa" id="right-pane-sub">देवनागरी</span>
@@ -185,7 +186,7 @@
                     <div id="html-preview" class="html-preview" aria-live="polite"></div>
                   </div>
                   <div id="tab-wysiwyg" class="tab-panel">
-                    <p class="muted wy-hint" id="wysiwyg-hint">Правите санскрит и русский прямо в тексте. HTML-теги не показываются.</p>
+                    <p class="muted wy-hint" id="wysiwyg-hint">Правите санскрит и перевод прямо в тексте. HTML-теги не показываются.</p>
                     <div id="html-wysiwyg" class="html-preview wysiwyg-preview"></div>
                   </div>
                   <div id="tab-source" class="tab-panel">
@@ -441,7 +442,41 @@
       </form>
     </div>
   </div>
+  <div id="iast-modal" class="modal" hidden>
+    <div class="modal-card wide">
+      <h2>Транслитерация IAST</h2>
+      <p class="muted">Создаётся <strong>новый проект</strong> из выверенного санскрита этой книги. Слева останется деванагари, справа — IAST по шаблону. Правка санскрита слева пишется в оцифровку новой версией.</p>
+      <form id="iast-form" class="form-col">
+        <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" /></label>
+        <label>Название <input name="title" required /></label>
+        <label>Шаблон
+          <select name="style">
+            <option value="iast_block">Шлока + блок IAST</option>
+            <option value="iast_plain">Только IAST</option>
+          </select>
+        </label>
+        <label>Английские комментарии в источнике
+          <select name="english_comments">
+            <option value="drop">убрать</option>
+            <option value="keep">оставить</option>
+          </select>
+        </label>
+        <div class="form-field">
+          <span>Заметки эксперта к шаблону</span>
+          <textarea name="notes" rows="6" maxlength="20000" placeholder="Уточнения к IAST — можно загрузить из файла."></textarea>
+          <label class="file-load" title="Загрузить промпт из текстового файла">
+            Из файла
+            <input id="iast-notes-file" type="file" accept=".txt,.md,.text,.prompt,text/plain" />
+          </label>
+        </div>
+        <div class="edit-actions" style="border:0;padding:0;background:transparent">
+          <button type="submit" class="primary" id="btn-spawn-iast">Создать проект IAST</button>
+          <button type="button" id="btn-cancel-iast">Отмена</button>
+        </div>
+      </form>
+    </div>
+  </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260912prompt"></script>
+  <script src="/assets/app.js?v=20260916open"></script>
 </body>
 </html>

@@ -32,8 +32,11 @@ from app.services.openrouter_ox import (
     post_openrouter_chat,
 )
 from app.services.translation_style import (
+    STYLE_IAST_BLOCK,
     build_translate_batch_messages,
     build_translate_messages,
+    build_transliterate_batch_messages,
+    build_transliterate_messages,
 )
 
 
@@ -68,6 +71,11 @@ def translate_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> i
 
 
 BLANK_RU_ARTICLE = '<article class="page-style" lang="ru">\n</article>'
+BLANK_IAST_ARTICLE = '<article class="page-style" lang="sa-Latn">\n</article>'
+_IAST_CLASS_RE = re.compile(r"""class=["'][^"']*\biast\b""", re.I)
+_SA_CLASS_RE = re.compile(r"""class=["'][^"']*\b(?:sa|shloka)\b""", re.I)
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
+_IAST_MARK_RE = re.compile(r"[āīūṛṝḷḹṅñṭḍṇśṣḥṃĀĪŪṚṜḶḸṄÑṬḌṆŚṢḤṂ]|lang=[\"']sa-latn", re.I)
 
 
 def visible_html_text(html: str) -> str:
@@ -161,6 +169,51 @@ def looks_like_translation_html(html: str, source_html: str | None = None) -> bo
         return False
 
 
+def validate_transliteration_html(
+    html: str,
+    *,
+    source_html: str | None = None,
+    style: str | None = None,
+) -> str:
+    cleaned = extract_html_only(html)
+    if GARBAGE_ANYWHERE.search(cleaned):
+        raise ValueError("response looks like reasoning, not HTML")
+    if cleaned.count("<") < 2:
+        raise ValueError("response has too few HTML tags")
+    low = cleaned.lower()
+    if "<article" not in low:
+        raise ValueError("response is not a page HTML fragment")
+    visible = re.sub(r"<[^>]+>", " ", cleaned)
+    visible = re.sub(r"\s+", " ", visible).strip()
+    if len(visible) < 12:
+        if source_html is not None and not visible_html_text(source_html):
+            return cleaned
+        raise ValueError("empty transliteration body")
+    has_iast = bool(_IAST_CLASS_RE.search(cleaned) or _IAST_MARK_RE.search(cleaned))
+    if not has_iast:
+        raise ValueError("response lacks IAST transliteration")
+    kind = (style or STYLE_IAST_BLOCK).strip().lower()
+    if kind == STYLE_IAST_BLOCK:
+        if not (_SA_CLASS_RE.search(cleaned) or _DEVANAGARI_RE.search(cleaned)):
+            raise ValueError("response lacks Devanagari source lines")
+    if source_html:
+        cleaned = preserve_figure_srcs(source_html, cleaned)
+    return cleaned
+
+
+def looks_like_transliteration_html(
+    html: str,
+    source_html: str | None = None,
+    *,
+    style: str | None = None,
+) -> bool:
+    try:
+        validate_transliteration_html(html, source_html=source_html, style=style)
+        return True
+    except ValueError:
+        return False
+
+
 def _sum_usage(parts: list[dict[str, Any]]) -> dict[str, Any]:
     if not parts:
         return {}
@@ -223,6 +276,112 @@ def translate_from_source(
     merged = merge_translated_chunks(parts_html, article_open=article_open or None)
     html = validate_translation_html(merged, source_html=source_html)
     return html, model, _sum_usage(usages)
+
+
+def transliterate_from_source(
+    *,
+    source_html: str,
+    cfg: dict[str, Any],
+    current_html: str | None = None,
+    directive: str | None = None,
+    on_chunk: Callable[[int, int, str, dict[str, Any]], None] | None = None,
+) -> tuple[str, str, dict[str, Any]]:
+    if not (source_html or "").strip():
+        raise ValueError("empty Sanskrit source")
+    if current_html:
+        current_html = preserve_figure_srcs(source_html, current_html)
+    style = str(cfg.get("style") or STYLE_IAST_BLOCK)
+
+    chunks = chunk_page_html(source_html)
+    if len(chunks) <= 1:
+        system, user = build_transliterate_messages(
+            source_html=source_html,
+            cfg=cfg,
+            current_html=current_html,
+            directive=directive,
+        )
+        raw, model, usage = run_text_prompt(user, system=system)
+        if on_chunk:
+            on_chunk(1, 1, model, usage)
+        html = validate_transliteration_html(raw, source_html=source_html, style=style)
+        return html, model, usage
+
+    article_open, _, _ = unwrap_article(source_html)
+    parts_html: list[str] = []
+    usages: list[dict[str, Any]] = []
+    model = ""
+    total = len(chunks)
+    for i, chunk_src in enumerate(chunks, start=1):
+        system, user = build_transliterate_messages(
+            source_html=chunk_src,
+            cfg=cfg,
+            current_html=None,
+            directive=directive if i == 1 else None,
+            chunk_index=i,
+            chunk_total=total,
+        )
+        raw, model, usage = run_text_prompt(user, system=system)
+        parts_html.append(extract_html_only(raw))
+        usages.append(usage)
+        if on_chunk:
+            on_chunk(i, total, model, usage)
+    merged = merge_translated_chunks(parts_html, article_open=article_open or None)
+    html = validate_transliteration_html(merged, source_html=source_html, style=style)
+    return html, model, _sum_usage(usages)
+
+
+def transliterate_from_sources(
+    pages: list[dict[str, Any]],
+    *,
+    cfg: dict[str, Any],
+) -> tuple[dict[int, str], str, dict[str, Any]]:
+    if not pages:
+        raise ValueError("no pages")
+    style = str(cfg.get("style") or STYLE_IAST_BLOCK)
+    if len(pages) == 1:
+        p = pages[0]
+        html, model, usage = transliterate_from_source(
+            source_html=p["source_html"],
+            cfg=cfg,
+            current_html=None,
+            directive=None,
+        )
+        return {int(p["page_no"]): html}, model, usage
+
+    labeled: list[tuple[int, str]] = []
+    for p in pages:
+        no = int(p["page_no"])
+        src = (p.get("source_html") or "").strip()
+        if not src:
+            raise ValueError(f"empty Sanskrit source for page {no}")
+        labeled.append((no, src))
+    nos = [n for n, _ in labeled]
+    system, user = build_transliterate_batch_messages(pages=labeled, cfg=cfg)
+    n = len(labeled)
+    max_tokens = min(32768, max(8192, 8000 * n))
+    timeout = 240.0 if n > 2 else 180.0
+    plan = model_plan_primary_only(text=True)
+    think = " ".join(plan.get("openrouter") or []).lower()
+    if "ox-alpha" in think or "stealth/" in think:
+        max_tokens = min(max_tokens, 8192)
+        timeout = 180.0
+    raw, model, usage = run_text_prompt(user, system=system, max_tokens=max_tokens, timeout=timeout)
+    blocks = split_batch_page_html(raw, page_nos=nos)
+    out: dict[int, str] = {}
+    errors: list[str] = []
+    src_by_no = {n: s for n, s in labeled}
+    for no in nos:
+        chunk = blocks.get(no)
+        if not chunk:
+            errors.append(f"page {no} missing from batch")
+            continue
+        try:
+            out[no] = validate_transliteration_html(chunk, source_html=src_by_no[no], style=style)
+        except ValueError as exc:
+            errors.append(f"page {no}: {exc}")
+    if not out:
+        raise RuntimeError("; ".join(errors) or "batch transliterate produced no pages")
+    return out, model, usage
 
 
 def translate_from_sources(
