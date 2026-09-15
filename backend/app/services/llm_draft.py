@@ -131,7 +131,17 @@ GARBAGE_ANYWHERE = re.compile(
     r"Judge the scan|Address specific constraints|silently judge|"
     r"Conflict with the horizontal header|strict interpretation|"
     r"Let me analyze the source|Keep Devanagari exactly as in source|"
-    r"TEMPLATE interlinear|SOURCE HTML:",
+    r"TEMPLATE (?:interlinear|iast_gloss|samasa_gloss|custom)|SOURCE HTML:|"
+    r"ОРИГИНАЛ СТРАНИЦЫ|СТРОГИЕ ПРАВИЛА ФОРМАТИРОВАНИЯ|"
+    r"\bpādas\b|merges pādas|the intended pattern is|"
+    r"Hmm\. Let me|what's most natural for these translation|"
+    r"unless (?:the )?source is already one prose|"
+    r"For verses, each verse|"
+    r"Keep verse numbers on the Sanskrit line|"
+    r"I'll keep the structure|Let me translate the content|"
+    r"Output only HTML fragment|"
+    r"\bActually, that might|"
+    r"Now the text:",
     re.I,
 )
 AVAGRAHA_RUN = re.compile(r"ऽ{4,}")
@@ -188,15 +198,24 @@ def strip_vedic_svara(html: str) -> str:
 
 
 def extract_html_only(text: str) -> str:
+    """Take a complete <article> (last non-CoT one). Do not slice from a stray <p> in thinking."""
     text = text.strip()
     text = re.sub(r"^```(?:html)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
+    blocks = [m.group(0) for m in _ARTICLE_BLOCK.finditer(text)]
+    if blocks:
+        for block in reversed(blocks):
+            if not GARBAGE_ANYWHERE.search(block):
+                return block.strip()
+        return blocks[-1].strip()
     low = text.lower()
     start = low.find("<article")
     if start < 0:
+        start = low.find('<div class="page')
+    if start < 0:
         start = low.find("<div")
     if start < 0:
-        start = low.find("<p")
+        return text.strip()
     if start > 0:
         text = text[start:]
     end = max(text.rfind("</article>"), text.rfind("</div>"))
@@ -264,7 +283,6 @@ def digitize_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> in
 
     1M input easily holds 10 JPEGs. The limit is *output*: dense Devanagari HTML
     is 3–8k tokens/page. Flash often stops after 1–2 pages if asked for 6.
-    GLM-5V stays at 1 (weaker vision + thinking).
     """
     from app.config import get_settings as _gs
 
@@ -272,8 +290,8 @@ def digitize_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> in
     cap = min(cap, 8)
     plan = plan if plan is not None else model_plan_primary_only()
     or_models = " ".join(plan.get("openrouter") or []).lower()
-    if "glm" in or_models:
-        return 1
+    if "ox-alpha" in or_models or "stealth/" in or_models:
+        return min(cap, 1)
     gemini = [str(m) for m in (plan.get("gemini") or [])]
     if gemini:
         blob = " ".join(gemini).lower()
@@ -384,9 +402,7 @@ def revise_from_scan(
                 user_text,
                 image_b64,
             )
-            usage = {**usage, "network": (
-                "haimaker" if "haimaker.ai" in (effective_openrouter_base_url() or "") else "openrouter"
-            ), "model": model}
+            usage = {**usage, "network": "openrouter", "model": model}
             return validate_html(html, strip_svara=strip_svara), f"openrouter:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
             raise
@@ -456,11 +472,7 @@ def _draft_raw_from_images(
             )
             usage = {
                 **usage,
-                "network": (
-                    "haimaker"
-                    if "haimaker.ai" in (effective_openrouter_base_url() or "")
-                    else "openrouter"
-                ),
+                "network": "openrouter",
                 "model": model,
             }
             return html, f"openrouter:{model}", usage
@@ -624,9 +636,7 @@ def run_vision_prompt(
                 user_text,
                 image_b64,
             )
-            usage = {**usage, "network": (
-                "haimaker" if "haimaker.ai" in (effective_openrouter_base_url() or "") else "openrouter"
-            ), "model": model}
+            usage = {**usage, "network": "openrouter", "model": model}
             return text, f"openrouter:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
             raise
@@ -684,34 +694,63 @@ def _require_keys_for_plan(_settings: Any, plan: dict[str, list[str]]) -> None:
     require_keys_for_plan(plan)
 
 
+def _visible_html_len(html: str) -> int:
+    vis = re.sub(r"<[^>]+>", " ", html or "")
+    return len(re.sub(r"\s+", " ", vis).strip())
+
+
+def _html_from_model_text(text: str) -> str:
+    if not (isinstance(text, str) and text.strip()):
+        return ""
+    extracted = extract_html_only(text)
+    if looks_like_page_html(extracted):
+        return extracted
+    if "<article" in extracted.lower() and not GARBAGE_ANYWHERE.search(extracted):
+        return extracted
+    return ""
+
+
 def _openai_message_text(message: dict[str, Any] | None) -> str:
-    """Prefer `content`. If empty, take HTML from `reasoning` — never raw chain-of-thought."""
+    """Prefer `content`. Some models put the HTML in `reasoning_content` instead."""
     msg = message or {}
     content = msg.get("content")
-    if isinstance(content, str) and content.strip():
-        return content
-    if isinstance(content, list):
-        parts = [
+    content_s = ""
+    if isinstance(content, str):
+        content_s = content
+    elif isinstance(content, list):
+        content_s = "".join(
             str(p.get("text") or "")
             for p in content
             if isinstance(p, dict) and p.get("type") in (None, "text")
-        ]
-        joined = "".join(parts)
-        if joined.strip():
-            return joined
-    # GLM-5.3 (Haimaker) often leaves content empty and puts the answer in reasoning_content.
+        )
+    content_html = _html_from_model_text(content_s)
+    reason_html = ""
+    reason_s = ""
     for key in ("reasoning_content", "reasoning"):
         reasoning = msg.get(key)
         if not (isinstance(reasoning, str) and reasoning.strip()):
             continue
-        extracted = extract_html_only(reasoning)
-        if looks_like_page_html(extracted):
-            return extracted
-        if "<article" in extracted.lower() and not GARBAGE_ANYWHERE.search(extracted):
-            return extracted
-        stripped = reasoning.strip()
-        if stripped.startswith("{") or '"suggestions"' in stripped:
-            return stripped
+        reason_s = reasoning
+        got = _html_from_model_text(reasoning)
+        if got:
+            reason_html = got
+            break
+        if reasoning.strip().startswith("{") or '"suggestions"' in reasoning:
+            reason_s = reasoning.strip()
+    if content_html and reason_html:
+        if GARBAGE_ANYWHERE.search(reason_html) and not GARBAGE_ANYWHERE.search(content_html):
+            return content_html
+        if _visible_html_len(reason_html) > _visible_html_len(content_html):
+            return reason_html
+        return content_html
+    if content_html:
+        return content_html
+    if reason_html:
+        return reason_html
+    if content_s.strip():
+        return content_s
+    if reason_s.strip().startswith("{") or '"suggestions"' in reason_s:
+        return reason_s.strip()
     return ""
 
 

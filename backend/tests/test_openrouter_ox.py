@@ -5,7 +5,6 @@ import pytest
 
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError
 from app.services.openrouter_ox import (
-    HAIMAKER_402_MSG,
     OPENROUTER_402_MSG,
     TASK_DRAFT,
     TASK_TRANSLATE,
@@ -32,15 +31,15 @@ def test_ox_draft_payload_uses_high_effort():
     assert payload["reasoning"]["effort"] == "high"
 
 
-def test_glm_payload_uses_reasoning_effort_not_ox_block():
-    payload: dict = {"model": "z-ai/glm-5v-turbo"}
-    apply_ox_chat_options(payload, "z-ai/glm-5v-turbo", task=TASK_DRAFT)
-    assert payload["max_completion_tokens"] == 16384
-    assert payload["reasoning_effort"] == "high"
+def test_generic_model_uses_max_tokens_not_reasoning_block():
+    payload: dict = {"model": "openai/gpt-4o"}
+    apply_ox_chat_options(payload, "openai/gpt-4o", task=TASK_DRAFT)
+    assert payload["max_tokens"] == 16384
     assert "reasoning" not in payload
-    translate: dict = {"model": "z-ai/glm-5v-turbo"}
-    apply_ox_chat_options(translate, "z-ai/glm-5v-turbo", task=TASK_TRANSLATE)
-    assert translate["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in payload
+    translate: dict = {"model": "openai/gpt-4o"}
+    apply_ox_chat_options(translate, "openai/gpt-4o", task=TASK_TRANSLATE)
+    assert translate["max_tokens"] == 8192
 
 
 def test_env_32k_cannot_raise_translate_cap(monkeypatch):
@@ -113,6 +112,43 @@ def test_post_retries_429_then_succeeds():
     assert slept == [20]
 
 
+def test_post_retries_524_then_succeeds():
+    calls = {"n": 0}
+    ok = {"choices": [{"message": {"content": "<article></article>"}}]}
+
+    def fake_post(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Resp(524, "<!DOCTYPE html> gateway timeout")
+        return _Resp(200, json_data=ok)
+
+    slept: list[float] = []
+    data = post_openrouter_chat(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={},
+        payload={"model": "stealth/ox-alpha"},
+        sleep=slept.append,
+        post=fake_post,
+    )
+    assert data == ok
+    assert calls["n"] == 2
+    assert slept == [5]
+
+
+def test_post_two_524s_fail_fast_not_rate_limit():
+    def always_524(*_a, **_k):
+        return _Resp(524, "<!DOCTYPE html> gateway timeout")
+
+    with pytest.raises(RuntimeError, match="524"):
+        post_openrouter_chat(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={},
+            payload={"model": "stealth/ox-alpha"},
+            sleep=lambda _s: None,
+            post=always_524,
+        )
+
+
 def test_post_429_exhausted_raises_rate_limit():
     def always_429(*_a, **_k):
         return _Resp(429, "stealth/ox-alpha is temporarily rate-limited upstream")
@@ -128,29 +164,14 @@ def test_post_429_exhausted_raises_rate_limit():
 
 
 def test_post_402_is_quota():
+    assert quota_message_for_url("https://openrouter.ai/api/v1/chat/completions") == OPENROUTER_402_MSG
+
     def paywall(*_a, **_k):
         return _Resp(402, "Payment required")
 
     with pytest.raises(LlmQuotaError, match="OpenRouter"):
         post_openrouter_chat(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={},
-            payload={},
-            sleep=lambda _s: None,
-            post=paywall,
-        )
-
-
-def test_402_haimaker_is_not_labeled_openrouter():
-    assert quota_message_for_url("https://api.haimaker.ai/v1/chat/completions") == HAIMAKER_402_MSG
-    assert quota_message_for_url("https://openrouter.ai/api/v1/chat/completions") == OPENROUTER_402_MSG
-
-    def paywall(*_a, **_k):
-        return _Resp(402, "Payment required")
-
-    with pytest.raises(LlmQuotaError, match="Haimaker GLM"):
-        post_openrouter_chat(
-            "https://api.haimaker.ai/v1/chat/completions",
             headers={},
             payload={},
             sleep=lambda _s: None,

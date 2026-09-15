@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260909tr" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260912prompt" />
 </head>
 <body>
   <div class="app-shell">
@@ -129,6 +129,7 @@
               <span class="muted">Шаблон перевода</span>
               <select id="style-select" aria-label="Шаблон перевода">
                 <option value="interlinear">Шлока + строка перевода</option>
+                <option value="iast_gloss">Пословно: рус. (IAST)</option>
                 <option value="samasa_gloss">Самаса в скобках</option>
                 <option value="custom">Свой шаблон</option>
               </select>
@@ -136,12 +137,18 @@
                 <option value="replace">англ. → русский</option>
                 <option value="drop">англ. убрать</option>
               </select>
-              <input id="style-notes" type="text" placeholder="Заметки эксперта к шаблону" />
               <button type="button" class="primary" id="btn-agree-style" hidden>Согласовать шаблон</button>
               <button type="button" id="btn-revoke-style" hidden>Отозвать шаблон</button>
               <button type="button" class="primary" id="btn-translate-all" hidden>Перевести все</button>
               <button type="button" id="btn-proofread-all" hidden>Смысловая проверка всех</button>
               <span class="muted" id="style-agreed-mark"></span>
+              <div class="style-notes-wrap">
+                <textarea id="style-notes" rows="4" maxlength="20000" placeholder="Заметки или свой промпт к шаблону — можно загрузить из файла"></textarea>
+                <label class="file-load" title="Загрузить промпт из текстового файла">
+                  Из файла
+                  <input id="style-notes-file" type="file" accept=".txt,.md,.text,.prompt,text/plain" />
+                </label>
+              </div>
             </div>
             <div class="toolbar extract-bar" id="usage-bar" hidden>
               <span id="usage-info" class="muted">Расход LLM: —</span>
@@ -211,7 +218,13 @@
                     <div id="edit-tools">
                       <div class="directive-box">
                         <label for="directive-input">Замечание / задание</label>
-                        <textarea id="directive-input" rows="3" placeholder="Задание к странице — или нажмите «Оцифровать страницу»."></textarea>
+                        <div class="prompt-file-row">
+                          <textarea id="directive-input" rows="6" maxlength="20000" placeholder="Задание к странице — или нажмите «Оцифровать страницу»."></textarea>
+                          <label class="file-load" title="Загрузить задание из текстового файла">
+                            Из файла
+                            <input id="directive-file" type="file" accept=".txt,.md,.text,.prompt,text/plain" />
+                          </label>
+                        </div>
                         <div class="edit-actions" style="padding:0;border:0;background:transparent">
                           <button class="primary" type="button" id="btn-revise">Отправить задание</button>
                           <button type="button" id="btn-review-again">Оцифровать страницу</button>
@@ -378,7 +391,7 @@
           </div>
           <div class="admin-section">
             <h2>Маршрут LLM</h2>
-            <p class="muted">Сети: бесплатный Gemini в Google AI Studio (по умолчанию) и платный ProxyAPI.ru. Тест Haimaker — только vision-модель <code>z-ai/glm-5v-turbo</code> (сканы). Текстовая glm-5.3 из чата LSE сюда не подходит. OpenRouter: ox-alpha снят, эксперт со своим ключом может вписать id в кабинете.</p>
+            <p class="muted">Сети: бесплатный Gemini в Google AI Studio (по умолчанию) и платный ProxyAPI.ru. OpenRouter: ox-alpha снят, эксперт со своим ключом может вписать id модели в кабинете.</p>
             <div id="llm-route-box" class="llm-route-box"></div>
             <p class="muted" id="llm-route-status">—</p>
           </div>
@@ -386,7 +399,7 @@
             <h2>Каталог LLM</h2>
             <p class="muted" id="llm-note"></p>
             <ul id="llm-catalog"></ul>
-            <p class="muted">Ключи в <code>.env</code>: <code>GEMINI_API_KEY</code> / <code>GEMINI_API_KEYS</code> (AI Studio, несколько ключей с fallback) и при необходимости <code>OPENROUTER_API_KEY</code> / <code>OPENAI_API_KEY</code> (ProxyAPI). Id Studio: <code>GEMINI_MODEL</code>. Модель ProxyAPI — список в «Маршрут LLM». OpenRouter: без каталога, ox-alpha снят.</p>
+            <p class="muted">Ключи в <code>.env</code>: <code>GEMINI_API_KEY</code> / <code>GEMINI_API_KEYS</code> (AI Studio, несколько ключей с fallback) и при необходимости <code>OPENROUTER_API_KEY</code> / <code>OPENAI_API_KEY</code> (ProxyAPI). Id Studio: <code>GEMINI_MODEL</code> (оцифровка) и <code>GEMINI_TRANSLATE_MODEL</code> (только текст перевода). Модель ProxyAPI — список в «Маршрут LLM». OpenRouter: без каталога, ox-alpha снят.</p>
           </div>
         </div>
       </section>
@@ -402,6 +415,7 @@
         <label>Шаблон
           <select name="style">
             <option value="interlinear">Шлока + строка перевода</option>
+            <option value="iast_gloss">Пословно: русское слово (IAST)</option>
             <option value="samasa_gloss">Самаса в скобках (члены в круглых скобках)</option>
             <option value="custom">Свой шаблон (из заметок)</option>
           </select>
@@ -412,9 +426,14 @@
             <option value="drop">убрать</option>
           </select>
         </label>
-        <label>Заметки эксперта к шаблону
-          <textarea name="notes" rows="3" placeholder="Например: после каждой пады — русский; самасу можно переставлять."></textarea>
-        </label>
+        <div class="form-field">
+          <span>Заметки эксперта к шаблону</span>
+          <textarea name="notes" rows="6" maxlength="20000" placeholder="Свой промпт или уточнения к шаблону — можно загрузить из файла."></textarea>
+          <label class="file-load" title="Загрузить промпт из текстового файла">
+            Из файла
+            <input id="translate-notes-file" type="file" accept=".txt,.md,.text,.prompt,text/plain" />
+          </label>
+        </div>
         <div class="edit-actions" style="border:0;padding:0;background:transparent">
           <button type="submit" class="primary" id="btn-spawn-translate">Создать проект перевода</button>
           <button type="button" id="btn-cancel-translate">Отмена</button>
@@ -423,6 +442,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260909tr"></script>
+  <script src="/assets/app.js?v=20260912prompt"></script>
 </body>
 </html>

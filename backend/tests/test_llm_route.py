@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.llm_draft import _openai_message_text
 from app.services.llm_route import (
     describe_route,
@@ -44,7 +46,33 @@ def test_default_route_is_gemini(tmp_path, monkeypatch):
     assert plan["openai"] == []
     desc = describe_route()
     assert desc["primary"] == {"provider": "gemini", "model": "gemini-3.1-pro-preview"}
-    assert [o["id"] for o in desc["options"]] == ["openrouter", "gemini", "glm", "opus"]
+    assert [o["id"] for o in desc["options"]] == ["openrouter", "gemini", "opus"]
+
+
+def test_translate_plan_uses_pro_then_flash(tmp_path, monkeypatch):
+    from app.services import llm_route as lr
+
+    monkeypatch.setattr(
+        lr,
+        "get_settings",
+        lambda: _settings(
+            tmp_path,
+            gemini_model="gemini-3.5-flash",
+            gemini_translate_model="gemini-3.1-pro-preview",
+        ),
+    )
+    set_route("gemini", updated_by="t")
+    vision = model_plan()
+    assert vision["gemini"][0] == "gemini-3.5-flash"
+    assert "gemini-2.5-pro" not in vision["gemini"]
+    text = model_plan(text=True)
+    assert text["gemini"][:2] == ["gemini-3.1-pro-preview", "gemini-3.5-flash"]
+    primary = model_plan_primary_only(text=True)
+    assert primary["gemini"] == ["gemini-3.1-pro-preview", "gemini-3.5-flash"]
+    assert primary["openai"] == []
+    desc = describe_route()
+    assert "перевод gemini-3.1-pro-preview" in desc["label"]
+    assert desc["fallback_models"]["gemini_translate"] == "gemini-3.1-pro-preview"
 
 
 def test_opus_route_uses_proxyapi(tmp_path, monkeypatch):
@@ -113,35 +141,18 @@ def test_openrouter_typed_model(tmp_path, monkeypatch):
     assert describe_route()["openrouter_model"] == "google/gemini-2.5-flash"
 
 
-def test_glm_route_uses_haimaker_not_gemini(tmp_path, monkeypatch):
+def test_stale_glm_route_falls_back_to_gemini(tmp_path, monkeypatch):
     from app.services import llm_route as lr
 
-    monkeypatch.setattr(
-        lr,
-        "get_settings",
-        lambda: _settings(
-            tmp_path,
-            haimaker_api_key="sk-hm-test",
-            haimaker_base_url="https://api.haimaker.ai/v1",
-            haimaker_model="z-ai/glm-5v-turbo",
-        ),
-    )
-    set_route("gemini", updated_by="t")
+    monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "llm_route.json").write_text('{"route": "glm"}\n', encoding="utf-8")
     assert get_route() == "gemini"
-    set_route("glm", updated_by="t")
-    assert get_route() == "glm"
-    plan = model_plan_primary_only()
-    assert plan["openrouter"] == ["z-ai/glm-5v-turbo"]
-    assert plan["gemini"] == []
-    assert plan["anthropic"] == []
-    desc = describe_route()
-    assert desc["primary"] == {"provider": "haimaker", "model": "z-ai/glm-5v-turbo"}
-    assert lr.effective_openrouter_base_url() == "https://api.haimaker.ai/v1"
-    assert lr.effective_openrouter_key() == "sk-hm-test"
-    set_route("gemini", updated_by="t")
-    assert get_route() == "gemini"
-    assert model_plan_primary_only()["gemini"][:1] == ["gemini-3.1-pro-preview"]
-    assert lr.effective_openrouter_base_url() == "https://openrouter.ai/api/v1"
+    assert [o["id"] for o in describe_route()["options"]] == ["openrouter", "gemini", "opus"]
+    with pytest.raises(ValueError, match="unknown route"):
+        set_route("glm", updated_by="t")  # type: ignore[arg-type]
+
 
 
 def test_openai_message_text_reasoning_fallback():
@@ -152,6 +163,15 @@ def test_openai_message_text_reasoning_fallback():
     assert _openai_message_text({"content": "", "reasoning": cot}) == ""
     html = "<article class='page-style'><p class='sa'>नमः</p></article>"
     assert _openai_message_text({"content": "", "reasoning_content": html}) == html
+    stub = "<article></article>"
+    assert _openai_message_text({"content": stub, "reasoning_content": html}) == html
+    cot = (
+        "Do not merge several pādas into one Russian paragraph. "
+        '<p class="sa shloka" lang="sa">, then '
+        '<p class="ru tr" lang="ru">. Hmm. Let me think about what\'s most natural'
+    )
+    assert _openai_message_text({"content": "", "reasoning_content": cot}) == ""
+    assert "नमः" in _openai_message_text({"content": "", "reasoning_content": cot + "\n" + html})
     proof = '{"suggestions":[{"id":"1","wrong":"a","right":"b"}]}'
     assert proof in _openai_message_text({"content": "", "reasoning_content": proof})
 

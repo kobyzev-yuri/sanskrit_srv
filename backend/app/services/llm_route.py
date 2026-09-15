@@ -12,10 +12,7 @@ from typing import Any, Iterator, Literal
 
 from app.config import get_settings
 
-RouteId = Literal["openrouter", "gemini", "opus", "glm"]
-
-HAIMAKER_DEFAULT_MODEL = "z-ai/glm-5v-turbo"
-HAIMAKER_DEFAULT_BASE = "https://api.haimaker.ai/v1"
+RouteId = Literal["openrouter", "gemini", "opus"]
 
 ROUTES: dict[RouteId, dict[str, str]] = {
     "openrouter": {
@@ -32,11 +29,6 @@ ROUTES: dict[RouteId, dict[str, str]] = {
         "id": "opus",
         "label": "ProxyAPI.ru (платный)",
         "hint": "Ключ OPENAI_API_KEY. Модель выбирается списком — не только Opus.",
-    },
-    "glm": {
-        "id": "glm",
-        "label": "GLM 5V Turbo (Haimaker, vision)",
-        "hint": "Мультимодальная сетка для сканов (z-ai/glm-5v-turbo). Не glm-5.3: она текстовая и отвечает 400 на картинку. Gemini по умолчанию не меняется.",
     },
 }
 
@@ -133,26 +125,9 @@ class LlmCreds:
     def key_hint(self) -> str | None:
         if self.route == "openrouter":
             return _key_hint(self.openrouter_api_key)
-        if self.route == "glm":
-            return _key_hint(haimaker_api_key())
         if self.route == "gemini" and self.gemini_api_key:
             return _key_hint(self.gemini_api_key)
         return _key_hint(self.openai_api_key)
-
-
-def haimaker_api_key() -> str:
-    settings = get_settings()
-    return (getattr(settings, "haimaker_api_key", None) or "").strip()
-
-
-def haimaker_model() -> str:
-    settings = get_settings()
-    return (getattr(settings, "haimaker_model", None) or "").strip() or HAIMAKER_DEFAULT_MODEL
-
-
-def haimaker_base_url() -> str:
-    settings = get_settings()
-    return (getattr(settings, "haimaker_base_url", None) or "").strip().rstrip("/") or HAIMAKER_DEFAULT_BASE
 
 
 _llm_creds: ContextVar[LlmCreds | None] = ContextVar("llm_creds", default=None)
@@ -238,15 +213,10 @@ def get_route() -> RouteId:
 
 
 def effective_openrouter_key() -> str:
-    if get_route() == "glm":
-        return haimaker_api_key()
     return current_creds().openrouter_api_key
 
 
 def effective_openrouter_base_url() -> str:
-    """OpenAI-compat /chat/completions host for the openrouter plan (OpenRouter or Haimaker)."""
-    if get_route() == "glm":
-        return haimaker_base_url()
     settings = get_settings()
     return (settings.openrouter_base_url or "https://openrouter.ai/api/v1").rstrip("/")
 
@@ -265,10 +235,7 @@ def require_keys_for_plan(plan: dict[str, list[str]]) -> None:
             else "OPENROUTER_MODEL не задан в .env (ox-alpha снят, списка моделей нет)."
         )
     if plan.get("openrouter"):
-        if get_route() == "glm":
-            if not effective_openrouter_key():
-                raise RuntimeError("HAIMAKER_API_KEY не задан в .env (тест GLM 5V).")
-        elif not creds.openrouter_api_key:
+        if not creds.openrouter_api_key:
             raise RuntimeError(
                 "В кабинете не задан ключ OpenRouter (или вернитесь к токенам бэкофиса)."
                 if personal
@@ -328,13 +295,19 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
     route = creds.route if effective else get_global_route()
     or_model = creds.openrouter_model if effective else sanitize_openrouter_model(settings.openrouter_model)
     gemini_model = (settings.gemini_model or "").strip() or "gemini-3.1-pro-preview"
+    gemini_translate_model = (
+        (getattr(settings, "gemini_translate_model", None) or "").strip() or "gemini-3.1-pro-preview"
+    )
     openai_model = (settings.openai_model or "").strip() or "gpt-4o-mini"
     px_model = get_proxyapi_model()
     px_kind, px_id = classify_proxyapi_model(px_model)
     gemini_meta = {
         **ROUTES["gemini"],
-        "label": f"Gemini (Google AI Studio) — {gemini_model}",
-        "hint": "Бесплатные ключи GEMINI_API_KEY / GEMINI_API_KEYS. 20 запросов в день на ключ; при исчерпании — следующий. ProxyAPI здесь не используется.",
+        "label": (
+            f"Gemini (Google AI Studio) — {gemini_model}"
+            + (f" · перевод {gemini_translate_model}" if gemini_translate_model != gemini_model else "")
+        ),
+        "hint": "Бесплатные ключи GEMINI_API_KEY / GEMINI_API_KEYS. 20 запросов в день на ключ; при исчерпании — следующий. ProxyAPI здесь не используется. Оцифровка — GEMINI_MODEL (зрение); перевод — GEMINI_TRANSLATE_MODEL (текст).",
     }
     opus_meta = {
         **ROUTES["opus"],
@@ -348,32 +321,19 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
             else ROUTES["openrouter"]["hint"]
         ),
     }
-    glm_id = haimaker_model()
-    glm_meta = {
-        **ROUTES["glm"],
-        "label": f"GLM 5V Turbo (Haimaker, vision) — {glm_id}",
-        "hint": (
-            "Мультимодальная модель для сканов: z-ai/glm-5v-turbo. "
-            "Не путать с glm-5.3 из чата LSE — та текстовая и даёт 400 на image. "
-            "Ключ HAIMAKER_API_KEY. Gemini по умолчанию не переключается."
-        ),
-    }
     primaries = {
         "openrouter": {"provider": "openrouter", "model": or_model},
         "opus": {"provider": px_kind, "model": px_id},
         "gemini": {"provider": "gemini", "model": gemini_model},
-        "glm": {"provider": "haimaker", "model": glm_id},
     }
     meta = {
         "openrouter": or_meta,
         "gemini": gemini_meta,
         "opus": opus_meta,
-        "glm": glm_meta,
     }[route]
     options = [
         {**or_meta, "primary": primaries["openrouter"]},
         {**gemini_meta, "primary": primaries["gemini"]},
-        {**glm_meta, "primary": primaries["glm"]},
         {**opus_meta, "primary": primaries["opus"]},
     ]
     return {
@@ -388,6 +348,7 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
         "fallback_models": {
             "openrouter": or_model,
             "gemini": gemini_model,
+            "gemini_translate": gemini_translate_model,
             "openai": openai_model,
             "anthropic": _default_proxyapi_model(),
         },
@@ -419,18 +380,22 @@ def _empty_plan() -> dict[str, list[str]]:
     return {"openrouter": [], "anthropic": [], "gemini": [], "openai": []}
 
 
-def model_plan() -> dict[str, list[str]]:
-    """Ordered model lists for revise_from_scan / proofread."""
+def model_plan(*, text: bool = False) -> dict[str, list[str]]:
+    """Ordered model lists for revise_from_scan / proofread / translate.
+
+    text=True: no images (Russian translation, translation proofread).
+    """
     settings = get_settings()
     route = get_route()
     plan = _empty_plan()
     or_model = sanitize_openrouter_model(current_creds().openrouter_model)
     gemini_primary = (settings.gemini_model or "").strip() or "gemini-3.1-pro-preview"
-    geminis = [
-        m
-        for m in [gemini_primary, "gemini-3.1-pro-preview", "gemini-2.5-flash"]
-        if m and not m.lower().startswith("claude")
-    ]
+    gemini_translate = (getattr(settings, "gemini_translate_model", None) or "").strip() or "gemini-3.1-pro-preview"
+    if text:
+        gemini_candidates = [gemini_translate, gemini_primary, "gemini-3.5-flash"]
+    else:
+        gemini_candidates = [gemini_primary, "gemini-3.5-flash"]
+    geminis = [m for m in gemini_candidates if m and not m.lower().startswith("claude")]
     seen: set[str] = set()
     gemini_models: list[str] = []
     for m in geminis:
@@ -446,9 +411,6 @@ def model_plan() -> dict[str, list[str]]:
         if or_model:
             plan["openrouter"] = [or_model]
         return plan
-    if route == "glm":
-        plan["openrouter"] = [haimaker_model()]
-        return plan
     if route == "opus":
         kind, model = classify_proxyapi_model(get_proxyapi_model())
         plan[kind] = [model]
@@ -459,12 +421,15 @@ def model_plan() -> dict[str, list[str]]:
     return plan
 
 
-def model_plan_primary_only() -> dict[str, list[str]]:
-    """Active primary network only — no silent paid fallbacks."""
-    plan = model_plan()
+def model_plan_primary_only(*, text: bool = False) -> dict[str, list[str]]:
+    """Active primary network only — no silent paid fallbacks.
+
+    For Gemini text (translate), keep Studio fallbacks on the same keys (Pro → Flash).
+    """
+    plan = model_plan(text=text)
     out = _empty_plan()
     for key in ("openrouter", "anthropic", "gemini", "openai"):
         if plan.get(key):
-            out[key] = plan[key][:1]
+            out[key] = list(plan[key] if key == "gemini" and text else plan[key][:1])
             break
     return out

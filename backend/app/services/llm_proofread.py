@@ -228,9 +228,21 @@ def proofread_translation(
     parts = [
         TRANSLATE_PROOFREAD_PROMPT,
         f"Page number: {page_no}. Translation template: {style}.",
-        "SOURCE HTML (verified Devanagari):\n" + clip_html(source, limit=22000),
-        "DRAFT HTML (this page translation):\n" + clip_html(draft, limit=22000),
     ]
+    if style == "iast_gloss":
+        parts.append(
+            "TEMPLATE iast_gloss check: after each Sanskrit block the Russian MUST be "
+            "a grammatical sentence with every content word tagged русское (iast); "
+            "words added for Russian syntax only in [квадратных скобках]. "
+            "Flag missing IAST parentheses or Devanagari inside them. "
+            "Do not demand source-word-order crib; do not strip the (IAST) tags into a free poem."
+        )
+    parts.extend(
+        [
+            "SOURCE HTML (verified Devanagari):\n" + clip_html(source, limit=22000),
+            "DRAFT HTML (this page translation):\n" + clip_html(draft, limit=22000),
+        ]
+    )
     if prev_draft or prev_source:
         parts.append(
             "PREVIOUS PAGE tail (do not edit; continuity only):\n"

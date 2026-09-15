@@ -28,9 +28,9 @@ AdminUser = Depends(require_roles(Role.admin))
 
 
 DEFAULT_LLM_CATALOG = [
-    {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (id для Studio или ProxyAPI Google)"},
+    {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (перевод / Studio; 2.5 Pro на этих ключах закрыта)"},
+    {"provider": "gemini", "model": "gemini-3.5-flash", "label": "Gemini 3.5 Flash (оцифровка / Studio)"},
     {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (id для Studio или ProxyAPI Google)"},
-    {"provider": "haimaker", "model": "z-ai/glm-5v-turbo", "label": "GLM 5V Turbo (Haimaker, vision для сканов)"},
     {"provider": "anthropic", "model": "claude-opus-5", "label": "Claude Opus 5 (ProxyAPI)"},
     {"provider": "anthropic", "model": "claude-opus-4-6", "label": "Claude Opus 4.6 (ProxyAPI)"},
     {"provider": "openai", "model": "gpt-4o-mini", "label": "GPT-4o mini (ProxyAPI)"},
@@ -127,6 +127,7 @@ def llm_catalog(_: User = AdminUser):
         models=DEFAULT_LLM_CATALOG,
         note=(
             f"Сейчас: {route['label']} ({route['primary']['provider']}:{route['primary']['model']}). "
+            "Оцифровка: GEMINI_MODEL. Перевод: GEMINI_TRANSLATE_MODEL (текст, не скан). "
             "Переключение сети — радиокнопки в «Маршрут LLM»; модель ProxyAPI — список там же. "
             + " ".join(keys)
         ),
@@ -144,7 +145,7 @@ def put_llm_route(body: LlmRouteIn, user: User = AdminUser):
     if route not in ROUTES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail="route must be 'openrouter', 'gemini', 'opus' or 'glm'",
+            detail="route must be 'openrouter', 'gemini' or 'opus'",
         )
     return set_route(
         route,  # type: ignore[arg-type]

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -17,6 +18,7 @@ from app.services.layout_assets import extract_embedded_figures, finalize_page_h
 from app.services.llm_draft import (
     consecutive_page_runs,
     digitize_batch_size_for_plan,
+    looks_like_page_html,
     revise_from_scan,
     revise_from_scans,
 )
@@ -30,11 +32,13 @@ from app.services.llm_proofread import (
 )
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, set_quota_alert
 from app.services.llm_translate import (
+    BLANK_RU_ARTICLE,
     looks_like_translation_html,
     pack_translate_runs,
     translate_batch_size_for_plan,
     translate_from_source,
     translate_from_sources,
+    visible_html_text,
 )
 from app.services.llm_usage import record_usage
 from app.services.pdf_extract import (
@@ -120,6 +124,51 @@ def enqueue_project_pipeline(
 
 def page_is_agreed(page: Page) -> bool:
     return page.status in AGREED_STATUSES
+
+
+def translate_accept_status(*, auto_agree: bool) -> PageStatus:
+    """open_only («несогласованные»): удачный черновик сразу expert_done, чтобы не гонять его снова."""
+    return PageStatus.expert_done if auto_agree else PageStatus.expert_review
+
+
+def agree_nonempty_translations(db: Session, project: Project) -> list[int]:
+    """Согласовать страницы, где уже лежит настоящий русский перевод (не CoT и не blank)."""
+    marked: list[int] = []
+    pages = list(
+        db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+    )
+    for page in pages:
+        if page_is_agreed(page):
+            continue
+        html = page.current_html or ""
+        cyr = sum(1 for c in html if "\u0400" <= c <= "\u04ff")
+        if cyr >= 8 and looks_like_translation_html(html, page.source_html):
+            page.status = PageStatus.expert_done
+            marked.append(page.page_no)
+    if marked:
+        db.commit()
+    return marked
+
+
+def agree_nonempty_digitize_drafts(db: Session, project: Project) -> list[int]:
+    """Согласовать страницы оцифровки, где уже лежит настоящий HTML (не CoT)."""
+    marked: list[int] = []
+    pages = list(
+        db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+    )
+    for page in pages:
+        if page_is_agreed(page):
+            continue
+        html = page.current_html or ""
+        if not looks_like_page_html(html):
+            continue
+        dev = sum(1 for c in html if "\u0900" <= c <= "\u097f")
+        if dev >= 8 or (html.lower().count("<p") >= 1 and len(html.strip()) > 80):
+            page.status = PageStatus.expert_done
+            marked.append(page.page_no)
+    if marked:
+        db.commit()
+    return marked
 
 
 def project_source_kind(project: Project) -> str:
@@ -220,11 +269,32 @@ def _save_version(
     db.commit()
 
 
+def _translate_wait_heartbeat(job_id: uuid.UUID, page_no: int, stop: threading.Event) -> None:
+    """Tick job.progress.wait_s so the UI is not stuck on a silent LLM call."""
+    from app.db import get_session_factory
+
+    SessionLocal = get_session_factory()
+    started = time.monotonic()
+    while True:
+        elapsed = int(time.monotonic() - started)
+        try:
+            with SessionLocal() as db:
+                job = db.get(Job, job_id)
+                if job is None or job.status != JobStatus.running:
+                    return
+                set_job_progress(db, job, current_page=page_no, wait_s=elapsed)
+        except Exception:  # noqa: BLE001
+            log.debug("translate heartbeat failed", exc_info=True)
+        if stop.wait(10):
+            return
+
+
 def process_one_translate_page(
     db: Session,
     page: Page,
     *,
     job_id: uuid.UUID | None = None,
+    auto_agree: bool = False,
 ) -> str:
     """LLM Russian translation from verified Sanskrit source_html."""
     project = db.get(Project, page.project_id)
@@ -237,6 +307,16 @@ def process_one_translate_page(
     source_html = (page.source_html or "").strip()
     if not source_html:
         return "skip_no_source"
+    if not visible_html_text(source_html):
+        _save_version(
+            db,
+            page,
+            BLANK_RU_ARTICLE,
+            VersionSource.llm,
+            "empty source page",
+            status=PageStatus.expert_review,
+        )
+        return "translate:empty_source"
 
     if _already_translated_this_job(db, page, job_id):
         return "skip_already_this_job"
@@ -245,6 +325,13 @@ def process_one_translate_page(
     db.commit()
     cfg = translation_cfg(project)
     recorded: list[int] = []
+    stop_wait = threading.Event()
+    if job_id is not None:
+        threading.Thread(
+            target=_translate_wait_heartbeat,
+            args=(job_id, page.page_no, stop_wait),
+            daemon=True,
+        ).start()
 
     def on_chunk(index: int, total_chunks: int, model: str, usage: dict) -> None:
         record_usage(
@@ -270,15 +357,19 @@ def process_one_translate_page(
             chunk=index,
             chunks=total_chunks,
             model=model,
+            wait_s=0,
         )
 
-    html, model, usage = translate_from_source(
-        source_html=source_html,
-        cfg=cfg,
-        current_html=None,
-        directive=None,
-        on_chunk=on_chunk,
-    )
+    try:
+        html, model, usage = translate_from_source(
+            source_html=source_html,
+            cfg=cfg,
+            current_html=None,
+            directive=None,
+            on_chunk=on_chunk,
+        )
+    finally:
+        stop_wait.set()
     if not recorded:
         record_usage(
             db,
@@ -296,7 +387,7 @@ def process_one_translate_page(
         html,
         VersionSource.llm,
         f"batch translate {cfg.get('style')} | {model}",
-        status=PageStatus.expert_review,
+        status=translate_accept_status(auto_agree=auto_agree),
     )
     return f"translate:{model}"
 
@@ -313,7 +404,7 @@ def _already_translated_this_job(db: Session, page: Page, job_id: uuid.UUID | No
         and job.created_at
         and page.updated_at >= job.created_at
         and page.status in (PageStatus.expert_review, PageStatus.expert_done)
-        and looks_like_translation_html(page.current_html or "")
+        and looks_like_translation_html(page.current_html or "", page.source_html)
     )
 
 
@@ -322,7 +413,7 @@ def _revert_empty_translate_drafts(db: Session, pages: list[Page]) -> None:
         page = db.get(Page, p.id)
         if page is None or page.status != PageStatus.llm_draft:
             continue
-        if looks_like_translation_html(page.current_html or ""):
+        if looks_like_translation_html(page.current_html or "", page.source_html):
             continue
         page.status = PageStatus.pending
     db.commit()
@@ -334,6 +425,7 @@ def translate_one_by_one(
     *,
     job_id: uuid.UUID | None = None,
     skip_nos: set[int] | None = None,
+    auto_agree: bool = False,
 ) -> list[str]:
     """Per-page translate. One failure does not skip the rest of the run."""
     notes: list[str] = []
@@ -350,14 +442,14 @@ def translate_one_by_one(
                 db.commit()
         try:
             log.info("translate page %s (one-by-one)", p.page_no)
-            notes.append(process_one_translate_page(db, p, job_id=job_id))
+            notes.append(process_one_translate_page(db, p, job_id=job_id, auto_agree=auto_agree))
         except (LlmQuotaError, LlmRateLimitError):
             raise
         except Exception:  # noqa: BLE001
             log.exception("single-page translate failed page %s", p.page_no)
             notes.append(f"fail:{p.page_no}")
             page = db.get(Page, p.id)
-            if page is not None and not looks_like_translation_html(page.current_html or ""):
+            if page is not None and not looks_like_translation_html(page.current_html or "", page.source_html):
                 page.status = PageStatus.pending
                 db.commit()
     return notes
@@ -368,12 +460,13 @@ def process_translate_run(
     pages: list[Page],
     *,
     job_id: uuid.UUID | None = None,
+    auto_agree: bool = False,
 ) -> str:
     """Translate a consecutive run. Falls back to one-page calls if the batch is incomplete."""
     if not pages:
         return "empty"
     if len(pages) == 1:
-        return process_one_translate_page(db, pages[0], job_id=job_id)
+        return process_one_translate_page(db, pages[0], job_id=job_id, auto_agree=auto_agree)
 
     project = db.get(Project, pages[0].project_id)
     if project is None or project_task(project) != "translate":
@@ -397,7 +490,7 @@ def process_translate_run(
         db.commit()
         payloads.append({"page": page, "page_no": page.page_no, "source_html": source_html})
     if len(payloads) <= 1:
-        return ",".join(translate_one_by_one(db, pages, job_id=job_id))
+        return ",".join(translate_one_by_one(db, pages, job_id=job_id, auto_agree=auto_agree))
 
     cfg = translation_cfg(project)
     try:
@@ -414,7 +507,7 @@ def process_translate_run(
             pages[0].page_no,
             pages[-1].page_no,
         )
-        notes = translate_one_by_one(db, pages, job_id=job_id)
+        notes = translate_one_by_one(db, pages, job_id=job_id, auto_agree=auto_agree)
         return "batch-fail; fallback:" + ",".join(notes)
 
     n_ok = max(1, len(html_by_no))
@@ -443,11 +536,13 @@ def process_translate_run(
             html,
             VersionSource.llm,
             f"batch translate {cfg.get('style')} {pages[0].page_no}–{pages[-1].page_no} | {model}",
-            status=PageStatus.expert_review,
+            status=translate_accept_status(auto_agree=auto_agree),
         )
         done_nos.add(page.page_no)
 
-    fallback = translate_one_by_one(db, pages, job_id=job_id, skip_nos=done_nos)
+    fallback = translate_one_by_one(
+        db, pages, job_id=job_id, skip_nos=done_nos, auto_agree=auto_agree
+    )
     note = f"batch:{model}:{pages[0].page_no}-{pages[-1].page_no}:{len(done_nos)}/{len(pages)}"
     if fallback:
         note += "; fallback:" + ",".join(fallback)
@@ -843,8 +938,18 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
             db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
         )
         if open_only:
+            agreed_now = agree_nonempty_digitize_drafts(db, project)
+            if agreed_now:
+                log.info(
+                    "open_only: auto-agreed %s existing digitize draft(s): %s",
+                    len(agreed_now),
+                    agreed_now[:40],
+                )
+            pages = list(
+                db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+            )
             pages = [p for p in pages if not page_is_agreed(p)]
-        # User re-run with filter: re-draft selected pages even if a draft exists.
+        # Remaining unagreed pages (empty / CoT): re-draft even if junk HTML exists.
         page_force = force or open_only
         total = len(pages)
         job.progress = {
@@ -989,6 +1094,16 @@ def _run_translate_pipeline(
         db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
     )
     if open_only:
+        agreed_now = agree_nonempty_translations(db, project)
+        if agreed_now:
+            log.info(
+                "open_only: auto-agreed %s existing translation(s): %s",
+                len(agreed_now),
+                agreed_now[:40],
+            )
+        pages = list(
+            db.scalars(select(Page).where(Page.project_id == project.id).order_by(Page.page_no)).all()
+        )
         pages = [p for p in pages if not page_is_agreed(p)]
     # Skip pages without Sanskrit source (nothing to translate).
     pages = [p for p in pages if (p.source_html or "").strip()]
@@ -1047,7 +1162,7 @@ def _run_translate_pipeline(
         }
         db.commit()
         try:
-            note = process_translate_run(db, run, job_id=job.id)
+            note = process_translate_run(db, run, job_id=job.id, auto_agree=open_only)
             log.info("translate %s (%s/%s): %s", label, done + len(run), total, note)
             n_ok = 0
             n_fail = 0

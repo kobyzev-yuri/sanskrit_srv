@@ -37,6 +37,7 @@ from app.services.pdf_extract import classify_pdf, extract_page_text_html, extra
 from app.services.pipeline import enqueue_project_pipeline, ensure_page_stubs
 from app.services.translation_style import (
     ENGLISH_POLICIES,
+    NOTES_MAX,
     STYLES,
     default_translation_settings,
     lock_translation_template,
@@ -426,7 +427,7 @@ def update_translation_style(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Unknown english_comments policy")
         cfg["english_comments"] = body.english_comments
     if body.notes is not None:
-        cfg["notes"] = body.notes.strip()[:4000]
+        cfg["notes"] = body.notes.strip()[:NOTES_MAX]
     persist_translation_cfg(project, cfg)
     if body.agree is True:
         lock_translation_template(project, user)

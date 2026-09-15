@@ -158,6 +158,8 @@ def is_quota_response(status_code: int, body: str) -> bool:
         "prepayment credits",
         "credits are depleted",
         "insufficient credits",
+        "daily request limit",
+        "250 requests per day",
     )
     return any(m in low for m in markers)
 
@@ -211,14 +213,14 @@ def read_alert() -> dict[str, Any]:
 
 
 def alert_matches_route(alert: dict[str, Any], route: str) -> bool:
-    """Paywall banner is per gateway. OpenRouter 402 must not look like a GLM failure."""
+    """Paywall banner is per gateway. OpenRouter 402 must not look like a Studio failure."""
     if not alert.get("active"):
         return False
     stored = str(alert.get("route") or "").strip()
     if stored:
         return stored == route
     # Legacy alerts had no route field and were OpenRouter / ProxyAPI.
-    return route not in ("glm", "gemini")
+    return route not in ("gemini",)
 
 
 def fetch_balance() -> dict[str, Any]:
@@ -261,7 +263,7 @@ def fetch_balance() -> dict[str, Any]:
 
 
 def llm_status() -> dict[str, Any]:
-    from app.services.llm_route import current_creds, describe_route, effective_openrouter_key, get_route
+    from app.services.llm_route import current_creds, describe_route, get_route
 
     creds = current_creds()
     desc = describe_route(effective=True)
@@ -294,19 +296,15 @@ def llm_status() -> dict[str, Any]:
         return payload
 
     alert = read_alert()
-    if route in ("openrouter", "glm") and not alert_matches_route(alert, route):
+    if route == "openrouter" and not alert_matches_route(alert, route):
         alert = {"active": False}
-    if route in ("openrouter", "glm"):
-        or_ok = bool(effective_openrouter_key() if route == "glm" else creds.openrouter_api_key)
+    if route == "openrouter":
+        or_ok = bool(creds.openrouter_api_key)
         if not or_ok:
             missing = (
-                "HAIMAKER_API_KEY не задан в .env (тест GLM 5V)."
-                if route == "glm"
-                else (
-                    "В кабинете не задан ключ OpenRouter."
-                    if creds.key_source == "personal"
-                    else "OPENROUTER_API_KEY не задан в .env."
-                )
+                "В кабинете не задан ключ OpenRouter."
+                if creds.key_source == "personal"
+                else "OPENROUTER_API_KEY не задан в .env."
             )
             return attach(
                 {
@@ -316,7 +314,7 @@ def llm_status() -> dict[str, Any]:
                     "message": missing,
                     "balance": None,
                     "balance_ok": False,
-                    "balance_error": "HAIMAKER_API_KEY missing" if route == "glm" else "OPENROUTER_API_KEY missing",
+                    "balance_error": "OPENROUTER_API_KEY missing",
                 }
             )
         if alert.get("active"):
@@ -404,10 +402,6 @@ def settings_key_ok() -> bool:
     creds = current_creds()
     if get_route() == "openrouter":
         return bool(creds.openrouter_api_key)
-    if get_route() == "glm":
-        from app.services.llm_route import effective_openrouter_key
-
-        return bool(effective_openrouter_key())
     if get_route() == "gemini":
         return bool(creds.gemini_api_key or creds.openai_api_key)
     return bool(creds.openai_api_key)

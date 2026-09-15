@@ -116,6 +116,7 @@ def generate_gemini_content(
     sleep: Callable[[float], None] = time.sleep,
     post: Callable[..., Any] | None = None,
     timeout: float = 180,
+    system: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     if not api_key or not base_url:
         resolved_key, resolved_base = resolve_gemini_endpoint()
@@ -129,6 +130,8 @@ def generate_gemini_content(
         "contents": [{"role": "user", "parts": _normalize_parts(parts, studio=studio)}],
         "generationConfig": {"temperature": 0, "maxOutputTokens": int(max_output_tokens)},
     }
+    if (system or "").strip():
+        payload["systemInstruction"] = {"parts": [{"text": system.strip()}]}
     do_post = post or httpx.post
     keys = [api_key]
     pool: set[str] = set()

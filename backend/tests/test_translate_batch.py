@@ -35,8 +35,8 @@ def _page(no: int, src: str = SMALL):
 
 def test_translate_batch_size_by_plan():
     assert translate_batch_size_for_plan(
-        {"openrouter": ["z-ai/glm-5.3"], "anthropic": [], "gemini": [], "openai": []}
-    ) == 2
+        {"openrouter": ["google/gemini-2.5-flash"], "anthropic": [], "gemini": [], "openai": []}
+    ) == 1
     assert translate_batch_size_for_plan(
         {"openrouter": ["stealth/ox-alpha"], "anthropic": [], "gemini": [], "openai": []}
     ) == 2

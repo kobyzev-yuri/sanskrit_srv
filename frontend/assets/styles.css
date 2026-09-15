@@ -111,7 +111,7 @@ textarea {
 .card h1 { margin: 0 0 0.35rem; font-size: 1.45rem; }
 .card p { margin: 0 0 1rem; color: var(--muted); }
 .form-col { display: grid; gap: 0.7rem; }
-.form-col label { display: grid; gap: 0.3rem; font-size: 0.92rem; color: var(--muted); }
+.form-col label, .form-col .form-field { display: grid; gap: 0.3rem; font-size: 0.92rem; color: var(--muted); }
 .check-row {
   display: flex !important;
   flex-direction: row !important;
@@ -921,9 +921,54 @@ mark.draft-hl-current {
   background: #faf6ee;
 }
 #style-bar select { max-width: 16rem; }
+#style-bar .style-notes-wrap {
+  flex: 1 1 100%;
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
 #style-notes {
-  flex: 1 1 14rem;
-  min-width: 10rem;
+  flex: 1 1 auto;
+  min-width: 12rem;
+  min-height: 5rem;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.prompt-file-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+.prompt-file-row textarea {
+  flex: 1 1 auto;
+  min-height: 6.5rem;
+}
+.file-load {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.file-load:hover { background: #faf6ee; }
+.file-load input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
 }
 .status-pill {
   display: inline-block;

@@ -54,7 +54,7 @@ def test_consecutive_page_runs_splits_gaps_and_cap():
 
 
 def test_digitize_batch_size_by_plan():
-    assert digitize_batch_size_for_plan({"openrouter": ["z-ai/glm-5v-turbo"], "anthropic": [], "gemini": [], "openai": []}) == 1
+    assert digitize_batch_size_for_plan({"openrouter": ["google/gemini-2.5-flash"], "anthropic": [], "gemini": [], "openai": []}) == 1
     assert digitize_batch_size_for_plan({"openrouter": [], "anthropic": [], "gemini": ["gemini-3.1-pro-preview"], "openai": []}) == 6
     assert digitize_batch_size_for_plan({"openrouter": [], "anthropic": [], "gemini": ["gemini-3.5-flash"], "openai": []}) == 3
     assert digitize_batch_size_for_plan({"openrouter": [], "anthropic": ["claude-opus-5"], "gemini": [], "openai": []}) == 4

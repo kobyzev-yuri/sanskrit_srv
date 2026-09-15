@@ -52,3 +52,25 @@ def test_rejects_ellipsis_stub():
     stub = '<article class="page-style" lang="ru"> … </article>'
     with pytest.raises(ValueError):
         validate_translation_html(stub)
+
+
+def test_blank_source_allows_empty_article():
+    src = '<article class="page-style" lang="sa">\n</article>'
+    out = '<article class="page-style" lang="ru">\n</article>'
+    assert validate_translation_html(out, source_html=src) == out
+    assert looks_like_translation_html(out, src)
+    assert not looks_like_translation_html(out)
+
+
+def test_rejects_thinking_sliced_from_quoted_p_tag():
+    """CoT quotes class names; must not treat that as the page."""
+    raw = (
+        'Do not merge several pādas into one Russian paragraph unless source is one prose block.\n'
+        '<p class="sa shloka" lang="sa">, then immediate next block '
+        '<p class="ru tr" lang="ru">. For verses, each verse gets one Sanskrit block.\n'
+        "Hmm. Let me think about what's most natural for these translation tasks. "
+        'The instruction "Keep verse numbers on the Sanskrit line."'
+    )
+    with pytest.raises(ValueError):
+        validate_translation_html(raw)
+    assert not looks_like_translation_html(raw)

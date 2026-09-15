@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     gemini_keys_file: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com"
     gemini_model: str = "gemini-3.1-pro-preview"
+    # Text-only (translate / translation proofread). Vision digitize stays on gemini_model.
+    gemini_translate_model: str = "gemini-3.1-pro-preview"
     # Claude via ProxyAPI Anthropic gateway (same OPENAI_API_KEY).
     anthropic_base_url: str = "https://api.proxyapi.ru/anthropic"
     anthropic_model: str = ""  # e.g. claude-opus-5 — empty = skip Claude
@@ -54,11 +56,6 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = ""
-    # Haimaker GLM-5.3 promo (same as LSE chat). Free through 2026-09-11 UTC.
-    # Separate from OpenRouter so Gemini/OpenRouter keep their own keys and URLs.
-    haimaker_api_key: str = ""
-    haimaker_base_url: str = "https://api.haimaker.ai/v1"
-    haimaker_model: str = "z-ai/glm-5v-turbo"
     openrouter_http_referer: str = "https://sanskrit-srv.local"
     openrouter_app_title: str = "sanskrit_srv"
     # Ceiling only; ox-alpha uses smaller per-task caps (see openrouter_ox.py).
@@ -70,10 +67,10 @@ class Settings(BaseSettings):
     # Auto-run whole-book pipeline only if PDF has this many pages or fewer.
     # Above this, upload extracts stubs; author digitizes page-by-page (avoids breaking large scans).
     large_book_pages: int = 10
-    # Consecutive unagreed pages per vision call. Ceiling only — Flash uses 3, Pro 6, Opus 4, GLM 1.
+    # Consecutive unagreed pages per vision call. Ceiling only — Flash uses 3, Pro 6, Opus 4.
     # Capped at 8 — 1M input is fine, ~32k output is not (dense page HTML is 3–8k tokens).
     digitize_batch_pages: int = 6
-    # Consecutive translation pages per text call. Ceiling only — Flash 3, Pro 6, Opus 4, GLM/ox 2.
+    # Consecutive translation pages per text call. Ceiling only — Flash 3, Pro 6, Opus 4.
     translate_batch_pages: int = 6
     # USD per 1M tokens: {"gemini:gemini-2.5-flash":{"in":0.1,"out":0.4}, ...}
     # JSON string in env LLM_PRICE_PER_1M; empty = no cost estimate.

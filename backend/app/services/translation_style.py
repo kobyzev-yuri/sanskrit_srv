@@ -2,22 +2,32 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
 STYLE_INTERLINEAR = "interlinear"
+STYLE_IAST_GLOSS = "iast_gloss"
 STYLE_SAMASA = "samasa_gloss"
 STYLE_CUSTOM = "custom"
-STYLES = (STYLE_INTERLINEAR, STYLE_SAMASA, STYLE_CUSTOM)
+STYLES = (STYLE_INTERLINEAR, STYLE_IAST_GLOSS, STYLE_SAMASA, STYLE_CUSTOM)
 
 ENGLISH_REPLACE = "replace"
 ENGLISH_DROP = "drop"
 ENGLISH_POLICIES = (ENGLISH_REPLACE, ENGLISH_DROP)
+NOTES_MAX = 20_000
 
 STYLES_CATALOG: list[dict[str, str]] = [
     {
         "id": STYLE_INTERLINEAR,
         "label": "Шлока + строка перевода",
         "hint": "После каждой санскритской строки — следующая строка литературным русским.",
+    },
+    {
+        "id": STYLE_IAST_GLOSS,
+        "label": "Пословно: рус. (IAST)",
+        "hint": "Грамотное русское предложение: слово (IAST); добавленное для связки — в [скобках]. Словарь кашмирского шиваизма в системном промпте.",
     },
     {
         "id": STYLE_SAMASA,
@@ -43,7 +53,7 @@ def default_translation_settings(
     return {
         "style": st,
         "english_comments": en,
-        "notes": (notes or "").strip()[:4000],
+        "notes": (notes or "").strip()[:NOTES_MAX],
         "agreed": True,
         "agreed_by": None,
         "agreed_at": None,
@@ -89,7 +99,13 @@ def lock_translation_template(project, user: Any = None) -> dict[str, Any]:
     return cfg
 
 
+def _read_prompt(name: str) -> str:
+    return (_PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
+
+
 def _style_prompt(style: str) -> str:
+    if style == STYLE_IAST_GLOSS:
+        return _read_prompt("iast_gloss_system.txt")
     if style == STYLE_SAMASA:
         return """TEMPLATE samasa_gloss (mandatory):
 - Keep each Sanskrit verse/prose block in Devanagari (class="sa shloka" or class="sa", lang="sa").
@@ -124,6 +140,93 @@ def _english_prompt(policy: str) -> str:
 - If a Latin phrase is a conventional siglum (e.g. cf., viz.) you may drop it or render in Russian."""
 
 
+def _engine_system(*, style: str, policy: str, notes: str) -> str:
+    if style == STYLE_IAST_GLOSS:
+        parts = [_read_prompt("iast_gloss_system.txt"), _english_prompt(policy)]
+        if notes:
+            parts.append("ДОПОЛНИТЕЛЬНЫЙ СЛОВАРЬ / ЗАМЕТКИ ЭКСПЕРТА:\n" + notes[:NOTES_MAX])
+        return "\n\n".join(parts)
+    parts = [
+        "You produce a Russian translation HTML fragment of a Sanskrit page already restored as HTML.",
+        "Start the reply with <article. Output ONLY the HTML fragment — no analysis, plans, or English commentary.",
+        "Output ONLY an HTML fragment: <article class=\"page-style\" lang=\"ru\"> … </article>. No markdown, no preface.",
+        "Keep Devanagari exactly as in the source. How Russian relates to Sanskrit is defined ONLY by the TEMPLATE (literary vs word-gloss). Do not mix templates.",
+        "Layout only via classes (sa, shloka, ru, tr, note, indent, centered, running-head, page-num). No inline style=, flex, float.",
+        "FIGURES / IMAGES: copy every <img …> and <figure …> from the SOURCE HTML with the src= URL "
+        "CHARACTER-FOR-CHARACTER identical (full /api/v1/pages/<uuid>/figures/crop-NN.png or emb-NN.png). "
+        "Do not invent, shorten, or 'fix' UUIDs. Do not translate alt into a reason to change src. "
+        "Do not use blob: URLs.",
+        _style_prompt(style),
+        _english_prompt(policy),
+    ]
+    if notes:
+        parts.append("EXPERT NOTES (binding):\n" + notes[:NOTES_MAX])
+    return "\n\n".join(parts)
+
+
+def _user_extras(
+    *,
+    directive: str | None,
+    current_html: str | None,
+    chunk_index: int | None,
+    chunk_total: int | None,
+) -> list[str]:
+    extra: list[str] = []
+    if (
+        chunk_index is not None
+        and chunk_total is not None
+        and chunk_total > 1
+        and chunk_index >= 1
+    ):
+        extra.append(
+            f"CHUNK {chunk_index} of {chunk_total} of ONE printed page. "
+            "Translate ONLY this SOURCE fragment. Do not invent content from other chunks. "
+            "Output one <article>…</article> covering just this part; parts will be concatenated."
+        )
+    if (directive or "").strip():
+        extra.append("ADDITIONAL DIRECTIVE for this page:\n" + directive.strip()[:NOTES_MAX])
+    if (current_html or "").strip():
+        extra.append(
+            "PREVIOUS TRANSLATION DRAFT (revise it; do not start from scratch unless the directive says so):\n"
+            + current_html.strip()[:20000]
+        )
+    return extra
+
+
+def build_translate_messages(
+    *,
+    source_html: str,
+    cfg: dict[str, Any],
+    current_html: str | None = None,
+    directive: str | None = None,
+    chunk_index: int | None = None,
+    chunk_total: int | None = None,
+) -> tuple[str, str]:
+    """Return (system, user). Page text never goes into system."""
+    style = str(cfg.get("style") or STYLE_INTERLINEAR)
+    policy = str(cfg.get("english_comments") or ENGLISH_REPLACE)
+    notes = (cfg.get("notes") or "").strip()
+    system = _engine_system(style=style, policy=policy, notes=notes)
+    extras = _user_extras(
+        directive=directive,
+        current_html=current_html,
+        chunk_index=chunk_index,
+        chunk_total=chunk_total,
+    )
+    source = (source_html or "").strip()[:40000]
+    if style == STYLE_IAST_GLOSS:
+        user = _read_prompt("iast_gloss_user.txt").replace("{source}", source, 1)
+        if extras:
+            user = user + "\n\n" + "\n\n".join(extras)
+        return system, user
+    user_parts = [
+        "The SOURCE HTML is diplomatic text (Devanagari). Do NOT 'correct' Vedic/old spellings unless the template says otherwise.",
+        *extras,
+        "SOURCE HTML:\n" + source,
+    ]
+    return system, "\n\n".join(user_parts)
+
+
 def build_translate_prompt(
     *,
     source_html: str,
@@ -133,62 +236,29 @@ def build_translate_prompt(
     chunk_index: int | None = None,
     chunk_total: int | None = None,
 ) -> str:
-    style = str(cfg.get("style") or STYLE_INTERLINEAR)
-    policy = str(cfg.get("english_comments") or ENGLISH_REPLACE)
-    notes = (cfg.get("notes") or "").strip()
-    parts = [
-        "You produce a Russian translation HTML fragment of a Sanskrit page already restored as HTML.",
-        "The SOURCE HTML is diplomatic text (Devanagari). Do NOT 'correct' Vedic/old spellings.",
-        "Start the reply with <article. Output ONLY the HTML fragment — no analysis, plans, or English commentary.",
-        "Output ONLY an HTML fragment: <article class=\"page-style\" lang=\"ru\"> … </article>. No markdown, no preface.",
-        "Keep Devanagari exactly as in the source. Russian is literary, not a word-for-word crib unless the template asks for glosses.",
-        "Layout only via classes (sa, shloka, ru, tr, note, indent, centered, running-head, page-num). No inline style=, flex, float.",
-        "FIGURES / IMAGES: copy every <img …> and <figure …> from the SOURCE HTML with the src= URL "
-        "CHARACTER-FOR-CHARACTER identical (full /api/v1/pages/<uuid>/figures/crop-NN.png or emb-NN.png). "
-        "Do not invent, shorten, or 'fix' UUIDs. Do not translate alt into a reason to change src. "
-        "Do not use blob: URLs.",
-        _style_prompt(style),
-        _english_prompt(policy),
-    ]
-    if (
-        chunk_index is not None
-        and chunk_total is not None
-        and chunk_total > 1
-        and chunk_index >= 1
-    ):
-        parts.append(
-            f"CHUNK {chunk_index} of {chunk_total} of ONE printed page. "
-            "Translate ONLY this SOURCE fragment. Do not invent content from other chunks. "
-            "Output one <article>…</article> covering just this part; parts will be concatenated."
-        )
-    if notes:
-        parts.append("EXPERT NOTES (binding):\n" + notes[:4000])
-    if (directive or "").strip():
-        parts.append("ADDITIONAL DIRECTIVE for this page:\n" + directive.strip()[:4000])
-    if (current_html or "").strip():
-        parts.append(
-            "PREVIOUS TRANSLATION DRAFT (revise it; do not start from scratch unless the directive says so):\n"
-            + current_html.strip()[:20000]
-        )
-    # Per-chunk source is already sized; keep a hard ceiling for single-shot pages.
-    parts.append("SOURCE HTML:\n" + (source_html or "").strip()[:40000])
-    return "\n\n".join(parts)
+    system, user = build_translate_messages(
+        source_html=source_html,
+        cfg=cfg,
+        current_html=current_html,
+        directive=directive,
+        chunk_index=chunk_index,
+        chunk_total=chunk_total,
+    )
+    return system + "\n\n" + user
 
 
-def build_translate_batch_prompt(
+def build_translate_batch_messages(
     *,
     pages: list[tuple[int, str]],
     cfg: dict[str, Any],
-) -> str:
-    """One prompt for several consecutive source pages (===PAGE n=== output)."""
+) -> tuple[str, str]:
     style = str(cfg.get("style") or STYLE_INTERLINEAR)
     policy = str(cfg.get("english_comments") or ENGLISH_REPLACE)
     notes = (cfg.get("notes") or "").strip()
     nos = [int(n) for n, _ in pages]
     first, last = nos[0], nos[-1]
-    parts = [
-        "You produce Russian translation HTML fragments of Sanskrit pages already restored as HTML.",
-        "The SOURCE HTML is diplomatic text (Devanagari). Do NOT 'correct' Vedic/old spellings.",
+    system = _engine_system(style=style, policy=policy, notes=notes)
+    user_parts = [
         f"You are given {len(pages)} consecutive pages {first}–{last}. "
         "Use neighbors for verse continuation and consistent terminology. "
         "Do not copy body text from one page onto another.",
@@ -198,16 +268,17 @@ def build_translate_batch_prompt(
         "===PAGE N===",
         '<article class="page-style" lang="ru">…</article>',
         "No commentary, markdown fences, or extra headings outside those blocks.",
-        "Keep Devanagari exactly as in the source. Russian is literary, not a word-for-word crib unless the template asks for glosses.",
-        "Layout only via classes (sa, shloka, ru, tr, note, indent, centered, running-head, page-num). No inline style=, flex, float.",
-        "FIGURES / IMAGES: copy every <img …> and <figure …> from that page's SOURCE HTML with the src= URL "
-        "CHARACTER-FOR-CHARACTER identical (full /api/v1/pages/<uuid>/figures/crop-NN.png or emb-NN.png). "
-        "Do not invent, shorten, or 'fix' UUIDs. Do not use blob: URLs.",
-        _style_prompt(style),
-        _english_prompt(policy),
     ]
-    if notes:
-        parts.append("EXPERT NOTES (binding):\n" + notes[:4000])
     for no, src in pages:
-        parts.append(f"SOURCE HTML for page {no}:\n" + (src or "").strip()[:40000])
-    return "\n\n".join(parts)
+        user_parts.append(f"SOURCE HTML for page {no}:\n" + (src or "").strip()[:40000])
+    return system, "\n\n".join(user_parts)
+
+
+def build_translate_batch_prompt(
+    *,
+    pages: list[tuple[int, str]],
+    cfg: dict[str, Any],
+) -> str:
+    """One prompt for several consecutive source pages (===PAGE n=== output)."""
+    system, user = build_translate_batch_messages(pages=pages, cfg=cfg)
+    return system + "\n\n" + user

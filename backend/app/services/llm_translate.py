@@ -31,7 +31,10 @@ from app.services.openrouter_ox import (
     openrouter_headers,
     post_openrouter_chat,
 )
-from app.services.translation_style import build_translate_batch_prompt, build_translate_prompt
+from app.services.translation_style import (
+    build_translate_batch_messages,
+    build_translate_messages,
+)
 
 
 # Combined source chars for one translate call. Dense interlinear HTML is ~2× this in output.
@@ -42,15 +45,15 @@ def translate_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> i
     """How many consecutive source pages to translate in one text call.
 
     Output is the limiter (interlinear HTML). Flash often stops after 1–2 pages if asked for 6.
-    GLM / ox-alpha keep a small n because thinking eats the completion cap.
+    ox-alpha keeps a small n because thinking eats the completion cap.
     """
     from app.config import get_settings as _gs
 
     cap = max(1, int(getattr(_gs(), "translate_batch_pages", 6) or 6))
     cap = min(cap, 8)
-    plan = plan if plan is not None else model_plan_primary_only()
+    plan = plan if plan is not None else model_plan_primary_only(text=True)
     or_models = " ".join(plan.get("openrouter") or []).lower()
-    if "glm" in or_models or "ox-alpha" in or_models or "stealth/" in or_models:
+    if "ox-alpha" in or_models or "stealth/" in or_models:
         return min(cap, 2)
     gemini = [str(m) for m in (plan.get("gemini") or [])]
     if gemini:
@@ -62,6 +65,14 @@ def translate_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> i
     if plan.get("openai"):
         return min(cap, 3)
     return 1
+
+
+BLANK_RU_ARTICLE = '<article class="page-style" lang="ru">\n</article>'
+
+
+def visible_html_text(html: str) -> str:
+    vis = re.sub(r"<[^>]+>", " ", html or "")
+    return re.sub(r"\s+", " ", vis).strip()
 
 
 def page_too_large_for_batch(source_html: str) -> bool:
@@ -126,23 +137,25 @@ def validate_translation_html(html: str, *, source_html: str | None = None) -> s
     if cleaned.count("<") < 2:
         raise ValueError("response has too few HTML tags")
     low = cleaned.lower()
-    if "<article" not in low and cleaned.count("<p") < 2:
+    if "<article" not in low:
         raise ValueError("response is not a page HTML fragment")
     visible = re.sub(r"<[^>]+>", " ", cleaned)
     visible = re.sub(r"\s+", " ", visible).strip()
     if len(visible) < 12:
+        if source_html is not None and not visible_html_text(source_html):
+            return cleaned
         raise ValueError("empty translation body")
     cyr = sum(1 for c in cleaned if "\u0400" <= c <= "\u04ff")
-    if cyr < 8 and 'class="ru"' not in low and "class='ru'" not in low:
+    if cyr < 8:
         raise ValueError("response lacks Russian translation")
     if source_html:
         cleaned = preserve_figure_srcs(source_html, cleaned)
     return cleaned
 
 
-def looks_like_translation_html(html: str) -> bool:
+def looks_like_translation_html(html: str, source_html: str | None = None) -> bool:
     try:
-        validate_translation_html(html)
+        validate_translation_html(html, source_html=source_html)
         return True
     except ValueError:
         return False
@@ -175,13 +188,13 @@ def translate_from_source(
 
     chunks = chunk_page_html(source_html)
     if len(chunks) <= 1:
-        prompt = build_translate_prompt(
+        system, user = build_translate_messages(
             source_html=source_html,
             cfg=cfg,
             current_html=current_html,
             directive=directive,
         )
-        raw, model, usage = run_text_prompt(prompt)
+        raw, model, usage = run_text_prompt(user, system=system)
         if on_chunk:
             on_chunk(1, 1, model, usage)
         html = validate_translation_html(raw, source_html=source_html)
@@ -194,7 +207,7 @@ def translate_from_source(
     model = ""
     total = len(chunks)
     for i, chunk_src in enumerate(chunks, start=1):
-        prompt = build_translate_prompt(
+        system, user = build_translate_messages(
             source_html=chunk_src,
             cfg=cfg,
             current_html=None,
@@ -202,7 +215,7 @@ def translate_from_source(
             chunk_index=i,
             chunk_total=total,
         )
-        raw, model, usage = run_text_prompt(prompt)
+        raw, model, usage = run_text_prompt(user, system=system)
         parts_html.append(extract_html_only(raw))
         usages.append(usage)
         if on_chunk:
@@ -238,11 +251,16 @@ def translate_from_sources(
             raise ValueError(f"empty Sanskrit source for page {no}")
         labeled.append((no, src))
     nos = [n for n, _ in labeled]
-    prompt = build_translate_batch_prompt(pages=labeled, cfg=cfg)
+    system, user = build_translate_batch_messages(pages=labeled, cfg=cfg)
     n = len(labeled)
     max_tokens = min(32768, max(8192, 8000 * n))
     timeout = 240.0 if n > 2 else 180.0
-    raw, model, usage = run_text_prompt(prompt, max_tokens=max_tokens, timeout=timeout)
+    plan = model_plan_primary_only(text=True)
+    think = " ".join(plan.get("openrouter") or []).lower()
+    if "ox-alpha" in think or "stealth/" in think:
+        max_tokens = min(max_tokens, 8192)
+        timeout = 180.0
+    raw, model, usage = run_text_prompt(user, system=system, max_tokens=max_tokens, timeout=timeout)
     blocks = split_batch_page_html(raw, page_nos=nos)
     out: dict[int, str] = {}
     errors: list[str] = []
@@ -264,14 +282,16 @@ def translate_from_sources(
 def run_text_prompt(
     user_text: str,
     *,
+    system: str | None = None,
     max_tokens: int | None = None,
     timeout: float | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     settings = get_settings()
-    plan = model_plan_primary_only()
+    plan = model_plan_primary_only(text=True)
     _require_keys_for_plan(settings, plan)
     errors: list[str] = []
     to = float(timeout or 180)
+    sys = (system or "").strip() or None
 
     for model in _uniq(plan.get("openrouter") or []):
         try:
@@ -280,12 +300,11 @@ def run_text_prompt(
                 effective_openrouter_base_url(),
                 model,
                 user_text,
+                system=sys,
                 max_tokens=max_tokens,
                 timeout=to,
             )
-            usage = {**usage, "network": (
-                "haimaker" if "haimaker.ai" in (effective_openrouter_base_url() or "") else "openrouter"
-            ), "model": model}
+            usage = {**usage, "network": "openrouter", "model": model}
             return text, f"openrouter:{model}", usage
         except (LlmQuotaError, LlmRateLimitError):
             raise
@@ -299,6 +318,7 @@ def run_text_prompt(
                 settings.anthropic_base_url,
                 model,
                 user_text,
+                system=sys,
                 max_tokens=max_tokens,
                 timeout=to,
             )
@@ -311,11 +331,15 @@ def run_text_prompt(
 
     for model in _uniq(plan.get("gemini") or []):
         try:
-            text, usage = _call_gemini_text(model, user_text, max_tokens=max_tokens, timeout=to)
+            text, usage = _call_gemini_text(
+                model, user_text, system=sys, max_tokens=max_tokens, timeout=to
+            )
             usage = {**usage, "network": "gemini", "model": model}
             return text, f"gemini:{model}", usage
-        except (LlmQuotaError, LlmRateLimitError):
+        except LlmQuotaError:
             raise
+        except LlmRateLimitError as exc:
+            errors.append(f"gemini:{model}: {exc}")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"gemini:{model}: {exc}")
 
@@ -326,6 +350,7 @@ def run_text_prompt(
                 settings.openai_base_url,
                 model,
                 user_text,
+                system=sys,
                 max_tokens=max_tokens,
                 timeout=to,
             )
@@ -339,19 +364,28 @@ def run_text_prompt(
     raise RuntimeError("; ".join(errors[-6:]) or "all models failed")
 
 
+def _openai_style_messages(user_text: str, system: str | None) -> list[dict[str, str]]:
+    msgs: list[dict[str, str]] = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    msgs.append({"role": "user", "content": user_text})
+    return msgs
+
+
 def _call_openrouter_text(
     api_key: str,
     base_url: str,
     model: str,
     user_text: str,
     *,
+    system: str | None = None,
     max_tokens: int | None = None,
     timeout: float = 180,
 ):
     url = f"{base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [{"role": "user", "content": user_text}],
+        "messages": _openai_style_messages(user_text, system),
     }
     apply_ox_chat_options(payload, model, task=TASK_TRANSLATE, max_tokens=max_tokens)
     data = post_openrouter_chat(
@@ -372,6 +406,7 @@ def _call_anthropic_text(
     model: str,
     user_text: str,
     *,
+    system: str | None = None,
     max_tokens: int | None = None,
     timeout: float = 180,
 ):
@@ -382,6 +417,8 @@ def _call_anthropic_text(
         "thinking": {"type": "disabled"},
         "messages": [{"role": "user", "content": [{"type": "text", "text": user_text}]}],
     }
+    if system:
+        payload["system"] = system
     resp = httpx.post(
         url,
         headers={
@@ -425,6 +462,7 @@ def _call_gemini_text(
     model: str,
     user_text: str,
     *,
+    system: str | None = None,
     max_tokens: int | None = None,
     timeout: float = 180,
 ):
@@ -433,6 +471,8 @@ def _call_gemini_text(
     kwargs: dict[str, Any] = {"timeout": timeout}
     if max_tokens:
         kwargs["max_output_tokens"] = max(1024, int(max_tokens))
+    if system:
+        kwargs["system"] = system
     return generate_gemini_content(
         model=model,
         parts=[{"text": user_text}],
@@ -446,6 +486,7 @@ def _call_openai_text(
     model: str,
     user_text: str,
     *,
+    system: str | None = None,
     max_tokens: int | None = None,
     timeout: float = 180,
 ):
@@ -454,7 +495,7 @@ def _call_openai_text(
         "model": model,
         "temperature": 0,
         "max_tokens": max(1024, int(max_tokens or 8192)),
-        "messages": [{"role": "user", "content": user_text}],
+        "messages": _openai_style_messages(user_text, system),
     }
     resp = httpx.post(
         url,

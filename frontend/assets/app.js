@@ -24,6 +24,42 @@ function toast(msg, err = false) {
   setTimeout(() => el.classList.remove("show"), err ? 8000 : 2600);
 }
 
+const PROMPT_FILE_MAX = 20000;
+
+function bindPromptFileInput(fileInput, textarea, onLoaded) {
+  if (!fileInput || !textarea || fileInput.dataset.boundPromptFile) return;
+  fileInput.dataset.boundPromptFile = "1";
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (!file) return;
+    if (textarea.disabled) {
+      toast("Сейчас это поле нельзя править", true);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || "")
+        .replace(/^\uFEFF/, "")
+        .replace(/\r\n/g, "\n");
+      if (!text.trim()) {
+        toast("Файл пустой", true);
+        return;
+      }
+      if (text.length > PROMPT_FILE_MAX) {
+        textarea.value = text.slice(0, PROMPT_FILE_MAX);
+        toast(`Промпт обрезан до ${PROMPT_FILE_MAX} символов`, true);
+      } else {
+        textarea.value = text;
+        toast(`Загружен промпт: ${file.name}`);
+      }
+      if (typeof onLoaded === "function") onLoaded();
+    };
+    reader.onerror = () => toast("Не удалось прочитать файл", true);
+    reader.readAsText(file, "UTF-8");
+  });
+}
+
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -287,10 +323,12 @@ function pipelineLabel(p) {
     if (pipe && (pipe.status === "running" || pipe.status === "queued")) {
       const pr = pipe.progress || {};
       const scope = pr.open_only ? "несогласованные" : "все";
+      const pack = pr.batch_pages > 1 ? `, пакет по ${pr.batch_pages}` : "";
       if (pr.scope === "translate_proofread") {
         return `смысловая проверка перевода · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
       }
-      return `перевод на русский · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"})`;
+      const wait = pr.wait_s ? `, ждём ${pr.wait_s}с` : "";
+      return `перевод на русский · ${scope}: ${pr.done ?? 0}/${pr.total ?? total} (сейчас стр. ${pr.current_page ?? "…"}${pack}${wait}${pr.rate_limited ? ", пауза шлюза" : ""})`;
     }
     if (pipe?.status === "failed") {
       const err = pipe.progress?.last_error || pipe.error || "";
@@ -304,7 +342,9 @@ function pipelineLabel(p) {
         const high = pr.applied_high != null ? ` · грубых правок ${pr.applied_high}` : "";
         return `смысловая проверка перевода · готово ${pr.done ?? 0}/${pr.total ?? total}${high}${flags}`;
       }
-      return `перевод на русский · готово ${pr.done ?? total}/${pr.total ?? total}`;
+      const skip = pr.skipped ? ` · пропущено ${pr.skipped}` : "";
+      const err = pr.last_error ? ` · ${String(pr.last_error).slice(0, 70)}` : "";
+      return `перевод на русский · готово ${pr.done ?? total}/${pr.total ?? total}${skip}${err}`;
     }
     return `перевод на русский · ${total} стр.`;
   }
@@ -415,6 +455,8 @@ function syncTaskUi() {
     if (sel) sel.disabled = !canEdit;
     if (eng) eng.disabled = !canEdit;
     if (notes) notes.disabled = !canEdit;
+    const notesFile = $("#style-notes-file");
+    if (notesFile) notesFile.disabled = !canEdit;
     const agreeBtn = $("#btn-agree-style");
     const revokeBtn = $("#btn-revoke-style");
     const mark = $("#style-agreed-mark");
@@ -504,7 +546,7 @@ function syncTranslateAllButtons() {
   const title = busy
     ? "Идёт перевод"
     : openOnly
-      ? "Перевести страницы без согласия (фильтр включён)"
+      ? "Страницы без согласия. Удачный черновик сразу считается согласованным."
       : "Перевести все страницы книги";
   const ids = ["btn-translate-all"];
   for (const id of ids) {
@@ -570,7 +612,7 @@ function updatePipelineBar() {
       ? "Оцифровать несогласованные"
       : "Подтвердить оцифровку всей книги";
     btn.title = openOnly
-      ? "Фильтр включён: LLM только по страницам без согласия"
+      ? "Страницы без согласия. Удачный черновик сразу считается согласованным."
       : "Запустить оцифровку всех страниц книги";
     syncTaskUi();
     return;
@@ -581,7 +623,7 @@ function updatePipelineBar() {
     btn.textContent = isDigitizeTextPdf()
       ? "Оцифровать несогласованные по скану"
       : "Оцифровать несогласованные";
-    btn.title = "Только страницы без статуса «согласовано» (фильтр слева)";
+    btn.title = "Страницы без согласия. Удачный черновик сразу считается согласованным.";
   } else if (isDigitizeTextPdf()) {
     btn.textContent = "Оцифровать по скану (LLM)";
     btn.title = "Все страницы, включая согласованные";
@@ -607,8 +649,11 @@ function usageLabel(u, llm) {
     .join(" · ");
   const usd =
     u.est_usd_total != null ? ` · ≈ $${Number(u.est_usd_total).toFixed(4)}` : "";
+  const label = String(llm?.route_label || "");
+  const modelId = String(llm?.route_model || "").split(":").pop() || "";
+  const showModel = Boolean(llm?.route_model && modelId && !label.includes(modelId));
   const live = llm?.route_label
-    ? `Сейчас: ${llm.key_source === "personal" ? "свой ключ · " : "бэкофис · "}${llm.route_label}${llm.route_model ? " (" + llm.route_model + ")" : ""}. `
+    ? `Сейчас: ${llm.key_source === "personal" ? "свой ключ · " : "бэкофис · "}${label}${showModel ? " (" + llm.route_model + ")" : ""}. `
     : llm?.message
       ? `Сейчас: ${llm.message}. `
       : "";
@@ -2708,6 +2753,12 @@ function wire() {
     el.dataset.boundStyle = "1";
     el.addEventListener("change", () => patchTranslationStyle());
   }
+  bindPromptFileInput($("#style-notes-file"), $("#style-notes"), () => patchTranslationStyle());
+  bindPromptFileInput($("#directive-file"), $("#directive-input"));
+  bindPromptFileInput(
+    $("#translate-notes-file"),
+    formField($("#translate-form"), "notes")
+  );
   const btnTrPage = $("#btn-translate-page");
   if (btnTrPage) btnTrPage.onclick = translatePage;
   const trForm = $("#translate-form");

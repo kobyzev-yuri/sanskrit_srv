@@ -298,3 +298,24 @@ def test_all_studio_keys_daily_quota_raises(tmp_path, monkeypatch):
             post=always,
         )
 
+
+def test_generate_sends_system_instruction():
+    captured: dict = {}
+    ok = {"candidates": [{"content": {"parts": [{"text": "OK"}]}}], "usageMetadata": {}}
+
+    def fake_post(*_a, **kwargs):
+        captured["payload"] = kwargs["json"]
+        return _Resp(200, json_data=ok)
+
+    text, _usage = generate_gemini_content(
+        model="gemini-3.5-flash",
+        parts=[{"text": "page html"}],
+        system="Ты — движок перевода",
+        api_key="k",
+        base_url="https://generativelanguage.googleapis.com",
+        post=fake_post,
+    )
+    assert text == "OK"
+    assert captured["payload"]["systemInstruction"]["parts"][0]["text"] == "Ты — движок перевода"
+    assert captured["payload"]["contents"][0]["parts"][0]["text"] == "page html"
+

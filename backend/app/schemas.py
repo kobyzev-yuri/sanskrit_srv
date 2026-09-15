@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.models import PageStatus, Role, VersionSource
+from app.services.translation_style import NOTES_MAX
 
 
 class TokenOut(BaseModel):
@@ -253,12 +254,12 @@ class PageHtmlIn(BaseModel):
 
 class PageReviseIn(BaseModel):
     """Natural-language directive to re-draft the page from its scan."""
-    directive: str = Field(min_length=3, max_length=4000)
+    directive: str = Field(min_length=3, max_length=NOTES_MAX)
 
 
 class PageReviewAgainIn(BaseModel):
     """Optional note; empty → default «пересмотри страницу»."""
-    directive: str | None = Field(default=None, max_length=4000)
+    directive: str | None = Field(default=None, max_length=NOTES_MAX)
 
 
 class PageVersionOut(BaseModel):
@@ -280,7 +281,7 @@ class ExtractIn(BaseModel):
 class TranslationStyleIn(BaseModel):
     style: str | None = None
     english_comments: str | None = None
-    notes: str | None = Field(default=None, max_length=4000)
+    notes: str | None = Field(default=None, max_length=NOTES_MAX)
     agree: bool | None = None
 
 
@@ -289,11 +290,11 @@ class SpawnTranslationIn(BaseModel):
     title: str | None = None
     style: str = "interlinear"
     english_comments: str = "replace"
-    notes: str = ""
+    notes: str = Field(default="", max_length=NOTES_MAX)
 
 
 class PageTranslateIn(BaseModel):
-    directive: str | None = Field(default=None, max_length=4000)
+    directive: str | None = Field(default=None, max_length=NOTES_MAX)
 
 
 class LlmUsageTotalsOut(BaseModel):
