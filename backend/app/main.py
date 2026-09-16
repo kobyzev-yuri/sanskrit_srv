@@ -19,7 +19,7 @@ ensure_schema()
 app = FastAPI(
     title="Sanskrit SRV",
     description="OCR/LLM draft + expert HTML editing for Sanskrit scans",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
@@ -40,7 +40,7 @@ app.include_router(pages.router, prefix="/api/v1")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "sanskrit_srv", "version": "0.1.0"}
+    return {"status": "ok", "service": "sanskrit_srv", "version": "0.2.0"}
 
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
