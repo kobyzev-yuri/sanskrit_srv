@@ -11,6 +11,9 @@ const state = {
   proofSuggestions: [],
   draftQuery: "",
   draftHits: [],
+  /** @type {""|"draft"|"source"} */
+  workFocus: "",
+  workFocusPinned: false,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -534,19 +537,24 @@ function syncTaskUi() {
     const notes = $("#style-notes");
     if (sel && cfg.style) sel.value = cfg.style;
     if (eng && cfg.english_comments) eng.value = cfg.english_comments;
-    if (notes) notes.value = cfg.notes || "";
+    const notesPanel = $("#style-notes-panel");
+    if (notes && (notesPanel?.hidden ?? true)) notes.value = cfg.notes || "";
     const canEdit = canAgreeStyle();
     if (sel) sel.disabled = !canEdit;
     if (eng) eng.disabled = !canEdit;
     if (notes) notes.disabled = !canEdit;
     const notesFile = $("#style-notes-file");
     if (notesFile) notesFile.disabled = !canEdit;
+    const saveBtn = $("#btn-save-style");
+    if (saveBtn) saveBtn.disabled = !canEdit;
     const agreeBtn = $("#btn-agree-style");
     const revokeBtn = $("#btn-revoke-style");
     const mark = $("#style-agreed-mark");
     if (agreeBtn) agreeBtn.hidden = true;
     if (revokeBtn) revokeBtn.hidden = true;
     if (mark) mark.textContent = canEdit ? "шаблон можно править" : "";
+  } else {
+    setStyleNotesOpen(false);
   }
 
   const dir = $("#directive-input");
@@ -1273,6 +1281,42 @@ function currentSourceHtml() {
   return state.page?.source_html || "";
 }
 
+function currentPreviewTab() {
+  return $("#preview-panel .tab.active")?.dataset.tab || "preview";
+}
+
+function draftTabIsEdit(name) {
+  return name === "wysiwyg" || name === "source";
+}
+
+function setWorkFocus(mode, opts = {}) {
+  const next = mode || "";
+  if (opts.user) state.workFocusPinned = next === "";
+  else if (next) state.workFocusPinned = false;
+  state.workFocus = next;
+  const layout = $("#editor-layout");
+  const view = $("#view-editor");
+  if (layout) {
+    layout.classList.toggle("work-draft", next === "draft");
+    layout.classList.toggle("work-source", next === "source");
+  }
+  if (view) view.classList.toggle("work-focus", Boolean(next));
+  const derived = isDerived();
+  const showLeft = $("#btn-show-left");
+  const showAgent = $("#btn-show-agent");
+  const showDraft = $("#btn-show-draft");
+  if (showLeft) {
+    showLeft.hidden = next !== "draft";
+    showLeft.textContent = derived ? "‹ Санскрит" : "‹ Скан";
+  }
+  if (showAgent) showAgent.hidden = next !== "draft";
+  if (showDraft) showDraft.hidden = next !== "source";
+}
+
+function restoreWorkPanes() {
+  setWorkFocus("", { user: true });
+}
+
 function switchSourceTab(name) {
   const panel = $("#left-panel");
   const preview = $("#left-source-html");
@@ -1287,6 +1331,13 @@ function switchSourceTab(name) {
     sub.textContent = htmlOn ? "в оцифровку — новой версией" : "выверенный текст";
   }
   if (!htmlOn && isDerived()) renderLeftPane();
+  if (htmlOn) {
+    if (!state.workFocusPinned) setWorkFocus("source");
+  } else if (draftTabIsEdit(currentPreviewTab())) {
+    if (!state.workFocusPinned) setWorkFocus("draft");
+  } else {
+    setWorkFocus("");
+  }
 }
 
 function pageSavePayload(note) {
@@ -1455,6 +1506,12 @@ function switchTab(name) {
   $$("#preview-panel .tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
   if (name === "preview") renderPreview($("#html-editor").value);
   if (name === "wysiwyg") renderWysiwyg($("#html-editor").value);
+  if (draftTabIsEdit(name)) {
+    if (!state.workFocusPinned) setWorkFocus("draft");
+  } else {
+    state.workFocusPinned = false;
+    setWorkFocus("");
+  }
 }
 
 function switchAgentTab(name) {
@@ -2116,8 +2173,43 @@ async function spawnTranslation(ev) {
   }
 }
 
+function styleNotesOpen() {
+  const panel = $("#style-notes-panel");
+  return Boolean(panel && !panel.hidden);
+}
+
+function setStyleNotesOpen(open) {
+  const panel = $("#style-notes-panel");
+  const bar = $("#style-bar");
+  const btn = $("#btn-toggle-style");
+  if (panel) panel.hidden = !open;
+  if (bar) bar.classList.toggle("notes-open", Boolean(open));
+  if (btn) {
+    btn.classList.toggle("is-on", Boolean(open));
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  if (open) {
+    const notes = $("#style-notes");
+    if (notes && !notes.disabled) notes.focus();
+  }
+}
+
+async function toggleStyleNotes() {
+  if (styleNotesOpen()) {
+    if (canAgreeStyle()) await saveStyleAndClose();
+    else setStyleNotesOpen(false);
+  } else {
+    setStyleNotesOpen(true);
+  }
+}
+
+async function saveStyleAndClose() {
+  const ok = await patchTranslationStyle(true);
+  if (ok) setStyleNotesOpen(false);
+}
+
 async function patchTranslationStyle(agree) {
-  if (!state.project) return;
+  if (!state.project) return false;
   const payload = {
     style: $("#style-select").value,
     english_comments: $("#style-english").value,
@@ -2137,8 +2229,10 @@ async function patchTranslationStyle(agree) {
     syncTaskUi();
     if (agree === true) toast("Шаблон сохранён");
     else if (agree === false) toast("Согласование отозвано");
+    return true;
   } catch (e) {
     toast(e.message, true);
+    return false;
   }
 }
 
@@ -2944,13 +3038,21 @@ function wire() {
   if (btnAgree) btnAgree.onclick = () => patchTranslationStyle(true);
   const btnRevokeStyle = $("#btn-revoke-style");
   if (btnRevokeStyle) btnRevokeStyle.onclick = () => patchTranslationStyle(false);
-  for (const id of ["style-select", "style-english", "style-notes"]) {
+  const btnToggleStyle = $("#btn-toggle-style");
+  if (btnToggleStyle) btnToggleStyle.onclick = () => toggleStyleNotes();
+  const btnSaveStyle = $("#btn-save-style");
+  if (btnSaveStyle) btnSaveStyle.onclick = () => saveStyleAndClose();
+  for (const id of ["btn-show-left", "btn-show-agent", "btn-show-draft"]) {
+    const el = $(`#${id}`);
+    if (el) el.onclick = restoreWorkPanes;
+  }
+  for (const id of ["style-select", "style-english"]) {
     const el = $(`#${id}`);
     if (!el || el.dataset.boundStyle) continue;
     el.dataset.boundStyle = "1";
     el.addEventListener("change", () => patchTranslationStyle());
   }
-  bindPromptFileInput($("#style-notes-file"), $("#style-notes"), () => patchTranslationStyle());
+  bindPromptFileInput($("#style-notes-file"), $("#style-notes"));
   bindPromptFileInput($("#directive-file"), $("#directive-input"));
   bindPromptFileInput(
     $("#translate-notes-file"),
@@ -3038,6 +3140,12 @@ function wire() {
   });
   document.addEventListener("keydown", (e) => {
     if (!$("#view-editor").classList.contains("active")) return;
+    if (e.key === "Escape" && styleNotesOpen()) {
+      e.preventDefault();
+      if (canAgreeStyle()) saveStyleAndClose();
+      else setStyleNotesOpen(false);
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
       const box = $("#draft-search");
       if (box) {

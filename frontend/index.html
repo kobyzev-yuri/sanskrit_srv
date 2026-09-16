@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260915iast" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260916ui" />
 </head>
 <body>
   <div class="app-shell">
@@ -138,17 +138,21 @@
                 <option value="replace">англ. → русский</option>
                 <option value="drop">англ. убрать</option>
               </select>
+              <button type="button" id="btn-toggle-style" title="Открыть заметки и промпт шаблона" aria-expanded="false">Шаблон</button>
               <button type="button" class="primary" id="btn-agree-style" hidden>Согласовать шаблон</button>
               <button type="button" id="btn-revoke-style" hidden>Отозвать шаблон</button>
               <button type="button" class="primary" id="btn-translate-all" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Перевести несогласованные</button>
               <button type="button" id="btn-proofread-all" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Проверить несогласованные</button>
               <span class="muted" id="style-agreed-mark"></span>
-              <div class="style-notes-wrap">
-                <textarea id="style-notes" rows="4" maxlength="20000" placeholder="Заметки или свой промпт к шаблону — можно загрузить из файла"></textarea>
-                <label class="file-load" title="Загрузить промпт из текстового файла">
-                  Из файла
-                  <input id="style-notes-file" type="file" accept=".txt,.md,.text,.prompt,text/plain" />
-                </label>
+              <div class="style-notes-wrap" id="style-notes-panel" hidden>
+                <textarea id="style-notes" rows="6" maxlength="20000" placeholder="Заметки или свой промпт к шаблону — можно загрузить из файла"></textarea>
+                <div class="style-notes-side">
+                  <label class="file-load" title="Загрузить промпт из текстового файла">
+                    Из файла
+                    <input id="style-notes-file" type="file" accept=".txt,.md,.text,.prompt,text/plain" />
+                  </label>
+                  <button type="button" class="primary" id="btn-save-style">Сохранить шаблон</button>
+                </div>
               </div>
             </div>
             <div class="toolbar extract-bar" id="usage-bar" hidden>
@@ -164,6 +168,7 @@
                     <button type="button" class="tab" data-source-tab="html" title="Правка санскрита пишется в оцифровку новой версией">HTML</button>
                   </div>
                   <span class="muted" id="left-pane-sub">как в PDF</span>
+                  <button type="button" class="ghost pane-restore" id="btn-show-draft" hidden title="Показать черновик и задание">Черновик ›</button>
                 </header>
                 <div class="scan-pane" id="left-scan-wrap">
                   <img id="scan-img" alt="scan page" />
@@ -174,12 +179,14 @@
               </section>
               <section class="panel edit-pane" id="preview-panel">
                 <header>
+                  <button type="button" class="ghost pane-restore" id="btn-show-left" hidden title="Показать левую панель">‹ Санскрит</button>
                   <div class="tabs preview-tabs">
                     <button type="button" class="tab active" data-tab="preview">Превью</button>
                     <button type="button" class="tab" data-tab="wysiwyg" title="Правка текста без HTML-тегов">Текст</button>
                     <button type="button" class="tab" data-tab="source">HTML</button>
                   </div>
                   <span class="muted sa" id="right-pane-sub">देवनागरी</span>
+                  <button type="button" class="ghost pane-restore" id="btn-show-agent" hidden title="Показать задание">Задание ›</button>
                 </header>
                 <div class="preview-body">
                   <div id="tab-preview" class="tab-panel active">
@@ -477,6 +484,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260916open"></script>
+  <script src="/assets/app.js?v=20260916ui"></script>
 </body>
 </html>
