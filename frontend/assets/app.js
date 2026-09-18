@@ -2994,17 +2994,24 @@ async function saveAccountProfile(ev) {
 
 async function saveAccountLlm(ev) {
   ev.preventDefault();
-  const useDefault = Boolean($("#account-use-default")?.checked);
-  const body = { use_default_llm: useDefault };
   const orKey = String(ev.target.openrouter_api_key.value || "").trim();
   const pxKey = String(ev.target.proxyapi_key.value || "").trim();
+  const orModel = String(ev.target.openrouter_model?.value || "").trim();
+  const boxWasDefault = Boolean($("#account-use-default")?.checked);
+  // Own Timeweb/ProxyAPI key always leaves backoffice tokens (disabled radios
+  // would otherwise still send the admin Gemini route).
+  const useDefault = Boolean(boxWasDefault && !orKey && !pxKey);
+  const body = { use_default_llm: useDefault };
   if (orKey) body.openrouter_api_key = orKey;
   if (pxKey) body.proxyapi_key = pxKey;
-  if (!useDefault) {
-    body.openrouter_model = String(ev.target.openrouter_model?.value || "").trim();
-  }
   const picked = document.querySelector('input[name="account-llm-route"]:checked');
-  if (picked && !useDefault) body.llm_route = picked.value;
+  if (!useDefault) {
+    if (orModel) body.openrouter_model = orModel;
+    if (orKey) body.llm_route = "openrouter";
+    else if (picked && !boxWasDefault) body.llm_route = picked.value;
+    else if (pxKey) body.llm_route = "opus";
+    else if (picked) body.llm_route = picked.value;
+  }
   try {
     await api("/auth/me/llm", { method: "PATCH", json: body });
     ev.target.openrouter_api_key.value = "";

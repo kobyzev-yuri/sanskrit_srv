@@ -16,7 +16,15 @@ from app.schemas import (
     UserOut,
 )
 from app.services.account import assert_ident_free, normalize_login
-from app.services.llm_route import ROUTES, _key_hint, creds_from_user, describe_route, llm_user_context, sanitize_openrouter_model
+from app.services.llm_route import (
+    ROUTES,
+    _key_hint,
+    creds_from_user,
+    describe_route,
+    heal_personal_llm_route,
+    llm_user_context,
+    sanitize_openrouter_model,
+)
 from app.services.llm_usage import user_usage_summary
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -123,6 +131,8 @@ def patch_me_llm(
         user.openrouter_api_key = key or None
         if key:
             user.use_default_llm = False
+            if body.llm_route is None:
+                user.llm_route = "openrouter"
     if body.openrouter_model is not None:
         model = sanitize_openrouter_model(body.openrouter_model)
         user.openrouter_model = model or None
@@ -133,8 +143,11 @@ def patch_me_llm(
         user.proxyapi_key = key or None
         if key:
             user.use_default_llm = False
+            if body.llm_route is None and not (user.openrouter_api_key or "").strip():
+                user.llm_route = "opus"
     if user.use_default_llm and not user.allow_default_llm:
         user.use_default_llm = False
+    heal_personal_llm_route(user)
     db.commit()
     db.refresh(user)
     return _me_llm_out(user)

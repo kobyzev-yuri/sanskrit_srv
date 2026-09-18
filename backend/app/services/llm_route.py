@@ -234,6 +234,35 @@ def creds_from_settings(*, user_id: uuid.UUID | None = None) -> LlmCreds:
     )
 
 
+def infer_personal_route(user: Any) -> RouteId:
+    """Personal network: stored route, else Timeweb/ProxyAPI key, else admin file.
+
+    Saving a Timeweb key used to leave `users.llm_route` NULL. Falling back to the
+    admin Gemini file then ignored the expert's Gateway key.
+    """
+    route_raw = str(getattr(user, "llm_route", None) or "").strip()
+    if route_raw in ROUTES:
+        return route_raw  # type: ignore[return-value]
+    if (getattr(user, "openrouter_api_key", None) or "").strip():
+        return "openrouter"
+    if (getattr(user, "proxyapi_key", None) or "").strip():
+        return "opus"
+    return get_global_route()
+
+
+def heal_personal_llm_route(user: Any) -> None:
+    """Persist inferred network when the expert left backoffice tokens."""
+    if bool(getattr(user, "use_default_llm", True)):
+        return
+    route_raw = str(getattr(user, "llm_route", None) or "").strip()
+    if route_raw in ROUTES:
+        return
+    if (getattr(user, "openrouter_api_key", None) or "").strip():
+        user.llm_route = "openrouter"
+    elif (getattr(user, "proxyapi_key", None) or "").strip():
+        user.llm_route = "opus"
+
+
 def creds_from_user(user: Any | None) -> LlmCreds:
     """Resolve keys for this user. Default = admin route + server .env, if granted."""
     if user is None:
@@ -243,11 +272,9 @@ def creds_from_user(user: Any | None) -> LlmCreds:
     use_default = bool(getattr(user, "use_default_llm", True)) and allow
     if use_default:
         return creds_from_settings(user_id=uid)
-    route_raw = str(getattr(user, "llm_route", None) or "").strip()
-    route: RouteId = route_raw if route_raw in ROUTES else get_global_route()
     return LlmCreds(
         use_default=False,
-        route=route,
+        route=infer_personal_route(user),
         openrouter_api_key=(getattr(user, "openrouter_api_key", None) or "").strip(),
         openai_api_key=(getattr(user, "proxyapi_key", None) or "").strip(),
         gemini_api_key="",

@@ -9,6 +9,7 @@ import pytest
 from app.services.llm_route import (
     creds_from_user,
     get_route,
+    heal_personal_llm_route,
     llm_user_context,
     model_plan_primary_only,
     require_keys_for_plan,
@@ -22,6 +23,7 @@ def _user(**kwargs):
         use_default_llm=True,
         llm_route=None,
         openrouter_api_key=None,
+        openrouter_model=None,
         proxyapi_key=None,
     )
     defaults.update(kwargs)
@@ -126,6 +128,45 @@ def test_denied_default_requires_own_key(tmp_path, monkeypatch):
     with llm_user_context(user):
         with pytest.raises(RuntimeError, match="кабинете"):
             require_keys_for_plan({"openrouter": ["stealth/ox-alpha"], "anthropic": [], "gemini": [], "openai": []})
+
+
+def test_personal_timeweb_key_without_route_beats_admin_gemini(tmp_path, monkeypatch):
+    """Yuri: own Timeweb key saved, llm_route still NULL, admin file = gemini."""
+    from app.services import llm_route as lr
+    from app.services.llm_route import DEFAULT_TIMEWEB_MODEL
+
+    monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "llm_route.json").write_text('{"route": "gemini"}\n', encoding="utf-8")
+    user = _user(
+        use_default_llm=False,
+        llm_route=None,
+        openrouter_api_key="tw-expert-_njg",
+        openrouter_model=None,
+    )
+    creds = creds_from_user(user)
+    assert creds.key_source == "personal"
+    assert creds.route == "openrouter"
+    assert creds.openrouter_api_key.endswith("njg")
+    with llm_user_context(user):
+        assert get_route() == "openrouter"
+        plan = model_plan_primary_only()
+        assert plan["openrouter"] == [DEFAULT_TIMEWEB_MODEL]
+        assert plan["gemini"] == []
+        require_keys_for_plan(plan)
+
+
+def test_heal_personal_route_from_timeweb_key():
+    user = _user(use_default_llm=False, llm_route=None, openrouter_api_key="tw-key")
+    heal_personal_llm_route(user)
+    assert user.llm_route == "openrouter"
+
+
+def test_heal_leaves_backoffice_route_alone():
+    user = _user(use_default_llm=True, llm_route=None, openrouter_api_key="tw-key")
+    heal_personal_llm_route(user)
+    assert user.llm_route is None
 
 
 def test_studio_gemini_does_not_need_proxyapi(tmp_path, monkeypatch):
