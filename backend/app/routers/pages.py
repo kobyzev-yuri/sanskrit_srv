@@ -44,11 +44,18 @@ from app.services.llm_proofread import (
 )
 from app.services.llm_status import GEMINI_RATE_LIMIT_MSG, LlmQuotaError, LlmRateLimitError
 from app.services.llm_route import llm_user_context
-from app.services.llm_translate import translate_from_source, transliterate_from_source
+from app.services.llm_translate import (
+    BLANK_IAST_ARTICLE,
+    english_passthrough_html,
+    source_is_latin_page,
+    translate_from_source,
+    transliterate_from_source,
+)
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
 from app.services.source_sync import sync_sanskrit_to_digitize
 from app.services.translation_style import (
+    ENGLISH_KEEP,
     is_source_html_task,
     lock_translation_template,
     lock_transliteration_template,
@@ -297,8 +304,19 @@ def accept_page(
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
-    if not page.current_html:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Nothing to accept — wait for draft")
+    if not (page.current_html or "").strip():
+        project = db.get(Project, page.project_id)
+        src = (page.source_html or "").strip()
+        if (
+            project is not None
+            and project_task(project) == "transliterate"
+            and src
+            and source_is_latin_page(src)
+            and str(transliteration_cfg(project).get("english_comments") or "") == ENGLISH_KEEP
+        ):
+            page.current_html = english_passthrough_html(src)
+        else:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Nothing to accept — wait for draft")
     page.status = PageStatus.expert_done
     page.assigned_expert_id = user.id
     db.commit()
@@ -480,6 +498,11 @@ def _apply_transliterate_revision(
     if not source_html:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет выверенного санскрита на этой странице")
     cfg = transliteration_cfg(project)
+    if source_is_latin_page(source_html):
+        keep = str(cfg.get("english_comments") or "") == ENGLISH_KEEP
+        html = english_passthrough_html(source_html) if keep else BLANK_IAST_ARTICLE
+        note = "english kept from source" if keep else "english dropped (latin-only page)"
+        return _save_page_html(db, page, user, html, source=VersionSource.llm, note=note)
     try:
         with llm_user_context(user):
             html, model, usage = transliterate_from_source(
@@ -491,7 +514,10 @@ def _apply_transliterate_revision(
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Transliterate failed: {exc}") from exc
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail=f"Транслитерация не удалась: {exc}",
+        ) from exc
 
     record_usage(
         db,

@@ -409,6 +409,26 @@ function isTransliterate() {
   return (state.project?.task || state.project?.settings?.task) === "transliterate";
 }
 
+function sourceLooksLatin(html) {
+  const s = String(html || "");
+  const marks = s.match(/[\u0900-\u097F]/g);
+  const deva = marks ? marks.length : 0;
+  if (deva >= 8) return false;
+  const vis = s.replace(/<[^>]+>/g, " ");
+  const latin = vis.match(/[A-Za-zÀ-ɏ]{2,}/g) || [];
+  if (deva === 0) return latin.length >= 2;
+  return latin.length >= 12;
+}
+
+function keepEnglishDraft() {
+  return isTransliterate() && translationCfg().english_comments === "keep";
+}
+
+function pageHasDraftHtml() {
+  if ((state.page?.current_html || "").trim()) return true;
+  return keepEnglishDraft() && sourceLooksLatin(state.page?.source_html || "");
+}
+
 function isDerived() {
   return isTranslate() || isTransliterate();
 }
@@ -1085,7 +1105,7 @@ function highlightThumb(pageId) {
 }
 
 function updateEditMode() {
-  const hasHtml = Boolean((state.page?.current_html || "").trim());
+  const hasHtml = pageHasDraftHtml();
   const accepted = state.page?.status === "expert_done" && hasHtml;
   $("#accepted-box").hidden = !accepted;
   $("#edit-tools").hidden = accepted;
@@ -1469,7 +1489,10 @@ function renderWysiwyg(html) {
         : "Правите санскрит прямо в строках, как в книге. Скан слева, теги не показываются.";
   }
   let src = (html || "").trim();
-  if (!src && isTranslate() && (state.page?.source_html || "").trim()) {
+  if (!src && keepEnglishDraft() && sourceLooksLatin(state.page?.source_html || "")) {
+    src = (state.page.source_html || "").trim();
+    $("#html-editor").value = src;
+  } else if (!src && isTranslate() && (state.page?.source_html || "").trim()) {
     src = seedRuAfterSa(state.page.source_html);
     $("#html-editor").value = src;
   } else if (
@@ -1739,7 +1762,11 @@ async function loadPage(pageId) {
   $$(".draft-search-hit").forEach((el) => {
     el.classList.toggle("active", el.dataset.id === String(pageId));
   });
-  setDraftHtml(state.page.current_html || "");
+  let draft = state.page.current_html || "";
+  if (!String(draft).trim() && keepEnglishDraft() && sourceLooksLatin(state.page.source_html || "")) {
+    draft = state.page.source_html || "";
+  }
+  setDraftHtml(draft);
   setSourceHtml(state.page.source_html || "");
   const accepted =
     state.page.status === "expert_done" && Boolean((state.page.current_html || "").trim());
@@ -1855,6 +1882,7 @@ async function acceptPage() {
       html = saved;
     }
     if (!(html || "").trim()) html = saved;
+    if (!(html || "").trim() && keepEnglishDraft()) html = state.page.source_html || "";
     if (!(html || "").trim()) {
       toast("Нет черновика — нечего согласовать", true);
       return;

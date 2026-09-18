@@ -85,6 +85,32 @@ def test_plain_rejected_as_block():
         validate_transliteration_html(PLAIN, style=STYLE_IAST_BLOCK)
 
 
+def test_source_is_latin_page():
+    from app.services.llm_translate import source_is_latin_page
+
+    english = (
+        '<article class="page-style" lang="en">'
+        "<h1>The Doctrine of Vibration</h1><p>Translated from the Sanskrit with notes.</p>"
+        "</article>"
+    )
+    short_sa = '<article class="page-style" lang="sa"><p class="sa">यज्ञः</p></article>'
+    assert source_is_latin_page(english)
+    assert not source_is_latin_page(short_sa)
+    assert not source_is_latin_page(BLOCK)
+    raw = "yajño vai śreṣṭhatamaṃ karma\nagniḥ pūrvebhiḥ"
+    out = validate_transliteration_html(raw, style=STYLE_IAST_BLOCK)
+    assert "<article" in out.lower()
+    assert "yajño" in out
+    assert 'class="iast"' in out
+
+
+def test_inner_tags_without_article_are_wrapped():
+    raw = '<p class="sa">यज्ञः</p>\n<p class="iast">yajñaḥ</p>'
+    out = validate_transliteration_html(raw, style=STYLE_IAST_BLOCK)
+    assert "<article" in out.lower()
+    assert "yajñaḥ" in out
+
+
 def test_russian_translation_is_not_iast():
     html = (
         '<article class="page-style" lang="ru">'

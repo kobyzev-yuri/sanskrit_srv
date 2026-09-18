@@ -1,6 +1,7 @@
 """Translate verified Sanskrit HTML → Russian HTML (text LLM, no scan)."""
 from __future__ import annotations
 
+import html as htmlmod
 import re
 from typing import Any, Callable
 
@@ -74,11 +75,82 @@ _IAST_CLASS_RE = re.compile(r"""class=["'][^"']*\biast\b""", re.I)
 _SA_CLASS_RE = re.compile(r"""class=["'][^"']*\b(?:sa|shloka)\b""", re.I)
 _DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
 _IAST_MARK_RE = re.compile(r"[āīūṛṝḷḹṅñṭḍṇśṣḥṃĀĪŪṚṜḶḸṄÑṬḌṆŚṢḤṂ]|lang=[\"']sa-latn", re.I)
+_LATIN_PAGE_MAX_DEVA = 8
 
 
 def visible_html_text(html: str) -> str:
     vis = re.sub(r"<[^>]+>", " ", html or "")
     return re.sub(r"\s+", " ", vis).strip()
+
+
+def source_devanagari_count(html: str) -> int:
+    return len(_DEVANAGARI_RE.findall(html or ""))
+
+
+def source_is_latin_page(html: str, *, min_deva: int = _LATIN_PAGE_MAX_DEVA) -> bool:
+    """Title / colophon / English preface: not enough Devanagari to transliterate."""
+    deva = source_devanagari_count(html)
+    if deva >= min_deva:
+        return False
+    vis = visible_html_text(html)
+    latin_words = len(re.findall(r"[A-Za-zÀ-ɏ]{2,}", vis))
+    if deva == 0:
+        return latin_words >= 2
+    return latin_words >= 12
+
+
+def english_passthrough_html(source_html: str) -> str:
+    """Keep the original English (or Latin) page as the IAST-project draft."""
+    cleaned = extract_html_only(source_html)
+    if "<article" not in cleaned.lower():
+        cleaned = f'<article class="page-style" lang="en">\n{cleaned}\n</article>'
+    return cleaned
+
+
+def _plain_lines_to_html(text: str, *, default_lang: str = "sa-Latn") -> str:
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        lines = [(text or "").strip()]
+    parts: list[str] = []
+    for ln in lines:
+        esc = htmlmod.escape(ln, quote=True)
+        if _DEVANAGARI_RE.search(ln):
+            parts.append(f'<p class="sa" lang="sa">{esc}</p>')
+        elif _IAST_MARK_RE.search(ln):
+            parts.append(f'<p class="iast" lang="sa-Latn">{esc}</p>')
+        elif default_lang == "en":
+            parts.append(f'<p class="note" lang="en">{esc}</p>')
+        else:
+            parts.append(f'<p class="iast" lang="sa-Latn">{esc}</p>')
+    lang = "sa" if any(_DEVANAGARI_RE.search(ln) for ln in lines) else default_lang
+    return f'<article class="page-style" lang="{lang}">\n' + "\n".join(parts) + "\n</article>"
+
+
+def ensure_source_html_fragment(source_html: str) -> str:
+    """Give the LLM a real page fragment even if digitize stored almost-plain text."""
+    text = (source_html or "").strip()
+    if not text:
+        return text
+    if "<article" in text.lower():
+        return text
+    if text.count("<") >= 2:
+        return f'<article class="page-style" lang="sa">\n{text}\n</article>'
+    return _plain_lines_to_html(text, default_lang="sa")
+
+
+def coerce_transliteration_html(html: str) -> tuple[str, bool]:
+    """Wrap IAST dumped as plain text / inner tags into <article>. True if untagged."""
+    cleaned = extract_html_only(html)
+    if not cleaned.strip() or GARBAGE_ANYWHERE.search(cleaned):
+        return cleaned, False
+    if "<article" in cleaned.lower():
+        return cleaned, False
+    if cleaned.count("<") >= 2:
+        return (
+            f'<article class="page-style" lang="sa-Latn">\n{cleaned}\n</article>',
+            False,
+        )
+    return _plain_lines_to_html(cleaned), True
 
 
 def page_too_large_for_batch(source_html: str) -> bool:
@@ -173,7 +245,7 @@ def validate_transliteration_html(
     source_html: str | None = None,
     style: str | None = None,
 ) -> str:
-    cleaned = extract_html_only(html)
+    cleaned, from_plain = coerce_transliteration_html(html)
     if GARBAGE_ANYWHERE.search(cleaned):
         raise ValueError("response looks like reasoning, not HTML")
     if cleaned.count("<") < 2:
@@ -193,7 +265,8 @@ def validate_transliteration_html(
     kind = (style or STYLE_IAST_BLOCK).strip().lower()
     if kind == STYLE_IAST_BLOCK:
         if not (_SA_CLASS_RE.search(cleaned) or _DEVANAGARI_RE.search(cleaned)):
-            raise ValueError("response lacks Devanagari source lines")
+            if not from_plain:
+                raise ValueError("response lacks Devanagari source lines")
     if source_html:
         cleaned = preserve_figure_srcs(source_html, cleaned)
     return cleaned
@@ -289,11 +362,12 @@ def transliterate_from_source(
     if current_html:
         current_html = preserve_figure_srcs(source_html, current_html)
     style = str(cfg.get("style") or STYLE_IAST_BLOCK)
+    prompt_html = ensure_source_html_fragment(source_html)
 
-    chunks = chunk_page_html(source_html)
+    chunks = chunk_page_html(prompt_html)
     if len(chunks) <= 1:
         system, user = build_transliterate_messages(
-            source_html=source_html,
+            source_html=prompt_html,
             cfg=cfg,
             current_html=current_html,
             directive=directive,
@@ -304,7 +378,7 @@ def transliterate_from_source(
         html = validate_transliteration_html(raw, source_html=source_html, style=style)
         return html, model, usage
 
-    article_open, _, _ = unwrap_article(source_html)
+    article_open, _, _ = unwrap_article(prompt_html)
     parts_html: list[str] = []
     usages: list[dict[str, Any]] = []
     model = ""

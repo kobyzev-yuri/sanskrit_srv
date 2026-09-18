@@ -118,7 +118,7 @@ def test_process_one_auto_agree(monkeypatch):
         "app.services.pipeline.translate_from_source",
         lambda **_k: (GOOD, "gemini:gemini-3.5-flash", {"network": "gemini", "total_tokens": 10}),
     )
-    monkeypatch.setattr("app.services.pipeline.record_usage", lambda **_k: None)
+    monkeypatch.setattr("app.services.pipeline.record_usage", lambda *_a, **_k: None)
 
     process_one_translate_page(db, page, auto_agree=True)
     db.refresh(page)
@@ -142,8 +142,61 @@ def test_process_one_without_auto_agree_stays_review(monkeypatch):
         "app.services.pipeline.translate_from_source",
         lambda **_k: (GOOD, "gemini:gemini-3.5-flash", {"network": "gemini"}),
     )
-    monkeypatch.setattr("app.services.pipeline.record_usage", lambda **_k: None)
+    monkeypatch.setattr("app.services.pipeline.record_usage", lambda *_a, **_k: None)
 
     process_one_translate_page(db, page, auto_agree=False)
     db.refresh(page)
     assert page.status == PageStatus.expert_review
+
+
+def test_iast_latin_keep_copies_english_without_llm(monkeypatch):
+    db = _session()
+    user = User(
+        email="a@test",
+        login="admin",
+        password_hash="x",
+        display_name="A",
+        role=Role.admin,
+    )
+    db.add(user)
+    db.flush()
+    project = Project(
+        slug="book-iast",
+        title="Book IAST",
+        settings={
+            "task": "transliterate",
+            "transliteration": {
+                "agreed": True,
+                "style": "iast_block",
+                "english_comments": "keep",
+            },
+        },
+        created_by=user.id,
+    )
+    db.add(project)
+    db.flush()
+    src = (
+        '<article class="page-style" lang="en">'
+        "<h1>Vijñāna Bhairava</h1><p>Translated from the Sanskrit.</p>"
+        "</article>"
+    )
+    page = Page(
+        project_id=project.id,
+        page_no=8,
+        status=PageStatus.pending,
+        source_html=src,
+        current_html=None,
+    )
+    db.add(page)
+    db.commit()
+
+    def boom(**_k):
+        raise AssertionError("LLM must not run on latin keep pages")
+
+    monkeypatch.setattr("app.services.pipeline.transliterate_from_source", boom)
+
+    process_one_translate_page(db, page, auto_agree=True)
+    db.refresh(page)
+    assert page.status == PageStatus.expert_done
+    assert "Translated from the Sanskrit" in (page.current_html or "")
+    assert "Vijñāna" in (page.current_html or "")

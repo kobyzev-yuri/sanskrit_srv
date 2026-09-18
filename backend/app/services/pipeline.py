@@ -36,9 +36,11 @@ from app.services.llm_status import LlmQuotaError, LlmRateLimitError, set_quota_
 from app.services.llm_translate import (
     BLANK_IAST_ARTICLE,
     BLANK_RU_ARTICLE,
+    english_passthrough_html,
     looks_like_translation_html,
     looks_like_transliteration_html,
     pack_translate_runs,
+    source_is_latin_page,
     translate_batch_size_for_plan,
     translate_from_source,
     translate_from_sources,
@@ -55,6 +57,7 @@ from app.services.pdf_extract import (
     pdf_page_count,
 )
 from app.services.translation_style import (
+    ENGLISH_KEEP,
     lock_translation_template,
     lock_transliteration_template,
     project_task,
@@ -191,7 +194,14 @@ def agree_nonempty_transliterations(db: Session, project: Project) -> list[int]:
         if page_is_agreed(page):
             continue
         html = page.current_html or ""
-        if looks_like_transliteration_html(html, page.source_html, style=style):
+        src = page.source_html or ""
+        if looks_like_transliteration_html(html, src, style=style):
+            page.status = PageStatus.expert_done
+            marked.append(page.page_no)
+            continue
+        if str(cfg.get("english_comments") or "") == ENGLISH_KEEP and source_is_latin_page(src):
+            if not visible_html_text(html):
+                page.current_html = english_passthrough_html(src)
             page.status = PageStatus.expert_done
             marked.append(page.page_no)
     if marked:
@@ -342,9 +352,15 @@ def _looks_like_derived_html(html: str, source_html: str | None, project: Projec
     task = project_task(project)
     if task == "transliterate":
         cfg = transliteration_cfg(project)
-        return looks_like_transliteration_html(
+        if looks_like_transliteration_html(
             html, source_html, style=str(cfg.get("style") or "iast_block")
-        )
+        ):
+            return True
+        if str(cfg.get("english_comments") or "") == ENGLISH_KEEP and source_is_latin_page(
+            source_html or ""
+        ):
+            return bool(visible_html_text(html))
+        return False
     return looks_like_translation_html(html, source_html)
 
 
@@ -373,6 +389,7 @@ def process_one_translate_page(
     source_html = (page.source_html or "").strip()
     if not source_html:
         return "skip_no_source"
+    cfg = transliteration_cfg(project) if is_iast else translation_cfg(project)
     if not visible_html_text(source_html):
         _save_version(
             db,
@@ -380,16 +397,27 @@ def process_one_translate_page(
             BLANK_IAST_ARTICLE if is_iast else BLANK_RU_ARTICLE,
             VersionSource.llm,
             "empty source page",
-            status=PageStatus.expert_review,
+            status=translate_accept_status(auto_agree=auto_agree),
         )
         return ("transliterate" if is_iast else "translate") + ":empty_source"
+    if is_iast and source_is_latin_page(source_html):
+        keep = str(cfg.get("english_comments") or "") == ENGLISH_KEEP
+        html = english_passthrough_html(source_html) if keep else BLANK_IAST_ARTICLE
+        _save_version(
+            db,
+            page,
+            html,
+            VersionSource.llm,
+            "english kept from source" if keep else "english dropped (latin-only page)",
+            status=translate_accept_status(auto_agree=auto_agree),
+        )
+        return "transliterate:english_keep" if keep else "transliterate:english_drop"
 
     if _already_translated_this_job(db, page, job_id):
         return "skip_already_this_job"
 
     page.status = PageStatus.llm_draft
     db.commit()
-    cfg = transliteration_cfg(project) if is_iast else translation_cfg(project)
     op = "transliterate" if is_iast else "translate"
     recorded: list[int] = []
     stop_wait = threading.Event()
@@ -568,6 +596,9 @@ def process_translate_run(
             continue
         source_html = (page.source_html or "").strip()
         if not source_html:
+            continue
+        if is_iast and source_is_latin_page(source_html):
+            process_one_translate_page(db, page, job_id=job_id, auto_agree=auto_agree)
             continue
         page.status = PageStatus.llm_draft
         db.commit()
