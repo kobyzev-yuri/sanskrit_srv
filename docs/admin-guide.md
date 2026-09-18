@@ -137,7 +137,7 @@
 | `GEMINI_TRANSLATE_MODEL` | нет | Модель **текстового** перевода / проверки перевода (не скан) |
 | `TIMEWEB_API_KEY` | нет | Ключ [Timeweb AI Gateway](https://timeweb.cloud/docs/ai-agents/api-usage/ai-gateway) (маршрут Timeweb). Старое имя `OPENROUTER_API_KEY` ещё читается |
 | `OPENROUTER_BASE_URL` | нет | По умолчанию `https://api.timeweb.ai/v1`; старый `openrouter.ai` подменяется на Timeweb |
-| `TIMEWEB_MODEL` | нет | Id модели Timeweb из списка со зрением (напр. `google/gemini-3.5-flash`). Старое имя `OPENROUTER_MODEL` |
+| `TIMEWEB_MODEL` | нет | Id модели Timeweb из списка со зрением (напр. `gemini/gemini-3.5-flash`). Старое имя `OPENROUTER_MODEL` |
 | `OPENROUTER_MAX_TOKENS` | нет | Лимит completion шлюза Timeweb |
 | `OPENAI_API_KEY` | нет | Ключ ProxyAPI — нужен для маршрута Opus |
 | `OPENAI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/openai/v1` |

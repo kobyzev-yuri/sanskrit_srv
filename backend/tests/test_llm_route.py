@@ -135,27 +135,28 @@ def test_openrouter_typed_model(tmp_path, monkeypatch):
     monkeypatch.setattr(
         lr,
         "get_settings",
-        lambda: _settings(tmp_path, openrouter_model="google/gemini-3.1-pro-preview"),
+        lambda: _settings(tmp_path, openrouter_model="gemini/gemini-3.1-pro-preview"),
     )
     set_route("openrouter", updated_by="t")
     plan = model_plan_primary_only()
-    assert plan["openrouter"] == ["google/gemini-3.1-pro-preview"]
-    assert describe_route()["openrouter_model"] == "google/gemini-3.1-pro-preview"
+    assert plan["openrouter"] == ["gemini/gemini-3.1-pro-preview"]
+    assert describe_route()["openrouter_model"] == "gemini/gemini-3.1-pro-preview"
 
 
 def test_timeweb_model_picker_and_aliases(tmp_path, monkeypatch):
     from app.services import llm_route as lr
 
     monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
-    assert sanitize_openrouter_model("gemini-3.5-flash") == "google/gemini-3.5-flash"
+    assert sanitize_openrouter_model("gemini-3.5-flash") == "gemini/gemini-3.5-flash"
+    assert sanitize_openrouter_model("google/gemini-3.5-flash") == "gemini/gemini-3.5-flash"
     assert sanitize_openrouter_model("stealth/ox-alpha") == ""
     assert sanitize_openrouter_model("google/gemini-2.5-flash") == ""
-    set_route("openrouter", openrouter_model="z-ai/glm-5.3-flash", updated_by="t")
+    set_route("openrouter", openrouter_model="zai/glm-5.3-flash", updated_by="t")
     plan = model_plan_primary_only()
-    assert plan["openrouter"] == ["z-ai/glm-5.3-flash"]
+    assert plan["openrouter"] == ["zai/glm-5.3-flash"]
     desc = describe_route()
-    assert desc["timeweb_model"] == "z-ai/glm-5.3-flash"
-    assert any(m["id"] == "google/gemini-3.5-flash" for m in desc["timeweb_models"])
+    assert desc["timeweb_model"] == "zai/glm-5.3-flash"
+    assert any(m["id"] == "gemini/gemini-3.5-flash" for m in desc["timeweb_models"])
 
 
 def test_stale_glm_route_falls_back_to_gemini(tmp_path, monkeypatch):

@@ -170,7 +170,7 @@ def generate_gemini_content(
             body = resp.text or ""
             if is_quota_response(resp.status_code, body):
                 msg = GEMINI_CREDITS_MSG if studio else "Недостаточно средств на ProxyAPI (HTTP 402). Пополните баланс."
-                set_quota_alert(msg)
+                set_quota_alert(msg, route="gemini")
                 raise LlmQuotaError(msg)
             if resp.status_code in _RETRY_STATUSES:
                 last_err = f"HTTP {resp.status_code} {body[:200]}"

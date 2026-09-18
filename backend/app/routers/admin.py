@@ -28,10 +28,10 @@ AdminUser = Depends(require_roles(Role.admin))
 
 
 DEFAULT_LLM_CATALOG = [
-    {"provider": "timeweb", "model": "google/gemini-3.5-flash", "label": "Gemini 3.5 Flash (Timeweb, зрение / оцифровка)"},
-    {"provider": "timeweb", "model": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview (Timeweb, перевод / IAST)"},
-    {"provider": "timeweb", "model": "z-ai/glm-5.3-flash", "label": "GLM 5.3 Flash (Timeweb, зрение)"},
-    {"provider": "timeweb", "model": "qwen/qwen3.8-max", "label": "Qwen 3.8 Max (Timeweb, зрение)"},
+    {"provider": "timeweb", "model": "gemini/gemini-3.5-flash", "label": "Gemini 3.5 Flash (Timeweb, зрение / оцифровка)"},
+    {"provider": "timeweb", "model": "gemini/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview (Timeweb, перевод / IAST)"},
+    {"provider": "timeweb", "model": "zai/glm-5.3-flash", "label": "GLM 5.3 Flash (Timeweb, зрение)"},
+    {"provider": "timeweb", "model": "dashscope/qwen3.8-max", "label": "Qwen 3.8 Max (Timeweb, зрение)"},
     {"provider": "timeweb", "model": "anthropic/claude-opus-5", "label": "Claude Opus 5 (Timeweb)"},
     {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (перевод / Studio)"},
     {"provider": "gemini", "model": "gemini-3.5-flash", "label": "Gemini 3.5 Flash (оцифровка / Studio)"},

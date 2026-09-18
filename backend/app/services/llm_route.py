@@ -36,39 +36,36 @@ ROUTES: dict[RouteId, dict[str, str]] = {
     },
 }
 
-# Vision-capable Timeweb ids (admin-guide §9). GLM 5.3 text-only and Qwen 3 Max (8K) omitted.
-DEFAULT_TIMEWEB_MODEL = "google/gemini-3.5-flash"
+# Vision-capable Timeweb ids from GET /v1/models (not OpenRouter google/…).
+DEFAULT_TIMEWEB_MODEL = "gemini/gemini-3.5-flash"
 TIMEWEB_MODELS: list[dict[str, str]] = [
-    {"id": "google/gemini-3.5-flash", "label": "Gemini 3.5 Flash — оцифровка"},
-    {"id": "google/gemini-3.8-flash", "label": "Gemini 3.8 Flash"},
-    {"id": "google/gemini-3.7-flash", "label": "Gemini 3.7 Flash"},
-    {"id": "google/gemini-3.6-flash", "label": "Gemini 3.6 Flash"},
-    {"id": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview — перевод / IAST"},
+    {"id": "gemini/gemini-3.5-flash", "label": "Gemini 3.5 Flash — оцифровка"},
+    {"id": "gemini/gemini-3.8-flash", "label": "Gemini 3.8 Flash"},
+    {"id": "gemini/gemini-3.7-flash", "label": "Gemini 3.7 Flash"},
+    {"id": "gemini/gemini-3.6-flash", "label": "Gemini 3.6 Flash"},
+    {"id": "gemini/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview — перевод / IAST"},
     {"id": "anthropic/claude-opus-5", "label": "Claude Opus 5"},
     {"id": "anthropic/claude-sonnet-5", "label": "Claude Sonnet 5"},
-    {"id": "z-ai/glm-5.3-flash", "label": "GLM 5.3 Flash"},
-    {"id": "qwen/qwen3.8-max", "label": "Qwen 3.8 Max"},
-    {"id": "qwen/qwen3.7-plus", "label": "Qwen 3.7 Plus"},
-    {"id": "qwen/qwen3.6-flash", "label": "Qwen 3.6 Flash"},
+    {"id": "zai/glm-5.3-flash", "label": "GLM 5.3 Flash"},
+    {"id": "dashscope/qwen3.8-max", "label": "Qwen 3.8 Max"},
+    {"id": "dashscope/qwen3.7-plus", "label": "Qwen 3.7 Plus"},
+    {"id": "dashscope/qwen3.6-flash", "label": "Qwen 3.6 Flash"},
 ]
 _TIMEWEB_IDS = {m["id"] for m in TIMEWEB_MODELS}
 _TIMEWEB_ALIASES: dict[str, str] = {
-    "gemini-3.5-flash": "google/gemini-3.5-flash",
-    "gemini-3.8-flash": "google/gemini-3.8-flash",
-    "gemini-3.7-flash": "google/gemini-3.7-flash",
-    "gemini-3.6-flash": "google/gemini-3.6-flash",
-    "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
-    "claude-opus-5": "anthropic/claude-opus-5",
-    "claude-sonnet-5": "anthropic/claude-sonnet-5",
+    "google/gemini-3.5-flash": "gemini/gemini-3.5-flash",
+    "google/gemini-3.8-flash": "gemini/gemini-3.8-flash",
+    "google/gemini-3.7-flash": "gemini/gemini-3.7-flash",
+    "google/gemini-3.6-flash": "gemini/gemini-3.6-flash",
+    "google/gemini-3.1-pro-preview": "gemini/gemini-3.1-pro-preview",
     "claude-5-sonnet": "anthropic/claude-sonnet-5",
-    "glm-5.3-flash": "z-ai/glm-5.3-flash",
-    "z-ai/glm-5.3-flash": "z-ai/glm-5.3-flash",
-    "qwen3.8-max": "qwen/qwen3.8-max",
-    "qwen3.7-plus": "qwen/qwen3.7-plus",
-    "qwen3.6-flash": "qwen/qwen3.6-flash",
-    "qwen/qwen-3.8-max": "qwen/qwen3.8-max",
-    "qwen/qwen-3.7-plus": "qwen/qwen3.7-plus",
-    "qwen/qwen-3.6-flash": "qwen/qwen3.6-flash",
+    "z-ai/glm-5.3-flash": "zai/glm-5.3-flash",
+    "qwen/qwen3.8-max": "dashscope/qwen3.8-max",
+    "qwen/qwen3.7-plus": "dashscope/qwen3.7-plus",
+    "qwen/qwen3.6-flash": "dashscope/qwen3.6-flash",
+    "qwen/qwen-3.8-max": "dashscope/qwen3.8-max",
+    "qwen/qwen-3.7-plus": "dashscope/qwen3.7-plus",
+    "qwen/qwen-3.6-flash": "dashscope/qwen3.6-flash",
 }
 for _m in TIMEWEB_MODELS:
     _TIMEWEB_ALIASES[_m["id"].lower()] = _m["id"]

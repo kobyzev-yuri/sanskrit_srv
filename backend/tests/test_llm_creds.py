@@ -91,11 +91,11 @@ def test_personal_openrouter_typed_model(tmp_path, monkeypatch):
         use_default_llm=False,
         llm_route="openrouter",
         openrouter_api_key="sk-or-expert",
-        openrouter_model="google/gemini-3.5-flash",
+        openrouter_model="gemini/gemini-3.5-flash",
     )
     with llm_user_context(user):
         plan = model_plan_primary_only()
-        assert plan["openrouter"] == ["google/gemini-3.5-flash"]
+        assert plan["openrouter"] == ["gemini/gemini-3.5-flash"]
         require_keys_for_plan(plan)
 
 

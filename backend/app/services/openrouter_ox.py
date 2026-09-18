@@ -142,6 +142,12 @@ def post_openrouter_chat(
             msg = quota_message_for_url(url, body)
             set_quota_alert(msg, route="openrouter")
             raise LlmQuotaError(msg)
+        if resp.status_code == 404:
+            model = str((payload or {}).get("model") or "")
+            raise RuntimeError(
+                f"Timeweb: модель {model} не найдена в каталоге шлюза. "
+                "Выберите другую сеть со зрением в кабинете."
+            )
         if resp.status_code == 524:
             last_err = f"HTTP 524 Cloudflare timeout {body[:120]}"
             if attempt == 0:

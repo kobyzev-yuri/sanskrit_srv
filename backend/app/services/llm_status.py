@@ -219,6 +219,9 @@ def alert_matches_route(alert: dict[str, Any], route: str) -> bool:
     stored = str(alert.get("route") or "").strip()
     if stored:
         return stored == route
+    msg = str(alert.get("message") or "").lower()
+    if any(m in msg for m in ("gemini", "ai studio", "калифорни", "studio")):
+        return route == "gemini"
     # Legacy alerts had no route field and were Timeweb / OpenRouter / ProxyAPI.
     return route not in ("gemini",)
 

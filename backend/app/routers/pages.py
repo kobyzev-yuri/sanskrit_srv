@@ -43,6 +43,7 @@ from app.services.llm_proofread import (
     split_by_target,
 )
 from app.services.llm_status import GEMINI_RATE_LIMIT_MSG, LlmQuotaError, LlmRateLimitError
+from app.services.llm_route import llm_user_context
 from app.services.llm_translate import translate_from_source, transliterate_from_source
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
@@ -373,7 +374,8 @@ def draft_one_page(
     if page.status == PageStatus.expert_done:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
     try:
-        process_one_page(db, page, force=False, force_llm=False)
+        with llm_user_context(user):
+            process_one_page(db, page, force=False, force_llm=False)
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
@@ -417,12 +419,13 @@ def _apply_translate_revision(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет выверенного санскрита на этой странице")
     cfg = translation_cfg(project)
     try:
-        html, model, usage = translate_from_source(
-            source_html=source_html,
-            cfg=cfg,
-            current_html=page.current_html,
-            directive=directive,
-        )
+        with llm_user_context(user):
+            html, model, usage = translate_from_source(
+                source_html=source_html,
+                cfg=cfg,
+                current_html=page.current_html,
+                directive=directive,
+            )
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
@@ -478,12 +481,13 @@ def _apply_transliterate_revision(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет выверенного санскрита на этой странице")
     cfg = transliteration_cfg(project)
     try:
-        html, model, usage = transliterate_from_source(
-            source_html=source_html,
-            cfg=cfg,
-            current_html=page.current_html,
-            directive=directive,
-        )
+        with llm_user_context(user):
+            html, model, usage = transliterate_from_source(
+                source_html=source_html,
+                cfg=cfg,
+                current_html=page.current_html,
+                directive=directive,
+            )
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
@@ -562,13 +566,14 @@ def _apply_llm_revision(
         except Exception:  # noqa: BLE001
             figs = []
     try:
-        html, model, usage = revise_from_scan(
-            Path(page.scan_path),
-            page_no=page.page_no,
-            current_html=page.current_html,
-            directive=directive,
-            available_figures=figs or None,
-        )
+        with llm_user_context(user):
+            html, model, usage = revise_from_scan(
+                Path(page.scan_path),
+                page_no=page.page_no,
+                current_html=page.current_html,
+                directive=directive,
+                available_figures=figs or None,
+            )
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
@@ -684,32 +689,33 @@ def proofread_page(
     project = db.get(Project, page.project_id)
     is_translate = project is not None and project_task(project) == "translate"
     try:
-        if is_translate:
-            if not (page.source_html or "").strip():
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    detail="Нет выверенного санскрита на этой странице",
+        with llm_user_context(user):
+            if is_translate:
+                if not (page.source_html or "").strip():
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        detail="Нет выверенного санскрита на этой странице",
+                    )
+                nb = neighbor_html(db, page)
+                cfg = translation_cfg(project)
+                suggestions, model, usage = proofread_translation(
+                    page_no=page.page_no,
+                    source_html=page.source_html or "",
+                    current_html=page.current_html or "",
+                    prev_draft=nb["prev_draft"],
+                    prev_source=nb["prev_source"],
+                    next_draft=nb["next_draft"],
+                    next_source=nb["next_source"],
+                    style=str(cfg.get("style") or "interlinear"),
                 )
-            nb = neighbor_html(db, page)
-            cfg = translation_cfg(project)
-            suggestions, model, usage = proofread_translation(
-                page_no=page.page_no,
-                source_html=page.source_html or "",
-                current_html=page.current_html or "",
-                prev_draft=nb["prev_draft"],
-                prev_source=nb["prev_source"],
-                next_draft=nb["next_draft"],
-                next_source=nb["next_source"],
-                style=str(cfg.get("style") or "interlinear"),
-            )
-        else:
-            if not page.scan_path or not Path(page.scan_path).exists():
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet")
-            suggestions, model, usage = proofread_from_scan(
-                Path(page.scan_path),
-                page_no=page.page_no,
-                current_html=page.current_html or "",
-            )
+            else:
+                if not page.scan_path or not Path(page.scan_path).exists():
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Page has no scan yet")
+                suggestions, model, usage = proofread_from_scan(
+                    Path(page.scan_path),
+                    page_no=page.page_no,
+                    current_html=page.current_html or "",
+                )
     except HTTPException:
         raise
     except (LlmQuotaError, LlmRateLimitError) as exc:
