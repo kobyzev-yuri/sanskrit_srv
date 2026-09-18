@@ -20,6 +20,7 @@ from app.services.llm_route import (
     effective_openrouter_base_url,
     effective_openrouter_key,
     effective_proxyapi_key,
+    gateway_batch_pages,
     model_plan_primary_only,
 )
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, is_quota_response, set_quota_alert
@@ -48,16 +49,13 @@ def translate_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> i
     """How many consecutive source pages to translate in one text call.
 
     Output is the limiter (interlinear HTML). Flash often stops after 1–2 pages if asked for 6.
-    ox-alpha keeps a small n because thinking eats the completion cap.
     """
-    from app.config import get_settings as _gs
-
-    cap = max(1, int(getattr(_gs(), "translate_batch_pages", 6) or 6))
+    cap = max(1, int(getattr(get_settings(), "translate_batch_pages", 6) or 6))
     cap = min(cap, 8)
     plan = plan if plan is not None else model_plan_primary_only(text=True)
-    or_models = " ".join(plan.get("openrouter") or []).lower()
-    if "ox-alpha" in or_models or "stealth/" in or_models:
-        return min(cap, 2)
+    or_models = [str(m) for m in (plan.get("openrouter") or []) if m]
+    if or_models:
+        return min(cap, gateway_batch_pages(or_models[0], vision=False))
     gemini = [str(m) for m in (plan.get("gemini") or [])]
     if gemini:
         blob = " ".join(gemini).lower()
@@ -555,7 +553,7 @@ def _call_openrouter_text(
         raise RuntimeError("empty choices")
     text = _openai_message_text(choices[0].get("message") if isinstance(choices[0], dict) else None)
     if not str(text).strip():
-        raise RuntimeError("empty text from OpenRouter")
+        raise RuntimeError("empty text from LLM gateway")
     return text, parse_openai_usage(data)
 
 

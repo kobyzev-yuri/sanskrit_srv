@@ -1,4 +1,4 @@
-"""LLM route defaults: Gemini AI Studio vs OpenRouter / ProxyAPI Opus."""
+"""LLM route defaults: Gemini AI Studio vs Timeweb Gateway / ProxyAPI Opus."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -7,11 +7,13 @@ import pytest
 
 from app.services.llm_draft import _openai_message_text
 from app.services.llm_route import (
+    DEFAULT_TIMEWEB_MODEL,
     describe_route,
     get_proxyapi_model,
     get_route,
     model_plan,
     model_plan_primary_only,
+    sanitize_openrouter_model,
     set_route,
 )
 
@@ -29,7 +31,7 @@ def _settings(tmp_path, **kwargs):
         openai_model="gpt-4o-mini",
         openrouter_api_key="sk-or-test",
         openai_api_key="",
-        openrouter_base_url="https://openrouter.ai/api/v1",
+        openrouter_base_url="https://api.timeweb.ai/v1",
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -120,11 +122,11 @@ def test_primary_only_follows_saved_route(tmp_path, monkeypatch):
     assert plan["anthropic"] == []
     set_route("openrouter", updated_by="t")
     plan = model_plan_primary_only()
-    assert plan["openrouter"] == []
+    assert plan["openrouter"] == [DEFAULT_TIMEWEB_MODEL]
     assert plan["gemini"] == []
     desc = describe_route()
-    assert desc["openrouter_model"] == ""
-    assert desc["primary"]["model"] == ""
+    assert desc["openrouter_model"] == DEFAULT_TIMEWEB_MODEL
+    assert desc["primary"]["model"] == DEFAULT_TIMEWEB_MODEL
 
 
 def test_openrouter_typed_model(tmp_path, monkeypatch):
@@ -133,12 +135,27 @@ def test_openrouter_typed_model(tmp_path, monkeypatch):
     monkeypatch.setattr(
         lr,
         "get_settings",
-        lambda: _settings(tmp_path, openrouter_model="google/gemini-2.5-flash"),
+        lambda: _settings(tmp_path, openrouter_model="google/gemini-3.1-pro-preview"),
     )
     set_route("openrouter", updated_by="t")
     plan = model_plan_primary_only()
-    assert plan["openrouter"] == ["google/gemini-2.5-flash"]
-    assert describe_route()["openrouter_model"] == "google/gemini-2.5-flash"
+    assert plan["openrouter"] == ["google/gemini-3.1-pro-preview"]
+    assert describe_route()["openrouter_model"] == "google/gemini-3.1-pro-preview"
+
+
+def test_timeweb_model_picker_and_aliases(tmp_path, monkeypatch):
+    from app.services import llm_route as lr
+
+    monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
+    assert sanitize_openrouter_model("gemini-3.5-flash") == "google/gemini-3.5-flash"
+    assert sanitize_openrouter_model("stealth/ox-alpha") == ""
+    assert sanitize_openrouter_model("google/gemini-2.5-flash") == ""
+    set_route("openrouter", openrouter_model="z-ai/glm-5.3-flash", updated_by="t")
+    plan = model_plan_primary_only()
+    assert plan["openrouter"] == ["z-ai/glm-5.3-flash"]
+    desc = describe_route()
+    assert desc["timeweb_model"] == "z-ai/glm-5.3-flash"
+    assert any(m["id"] == "google/gemini-3.5-flash" for m in desc["timeweb_models"])
 
 
 def test_stale_glm_route_falls_back_to_gemini(tmp_path, monkeypatch):

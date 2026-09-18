@@ -291,15 +291,15 @@
                 Использовать токены и модель бэкофиса
               </label>
               <p class="muted" id="account-default-hint"></p>
-              <label>Ключ OpenRouter <input name="openrouter_api_key" type="password" autocomplete="off" placeholder="оставить пустым — не менять" /></label>
+              <label>Ключ Timeweb AI Gateway <input name="openrouter_api_key" type="password" autocomplete="off" placeholder="оставить пустым — не менять" /></label>
               <p class="muted" id="account-or-hint"></p>
-              <label>Модель OpenRouter (свой id, без списка)
-                <input name="openrouter_model" id="account-openrouter-model" autocomplete="off" placeholder="например google/gemini-2.5-flash" />
+              <label>Модель Timeweb (зрение / скан)
+                <select name="openrouter_model" id="account-openrouter-model"></select>
               </label>
-              <p class="muted">ox-alpha больше нет. Списка моделей OpenRouter нет — только то, что впишете.</p>
+              <p class="muted">Список — модели, которые умеют читать скан. Ключ создаётся в панели Timeweb Cloud → ИИ-сервисы → AI Gateway.</p>
               <label>Ключ ProxyAPI <input name="proxyapi_key" type="password" autocomplete="off" placeholder="оставить пустым — не менять" /></label>
               <p class="muted" id="account-px-hint"></p>
-              <p class="muted">Своя сеть (если не бэкофис). Модель ProxyAPI задаётся в бэкофисе, блок «Маршрут LLM».</p>
+              <p class="muted">Своя сеть (если не бэкофис). Модель Timeweb — список выше; модель ProxyAPI задаётся в бэкофисе, блок «Маршрут LLM».</p>
               <div id="account-llm-route-box" class="llm-route-box"></div>
               <div class="edit-actions" style="border:0;padding:0;background:transparent">
                 <button class="primary" type="submit">Сохранить ключи</button>
@@ -399,7 +399,7 @@
           </div>
           <div class="admin-section">
             <h2>Маршрут LLM</h2>
-            <p class="muted">Сети: бесплатный Gemini в Google AI Studio (по умолчанию) и платный ProxyAPI.ru. OpenRouter: ox-alpha снят, эксперт со своим ключом может вписать id модели в кабинете.</p>
+            <p class="muted">Сети: бесплатный Gemini в Google AI Studio (по умолчанию), платный Timeweb AI Gateway и ProxyAPI.ru. Модель Timeweb — список со зрением для скана; ключ эксперт может вставить в кабинете.</p>
             <div id="llm-route-box" class="llm-route-box"></div>
             <p class="muted" id="llm-route-status">—</p>
           </div>
@@ -407,7 +407,7 @@
             <h2>Каталог LLM</h2>
             <p class="muted" id="llm-note"></p>
             <ul id="llm-catalog"></ul>
-            <p class="muted">Ключи в <code>.env</code>: <code>GEMINI_API_KEY</code> / <code>GEMINI_API_KEYS</code> (AI Studio, несколько ключей с fallback) и при необходимости <code>OPENROUTER_API_KEY</code> / <code>OPENAI_API_KEY</code> (ProxyAPI). Id Studio: <code>GEMINI_MODEL</code> (оцифровка) и <code>GEMINI_TRANSLATE_MODEL</code> (только текст перевода). Модель ProxyAPI — список в «Маршрут LLM». OpenRouter: без каталога, ox-alpha снят.</p>
+            <p class="muted">Ключи в <code>.env</code>: <code>GEMINI_API_KEY</code> / <code>GEMINI_API_KEYS</code> (AI Studio, несколько ключей с fallback) и при необходимости <code>TIMEWEB_API_KEY</code> / <code>OPENAI_API_KEY</code> (ProxyAPI). Id Studio: <code>GEMINI_MODEL</code> (оцифровка) и <code>GEMINI_TRANSLATE_MODEL</code> (только текст перевода). Модели Timeweb и ProxyAPI — списки в «Маршрут LLM».</p>
           </div>
         </div>
       </section>
@@ -484,6 +484,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260916ui"></script>
+  <script src="/assets/app.js?v=20260918tw"></script>
 </body>
 </html>

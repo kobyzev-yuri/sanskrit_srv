@@ -108,6 +108,7 @@ class MeLlmOut(BaseModel):
     proxyapi_hint: str | None = None
     openrouter_model: str = ""
     options: list[dict[str, Any]] = []
+    timeweb_models: list[dict[str, str]] = []
     default_route: str
     default_label: str
     default_openrouter_key: bool
@@ -405,8 +406,11 @@ class LlmRouteOut(BaseModel):
     proxyapi_model: str = ""
     proxyapi_models: list[dict[str, str]] = Field(default_factory=list)
     openrouter_model: str = ""
+    timeweb_model: str = ""
+    timeweb_models: list[dict[str, str]] = Field(default_factory=list)
 
 
 class LlmRouteIn(BaseModel):
     route: str
     proxyapi_model: str | None = None
+    openrouter_model: str | None = None

@@ -25,7 +25,7 @@
 
 ## Что умеет beta
 
-- **Оцифровка:** PDF-скан → нарезка страниц → vision-LLM → HTML деванагари. По умолчанию Gemini через Google AI Studio; запасные OpenRouter и Claude Opus / OpenAI через ProxyAPI
+- **Оцифровка:** PDF-скан → нарезка страниц → vision-LLM → HTML деванагари. По умолчанию Gemini через Google AI Studio; запасные Timeweb AI Gateway и Claude Opus / OpenAI через ProxyAPI
 - **Перевод на русский** и **транслитерация IAST** — отдельные проекты от выверенной оцифровки; правка санскрита слева пишется в оцифровку новой версией
 - Редактор: скан или санскрит слева, черновик по центру (**Превью** / **Текст** / **HTML**), задание справа; шаблон скрыт за кнопкой **Шаблон**; при ручной правке рабочая панель занимает место соседних
 - Согласование страниц; массовые операции (**Оцифровать / Перевести / Транслитерировать / Проверить несогласованные**) **не трогают** уже согласованные страницы
@@ -38,7 +38,7 @@
 
 ## Быстрый старт (локально)
 
-Требования: **Python 3.12+**, ключ [Google AI Studio](https://aistudio.google.com/apikey) (`GEMINI_API_KEY`) для оцифровки и перевода. OpenRouter / ProxyAPI — опционально.
+Требования: **Python 3.12+**, ключ [Google AI Studio](https://aistudio.google.com/apikey) (`GEMINI_API_KEY`) для оцифровки и перевода. Timeweb AI Gateway / ProxyAPI — опционально.
 
 ```bash
 git clone git@github.com:kobyzev-yuri/sanskrit_srv.git

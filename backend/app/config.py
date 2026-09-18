@@ -52,14 +52,16 @@ class Settings(BaseSettings):
     anthropic_base_url: str = "https://api.proxyapi.ru/anthropic"
     anthropic_model: str = ""  # e.g. claude-opus-5 — empty = skip Claude
 
-    # OpenRouter (optional). No default model — ox-alpha is gone; experts type an id.
+    # Timeweb AI Gateway (OpenAI-compatible). Replaces OpenRouter.
+    # TIMEWEB_API_KEY preferred; OPENROUTER_API_KEY still accepted as the same slot.
+    timeweb_api_key: str = ""
     openrouter_api_key: str = ""
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_base_url: str = "https://api.timeweb.ai/v1"
+    timeweb_model: str = ""
     openrouter_model: str = ""
     openrouter_http_referer: str = "https://sanskrit-srv.local"
     openrouter_app_title: str = "sanskrit_srv"
-    # Ceiling only; ox-alpha uses smaller per-task caps (see openrouter_ox.py).
-    # A 32k budget lets default effort=max dump chain-of-thought for 10+ minutes.
+    # Ceiling only; may only lower per-task caps (see openrouter_ox.py).
     openrouter_max_tokens: int = 16384
 
     # Legacy: unused for upload (whole book is default). Kept for manual extract helpers.

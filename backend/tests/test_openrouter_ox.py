@@ -5,7 +5,7 @@ import pytest
 
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError
 from app.services.openrouter_ox import (
-    OPENROUTER_402_MSG,
+    TIMEWEB_402_MSG,
     TASK_DRAFT,
     TASK_TRANSLATE,
     apply_ox_chat_options,
@@ -164,14 +164,14 @@ def test_post_429_exhausted_raises_rate_limit():
 
 
 def test_post_402_is_quota():
-    assert quota_message_for_url("https://openrouter.ai/api/v1/chat/completions") == OPENROUTER_402_MSG
+    assert quota_message_for_url("https://api.timeweb.ai/v1/chat/completions") == TIMEWEB_402_MSG
 
     def paywall(*_a, **_k):
         return _Resp(402, "Payment required")
 
-    with pytest.raises(LlmQuotaError, match="OpenRouter"):
+    with pytest.raises(LlmQuotaError, match="Timeweb"):
         post_openrouter_chat(
-            "https://openrouter.ai/api/v1/chat/completions",
+            "https://api.timeweb.ai/v1/chat/completions",
             headers={},
             payload={},
             sleep=lambda _s: None,

@@ -14,7 +14,7 @@
 | **SQLite** | Пользователи, проекты, страницы, версии, usage (по умолчанию) |
 | **storage/** | Исходные PDF, PNG страниц, экспорты |
 | **Google AI Studio** | Маршрут по умолчанию: Gemini (скан картинкой; перевод — отдельная текстовая модель) |
-| **OpenRouter** | Опционально; эксперт может вписать id модели в кабинете |
+| **Timeweb AI Gateway** | Опционально; эксперт вставляет свой ключ в кабинете и выбирает модель со зрением |
 | **ProxyAPI** | Запасной шлюз Claude Opus / OpenAI (и при необходимости Gemini) |
 
 Без запущенного **worker** загрузка PDF создаст проект, но страницы не оцифруются.
@@ -135,10 +135,10 @@
 | `GEMINI_BASE_URL` | нет | По умолчанию `https://generativelanguage.googleapis.com` |
 | `GEMINI_MODEL` | нет | Модель **оцифровки** (скан). Не ставьте сюда `claude-*` |
 | `GEMINI_TRANSLATE_MODEL` | нет | Модель **текстового** перевода / проверки перевода (не скан) |
-| `OPENROUTER_API_KEY` | нет | Ключ OpenRouter (маршрут OpenRouter) |
-| `OPENROUTER_BASE_URL` | нет | По умолчанию `https://openrouter.ai/api/v1` |
-| `OPENROUTER_MODEL` | нет | Id модели OpenRouter (ox-alpha в живом каталоге больше нет) |
-| `OPENROUTER_MAX_TOKENS` | нет | Лимит completion OpenRouter |
+| `TIMEWEB_API_KEY` | нет | Ключ [Timeweb AI Gateway](https://timeweb.cloud/docs/ai-agents/api-usage/ai-gateway) (маршрут Timeweb). Старое имя `OPENROUTER_API_KEY` ещё читается |
+| `OPENROUTER_BASE_URL` | нет | По умолчанию `https://api.timeweb.ai/v1`; старый `openrouter.ai` подменяется на Timeweb |
+| `TIMEWEB_MODEL` | нет | Id модели Timeweb из списка со зрением (напр. `google/gemini-3.5-flash`). Старое имя `OPENROUTER_MODEL` |
+| `OPENROUTER_MAX_TOKENS` | нет | Лимит completion шлюза Timeweb |
 | `OPENAI_API_KEY` | нет | Ключ ProxyAPI — нужен для маршрута Opus |
 | `OPENAI_BASE_URL` | нет | По умолчанию `https://api.proxyapi.ru/openai/v1` |
 | `OPENAI_MODEL` | нет | Модель OpenAI-канала, по умолчанию `gpt-4o-mini` |
@@ -187,7 +187,7 @@ python -m app.cli user-reset-password --email u@x --password '...'
 
 - Форма **Новый пользователь**: email, имя, логин (по умолчанию = email), пароль, роль, галочка **Разрешить токены и модель бэкофиса**.
 - Колонка **Токены бэкофиса** — можно ли этому человеку брать ключи и маршрут из `.env` / блока «Маршрут LLM». Снятая галочка: только свои ключи в [кабинете](#6-кабинет-лк).
-- **Свои ключи** — есть ли у пользователя сохранённые OpenRouter / ProxyAPI (сам ключ в таблице не показывается).
+- **Свои ключи** — есть ли у пользователя сохранённые Timeweb / ProxyAPI (сам ключ в таблице не показывается).
 
 ### Расход токенов
 
@@ -199,14 +199,14 @@ python -m app.cli user-reset-password --email u@x --password '...'
 Переключатель без правки `.env` и без рестарта; пишется в `data/llm_route.json`. Список опций строится с сервера по наличию ключей:
 
 - **Gemini (Google AI Studio)** — по умолчанию; скан уходит картинкой (`GEMINI_MODEL`), перевод текстом (`GEMINI_TRANSLATE_MODEL`);
-- **OpenRouter** — если задан `OPENROUTER_API_KEY` (ox-alpha в каталоге больше нет);
+- **Timeweb AI Gateway** — если задан `TIMEWEB_API_KEY` (или устаревший `OPENROUTER_API_KEY`); модель из списка со зрением: Gemini 3.5/3.6/3.7/3.8 Flash, Gemini 3.1 Pro Preview, Claude Opus 5 / Sonnet 5, GLM 5.3 Flash, Qwen 3.8 Max / 3.7 Plus / 3.6 Flash (без GLM 5.3 text-only и Qwen 3 Max с ответом 8K);
 - **Claude Opus (ProxyAPI)** — Opus, запасные Gemini и OpenAI.
 
 Выбор действует на оцифровку, перевод, IAST, пересмотр и смысловую проверку. Конкретные id моделей — в `.env`.
 
 ### Каталог LLM
 
-Справочник id с OpenRouter и ProxyAPI. Подсказка на экране: ключи Studio (`GEMINI_API_KEY` / `GEMINI_API_KEYS`), при необходимости OpenRouter / ProxyAPI.
+Справочник id Timeweb (зрение) и ProxyAPI. Подсказка на экране: ключи Studio (`GEMINI_API_KEY` / `GEMINI_API_KEYS`), при необходимости Timeweb / ProxyAPI.
 
 Загрузка PDF — на экране **Проекты** (только admin). Книги длиннее `LARGE_BOOK_PAGES` требуют подтверждения полной оцифровки.
 
@@ -219,7 +219,7 @@ python -m app.cli user-reset-password --email u@x --password '...'
 | Блок | Что делает |
 |------|------------|
 | **Профиль** | Логин, email, имя. Смена email или пароля — только с текущим паролем |
-| **Ключи LLM** | Галочка «Использовать токены и модель бэкофиса» (если admin разрешил). Иначе: ключ и id модели OpenRouter, ключ ProxyAPI, выбор своей сети. **Вернуться к токенам бэкофиса** сбрасывает на маршрут сервера |
+| **Ключи LLM** | Галочка «Использовать токены и модель бэкофиса» (если admin разрешил). Иначе: ключ Timeweb и модель из списка со зрением, ключ ProxyAPI, выбор своей сети. **Вернуться к токенам бэкофиса** сбрасывает на маршрут сервера |
 | **Мой расход токенов** | Только вызовы этого пользователя; свой ключ отдельно от токенов бэкофиса |
 
 Если **Токены бэкофиса** сняты, галочка и кнопка возврата недоступны — без своих ключей LLM-кнопки в редакторе не пойдут.
@@ -313,7 +313,7 @@ python -m app.cli user-reset-password --email u@x --password '...'
 | GPT-5.6 Luna | дешёвый GPT | 27 / 162 | 60 / 360 | ~45% |
 | GPT-6 Astra | дорогой GPT | 1 350 / 6 750 | 1 580 / 7 900 | ~85% |
 
-Gateway: OpenAI-совместимый API `https://api.timeweb.ai/v1`, ключ **1 ₽/мес**. Это тот же класс, что ProxyAPI (`OPENAI_BASE_URL`).
+Gateway: OpenAI-совместимый API `https://api.timeweb.ai/v1`, ключ **1 ₽/мес**. В SRV это отдельный маршрут (вместо OpenRouter): тот же `/chat/completions`, ключ в `.env` (`TIMEWEB_API_KEY`) или в кабинете эксперта.
 
 Как стыкуется с SRV:
 

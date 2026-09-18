@@ -20,7 +20,7 @@ from app.schemas import (
     UserUpdateIn,
 )
 from app.services.account import assert_ident_free, normalize_login
-from app.services.llm_route import ROUTES, describe_route, set_route
+from app.services.llm_route import ROUTES, describe_route, set_route, settings_gateway_key
 from app.services.llm_usage import all_projects_usage_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -28,9 +28,13 @@ AdminUser = Depends(require_roles(Role.admin))
 
 
 DEFAULT_LLM_CATALOG = [
-    {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (перевод / Studio; 2.5 Pro на этих ключах закрыта)"},
+    {"provider": "timeweb", "model": "google/gemini-3.5-flash", "label": "Gemini 3.5 Flash (Timeweb, зрение / оцифровка)"},
+    {"provider": "timeweb", "model": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview (Timeweb, перевод / IAST)"},
+    {"provider": "timeweb", "model": "z-ai/glm-5.3-flash", "label": "GLM 5.3 Flash (Timeweb, зрение)"},
+    {"provider": "timeweb", "model": "qwen/qwen3.8-max", "label": "Qwen 3.8 Max (Timeweb, зрение)"},
+    {"provider": "timeweb", "model": "anthropic/claude-opus-5", "label": "Claude Opus 5 (Timeweb)"},
+    {"provider": "gemini", "model": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro (перевод / Studio)"},
     {"provider": "gemini", "model": "gemini-3.5-flash", "label": "Gemini 3.5 Flash (оцифровка / Studio)"},
-    {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (id для Studio или ProxyAPI Google)"},
     {"provider": "anthropic", "model": "claude-opus-5", "label": "Claude Opus 5 (ProxyAPI)"},
     {"provider": "anthropic", "model": "claude-opus-4-6", "label": "Claude Opus 4.6 (ProxyAPI)"},
     {"provider": "openai", "model": "gpt-4o-mini", "label": "GPT-4o mini (ProxyAPI)"},
@@ -113,7 +117,7 @@ def llm_catalog(_: User = AdminUser):
     settings = get_settings()
     route = describe_route()
     pool = pool_summary(settings)
-    or_ok = bool((settings.openrouter_api_key or "").strip())
+    or_ok = bool(settings_gateway_key(settings))
     px_ok = bool((settings.openai_api_key or "").strip())
     ge_ok = bool((settings.gemini_api_key or "").strip()) or bool(pool["n"])
     keys = []
@@ -121,14 +125,14 @@ def llm_catalog(_: User = AdminUser):
         keys.append(f"Gemini AI Studio: {pool['available']}/{pool['n']} ключей доступны.")
     else:
         keys.append("Gemini AI Studio ключ задан." if ge_ok else "GEMINI_API_KEY не задан (маршрут Google AI Studio).")
-    keys.append("OpenRouter ключ задан." if or_ok else "OPENROUTER_API_KEY не задан (маршрут OpenRouter).")
+    keys.append("Timeweb ключ задан." if or_ok else "TIMEWEB_API_KEY не задан (маршрут Timeweb AI Gateway).")
     keys.append("ProxyAPI ключ задан." if px_ok else "OPENAI_API_KEY (ProxyAPI) не задан — платный маршрут недоступен.")
     return LlmCatalogOut(
         models=DEFAULT_LLM_CATALOG,
         note=(
             f"Сейчас: {route['label']} ({route['primary']['provider']}:{route['primary']['model']}). "
             "Оцифровка: GEMINI_MODEL. Перевод: GEMINI_TRANSLATE_MODEL (текст, не скан). "
-            "Переключение сети — радиокнопки в «Маршрут LLM»; модель ProxyAPI — список там же. "
+            "Переключение сети — радиокнопки в «Маршрут LLM»; модель Timeweb и ProxyAPI — списки там же. "
             + " ".join(keys)
         ),
     )
@@ -145,11 +149,12 @@ def put_llm_route(body: LlmRouteIn, user: User = AdminUser):
     if route not in ROUTES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            detail="route must be 'openrouter', 'gemini' or 'opus'",
+            detail="route must be 'openrouter' (Timeweb), 'gemini' or 'opus'",
         )
     return set_route(
         route,  # type: ignore[arg-type]
         proxyapi_model=body.proxyapi_model,
+        openrouter_model=body.openrouter_model,
         updated_by=user.email,
     )
 

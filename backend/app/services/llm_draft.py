@@ -1,4 +1,4 @@
-"""Draft / revise page HTML from scan via vision LLM (Gemini AI Studio / OpenRouter / ProxyAPI)."""
+"""Draft / revise page HTML from scan via vision LLM (Gemini AI Studio / Timeweb / ProxyAPI)."""
 from __future__ import annotations
 
 import base64
@@ -22,6 +22,7 @@ from app.services.llm_route import (
     effective_openrouter_base_url,
     effective_openrouter_key,
     effective_proxyapi_key,
+    gateway_batch_pages,
     model_plan,
     model_plan_primary_only,
     require_keys_for_plan,
@@ -284,14 +285,12 @@ def digitize_batch_size_for_plan(plan: dict[str, list[str]] | None = None) -> in
     1M input easily holds 10 JPEGs. The limit is *output*: dense Devanagari HTML
     is 3–8k tokens/page. Flash often stops after 1–2 pages if asked for 6.
     """
-    from app.config import get_settings as _gs
-
-    cap = max(1, int(getattr(_gs(), "digitize_batch_pages", 6) or 6))
+    cap = max(1, int(getattr(get_settings(), "digitize_batch_pages", 6) or 6))
     cap = min(cap, 8)
     plan = plan if plan is not None else model_plan_primary_only()
-    or_models = " ".join(plan.get("openrouter") or []).lower()
-    if "ox-alpha" in or_models or "stealth/" in or_models:
-        return min(cap, 1)
+    or_models = [str(m) for m in (plan.get("openrouter") or []) if m]
+    if or_models:
+        return min(cap, gateway_batch_pages(or_models[0], vision=True))
     gemini = [str(m) for m in (plan.get("gemini") or [])]
     if gemini:
         blob = " ".join(gemini).lower()
@@ -330,7 +329,7 @@ def revise_from_scan(
     directive: str | None = None,
     available_figures: list[dict] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
-    """Return (html, model_used, usage). Tries the admin LLM route (OpenRouter by default).
+    """Return (html, model_used, usage). Tries the admin LLM route (Gemini Studio by default).
 
     usage keys: network, model, prompt_tokens, completion_tokens, total_tokens, usage_raw
     """
@@ -782,7 +781,7 @@ def _call_openrouter(
         raise RuntimeError("empty choices")
     text = _openai_message_text(choices[0].get("message") if isinstance(choices[0], dict) else None)
     if not str(text).strip():
-        raise RuntimeError("empty text from OpenRouter (reasoning-only?)")
+        raise RuntimeError("empty text from LLM gateway (reasoning-only?)")
     return text, parse_openai_usage(data)
 
 

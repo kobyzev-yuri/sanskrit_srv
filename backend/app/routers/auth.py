@@ -16,7 +16,7 @@ from app.schemas import (
     UserOut,
 )
 from app.services.account import assert_ident_free, normalize_login
-from app.services.llm_route import ROUTES, _key_hint, creds_from_user, describe_route, llm_user_context
+from app.services.llm_route import ROUTES, _key_hint, creds_from_user, describe_route, llm_user_context, sanitize_openrouter_model
 from app.services.llm_usage import user_usage_summary
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -80,8 +80,9 @@ def _me_llm_out(user: User) -> MeLlmOut:
         has_proxyapi_key=bool((user.proxyapi_key or "").strip()),
         openrouter_hint=_key_hint(user.openrouter_api_key),
         proxyapi_hint=_key_hint(user.proxyapi_key),
-        openrouter_model=str(getattr(user, "openrouter_model", None) or ""),
+        openrouter_model=sanitize_openrouter_model(getattr(user, "openrouter_model", None)),
         options=list(effective.get("options") or []),
+        timeweb_models=list(default.get("timeweb_models") or effective.get("timeweb_models") or []),
         default_route=str(default.get("route") or "gemini"),
         default_label=str(default.get("label") or ""),
         default_openrouter_key=bool(default.get("openrouter_key")),
@@ -123,7 +124,7 @@ def patch_me_llm(
         if key:
             user.use_default_llm = False
     if body.openrouter_model is not None:
-        model = body.openrouter_model.strip()
+        model = sanitize_openrouter_model(body.openrouter_model)
         user.openrouter_model = model or None
         if model:
             user.use_default_llm = False

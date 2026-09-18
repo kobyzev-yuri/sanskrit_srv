@@ -89,16 +89,17 @@ def test_personal_openrouter_typed_model(tmp_path, monkeypatch):
         use_default_llm=False,
         llm_route="openrouter",
         openrouter_api_key="sk-or-expert",
-        openrouter_model="google/gemini-2.5-flash",
+        openrouter_model="google/gemini-3.5-flash",
     )
     with llm_user_context(user):
         plan = model_plan_primary_only()
-        assert plan["openrouter"] == ["google/gemini-2.5-flash"]
+        assert plan["openrouter"] == ["google/gemini-3.5-flash"]
         require_keys_for_plan(plan)
 
 
-def test_personal_openrouter_alpha_is_empty(tmp_path, monkeypatch):
+def test_personal_openrouter_alpha_falls_back_to_default(tmp_path, monkeypatch):
     from app.services import llm_route as lr
+    from app.services.llm_route import DEFAULT_TIMEWEB_MODEL
 
     monkeypatch.setattr(lr, "get_settings", lambda: _settings(tmp_path))
     user = _user(
@@ -109,9 +110,8 @@ def test_personal_openrouter_alpha_is_empty(tmp_path, monkeypatch):
     )
     with llm_user_context(user):
         plan = model_plan_primary_only()
-        assert plan["openrouter"] == []
-        with pytest.raises(RuntimeError, match="не задана"):
-            require_keys_for_plan(plan)
+        assert plan["openrouter"] == [DEFAULT_TIMEWEB_MODEL]
+        require_keys_for_plan(plan)
 
 
 def test_denied_default_requires_own_key(tmp_path, monkeypatch):

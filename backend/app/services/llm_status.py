@@ -213,13 +213,13 @@ def read_alert() -> dict[str, Any]:
 
 
 def alert_matches_route(alert: dict[str, Any], route: str) -> bool:
-    """Paywall banner is per gateway. OpenRouter 402 must not look like a Studio failure."""
+    """Paywall banner is per gateway. Timeweb 402 must not look like a Studio failure."""
     if not alert.get("active"):
         return False
     stored = str(alert.get("route") or "").strip()
     if stored:
         return stored == route
-    # Legacy alerts had no route field and were OpenRouter / ProxyAPI.
+    # Legacy alerts had no route field and were Timeweb / OpenRouter / ProxyAPI.
     return route not in ("gemini",)
 
 
@@ -302,9 +302,9 @@ def llm_status() -> dict[str, Any]:
         or_ok = bool(creds.openrouter_api_key)
         if not or_ok:
             missing = (
-                "В кабинете не задан ключ OpenRouter."
+                "В кабинете не задан ключ Timeweb AI Gateway."
                 if creds.key_source == "personal"
-                else "OPENROUTER_API_KEY не задан в .env."
+                else "TIMEWEB_API_KEY (или OPENROUTER_API_KEY) не задан в .env."
             )
             return attach(
                 {
@@ -314,7 +314,7 @@ def llm_status() -> dict[str, Any]:
                     "message": missing,
                     "balance": None,
                     "balance_ok": False,
-                    "balance_error": "OPENROUTER_API_KEY missing",
+                    "balance_error": "TIMEWEB_API_KEY missing",
                 }
             )
         if alert.get("active"):

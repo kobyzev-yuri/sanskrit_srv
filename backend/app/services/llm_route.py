@@ -1,4 +1,4 @@
-"""Admin-selectable LLM route: Gemini (AI Studio default) vs OpenRouter / ProxyAPI."""
+"""Admin-selectable LLM route: Gemini (AI Studio default) vs Timeweb Gateway / ProxyAPI."""
 from __future__ import annotations
 
 import json
@@ -14,11 +14,15 @@ from app.config import get_settings
 
 RouteId = Literal["openrouter", "gemini", "opus"]
 
+TIMEWEB_BASE_URL = "https://api.timeweb.ai/v1"
+_LEGACY_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+
+# Internal route id stays `openrouter` (llm_route.json, users.llm_route, usage network).
 ROUTES: dict[RouteId, dict[str, str]] = {
     "openrouter": {
         "id": "openrouter",
-        "label": "OpenRouter",
-        "hint": "Списка моделей нет (ox-alpha снят). Свой ключ: впишите id модели в кабинете, не выбирайте из списка.",
+        "label": "Timeweb AI Gateway",
+        "hint": "Платный шлюз https://api.timeweb.ai/v1. Ключ — в кабинете Timeweb (AI Gateway) или в ЛК. Список — модели со зрением для скана.",
     },
     "gemini": {
         "id": "gemini",
@@ -31,6 +35,44 @@ ROUTES: dict[RouteId, dict[str, str]] = {
         "hint": "Ключ OPENAI_API_KEY. Модель выбирается списком — не только Opus.",
     },
 }
+
+# Vision-capable Timeweb ids (admin-guide §9). GLM 5.3 text-only and Qwen 3 Max (8K) omitted.
+DEFAULT_TIMEWEB_MODEL = "google/gemini-3.5-flash"
+TIMEWEB_MODELS: list[dict[str, str]] = [
+    {"id": "google/gemini-3.5-flash", "label": "Gemini 3.5 Flash — оцифровка"},
+    {"id": "google/gemini-3.8-flash", "label": "Gemini 3.8 Flash"},
+    {"id": "google/gemini-3.7-flash", "label": "Gemini 3.7 Flash"},
+    {"id": "google/gemini-3.6-flash", "label": "Gemini 3.6 Flash"},
+    {"id": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview — перевод / IAST"},
+    {"id": "anthropic/claude-opus-5", "label": "Claude Opus 5"},
+    {"id": "anthropic/claude-sonnet-5", "label": "Claude Sonnet 5"},
+    {"id": "z-ai/glm-5.3-flash", "label": "GLM 5.3 Flash"},
+    {"id": "qwen/qwen3.8-max", "label": "Qwen 3.8 Max"},
+    {"id": "qwen/qwen3.7-plus", "label": "Qwen 3.7 Plus"},
+    {"id": "qwen/qwen3.6-flash", "label": "Qwen 3.6 Flash"},
+]
+_TIMEWEB_IDS = {m["id"] for m in TIMEWEB_MODELS}
+_TIMEWEB_ALIASES: dict[str, str] = {
+    "gemini-3.5-flash": "google/gemini-3.5-flash",
+    "gemini-3.8-flash": "google/gemini-3.8-flash",
+    "gemini-3.7-flash": "google/gemini-3.7-flash",
+    "gemini-3.6-flash": "google/gemini-3.6-flash",
+    "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
+    "claude-opus-5": "anthropic/claude-opus-5",
+    "claude-sonnet-5": "anthropic/claude-sonnet-5",
+    "claude-5-sonnet": "anthropic/claude-sonnet-5",
+    "glm-5.3-flash": "z-ai/glm-5.3-flash",
+    "z-ai/glm-5.3-flash": "z-ai/glm-5.3-flash",
+    "qwen3.8-max": "qwen/qwen3.8-max",
+    "qwen3.7-plus": "qwen/qwen3.7-plus",
+    "qwen3.6-flash": "qwen/qwen3.6-flash",
+    "qwen/qwen-3.8-max": "qwen/qwen3.8-max",
+    "qwen/qwen-3.7-plus": "qwen/qwen3.7-plus",
+    "qwen/qwen-3.6-flash": "qwen/qwen3.6-flash",
+}
+for _m in TIMEWEB_MODELS:
+    _TIMEWEB_ALIASES[_m["id"].lower()] = _m["id"]
+    _TIMEWEB_ALIASES[_m["id"].rsplit("/", 1)[-1].lower()] = _m["id"]
 
 # Selectable on the ProxyAPI route (same OPENAI_API_KEY, different gateways).
 PROXYAPI_MODELS: list[dict[str, str]] = [
@@ -67,11 +109,46 @@ def _read_state() -> dict[str, Any]:
 
 
 def sanitize_openrouter_model(raw: str | None) -> str:
-    """ox-alpha is gone from the live catalog — do not keep it as a default."""
+    """Map a Timeweb vision catalog id. Drop ox-alpha and unknown free-typed ids."""
     text = (raw or "").strip()
-    if not text or "ox-alpha" in text.lower():
+    if not text or "ox-alpha" in text.lower() or text.lower().startswith("stealth/"):
         return ""
-    return text
+    canonical = _TIMEWEB_ALIASES.get(text.lower(), text)
+    return canonical if canonical in _TIMEWEB_IDS else ""
+
+
+def settings_gateway_key(settings: Any | None = None) -> str:
+    s = settings or get_settings()
+    return (
+        (getattr(s, "timeweb_api_key", None) or "").strip()
+        or (getattr(s, "openrouter_api_key", None) or "").strip()
+    )
+
+
+def settings_gateway_model(settings: Any | None = None) -> str:
+    s = settings or get_settings()
+    return sanitize_openrouter_model(
+        (getattr(s, "timeweb_model", None) or "").strip()
+        or (getattr(s, "openrouter_model", None) or "").strip()
+    )
+
+
+def gateway_batch_pages(model: str, *, vision: bool) -> int:
+    """Pages per call for a Timeweb / gateway model id."""
+    blob = (model or "").lower()
+    if not blob:
+        return 1
+    if "ox-alpha" in blob or blob.startswith("stealth/"):
+        return 1 if vision else 2
+    if "gemini" in blob:
+        return 3 if "flash" in blob else 6
+    if "claude" in blob or "anthropic" in blob:
+        return 4
+    if "glm" in blob or "qwen" in blob:
+        return 3
+    if "gpt" in blob or "openai" in blob:
+        return 3
+    return 1
 
 
 def _default_proxyapi_model() -> str:
@@ -148,10 +225,10 @@ def creds_from_settings(*, user_id: uuid.UUID | None = None) -> LlmCreds:
     return LlmCreds(
         use_default=True,
         route=get_global_route(),
-        openrouter_api_key=(settings.openrouter_api_key or "").strip(),
+        openrouter_api_key=settings_gateway_key(settings),
         openai_api_key=(settings.openai_api_key or "").strip(),
         gemini_api_key=pick_studio_key(settings) or (settings.gemini_api_key or "").strip(),
-        openrouter_model=sanitize_openrouter_model(settings.openrouter_model),
+        openrouter_model=get_timeweb_model(),
         user_id=user_id,
         key_source="default",
     )
@@ -216,9 +293,18 @@ def effective_openrouter_key() -> str:
     return current_creds().openrouter_api_key
 
 
+def get_timeweb_model() -> str:
+    raw = str(_read_state().get("openrouter_model") or _read_state().get("timeweb_model") or "").strip()
+    picked = sanitize_openrouter_model(raw) or settings_gateway_model()
+    return picked or DEFAULT_TIMEWEB_MODEL
+
+
 def effective_openrouter_base_url() -> str:
     settings = get_settings()
-    return (settings.openrouter_base_url or "https://openrouter.ai/api/v1").rstrip("/")
+    raw = (settings.openrouter_base_url or "").strip().rstrip("/")
+    if not raw or raw == _LEGACY_OPENROUTER_BASE.rstrip("/"):
+        return TIMEWEB_BASE_URL
+    return raw
 
 
 def effective_proxyapi_key() -> str:
@@ -230,16 +316,16 @@ def require_keys_for_plan(plan: dict[str, list[str]]) -> None:
     personal = creds.key_source == "personal"
     if get_route() == "openrouter" and not plan.get("openrouter"):
         raise RuntimeError(
-            "Модель OpenRouter не задана. В кабинете впишите id модели (списка нет, ox-alpha снят)."
+            "Модель Timeweb не задана. Выберите сеть со зрением в кабинете."
             if personal
-            else "OPENROUTER_MODEL не задан в .env (ox-alpha снят, списка моделей нет)."
+            else "Модель Timeweb не задана. Выберите её в бэкофисе (Маршрут LLM) или TIMEWEB_MODEL в .env."
         )
     if plan.get("openrouter"):
         if not creds.openrouter_api_key:
             raise RuntimeError(
-                "В кабинете не задан ключ OpenRouter (или вернитесь к токенам бэкофиса)."
+                "В кабинете не задан ключ Timeweb AI Gateway (или вернитесь к токенам бэкофиса)."
                 if personal
-                else "OPENROUTER_API_KEY missing in server .env"
+                else "TIMEWEB_API_KEY (или OPENROUTER_API_KEY) missing in server .env"
             )
     if plan.get("gemini"):
         if gemini_uses_proxyapi():
@@ -267,6 +353,7 @@ def set_route(
     route: RouteId,
     *,
     proxyapi_model: str | None = None,
+    openrouter_model: str | None = None,
     updated_by: str | None = None,
 ) -> dict[str, Any]:
     if route not in ROUTES:
@@ -275,9 +362,14 @@ def set_route(
     model = (proxyapi_model or "").strip() or str(prev.get("proxyapi_model") or "").strip()
     if not model:
         model = _default_proxyapi_model()
+    tw_raw = openrouter_model if openrouter_model is not None else str(
+        prev.get("openrouter_model") or prev.get("timeweb_model") or ""
+    )
+    tw_model = sanitize_openrouter_model(tw_raw) or settings_gateway_model() or DEFAULT_TIMEWEB_MODEL
     payload = {
         "route": route,
         "proxyapi_model": model,
+        "openrouter_model": tw_model,
         "updated_at": time.time(),
         "updated_by": updated_by,
     }
@@ -293,7 +385,11 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
     creds = current_creds() if effective else creds_from_settings()
     gemini_pool = pool_summary(settings)
     route = creds.route if effective else get_global_route()
-    or_model = creds.openrouter_model if effective else sanitize_openrouter_model(settings.openrouter_model)
+    or_model = (
+        sanitize_openrouter_model(creds.openrouter_model) or get_timeweb_model()
+        if effective
+        else get_timeweb_model()
+    )
     gemini_model = (settings.gemini_model or "").strip() or "gemini-3.1-pro-preview"
     gemini_translate_model = (
         (getattr(settings, "gemini_translate_model", None) or "").strip() or "gemini-3.1-pro-preview"
@@ -316,13 +412,13 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
     or_meta = {
         **ROUTES["openrouter"],
         "hint": (
-            f"Своя модель: {or_model}. Списка нет — только вписанный id."
+            f"Ключ TIMEWEB_API_KEY. Сейчас {or_model}. Список — модели со зрением (скан)."
             if or_model
             else ROUTES["openrouter"]["hint"]
         ),
     }
     primaries = {
-        "openrouter": {"provider": "openrouter", "model": or_model},
+        "openrouter": {"provider": "timeweb", "model": or_model},
         "opus": {"provider": px_kind, "model": px_id},
         "gemini": {"provider": "gemini", "model": gemini_model},
     }
@@ -345,6 +441,8 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
         "proxyapi_model": px_id,
         "proxyapi_models": list(PROXYAPI_MODELS),
         "openrouter_model": or_model,
+        "timeweb_model": or_model,
+        "timeweb_models": list(TIMEWEB_MODELS),
         "fallback_models": {
             "openrouter": or_model,
             "gemini": gemini_model,
@@ -353,7 +451,7 @@ def describe_route(*, effective: bool = False) -> dict[str, Any]:
             "anthropic": _default_proxyapi_model(),
         },
         "updated_at": _read_updated_at(),
-        "openrouter_key": bool(creds.openrouter_api_key if effective else (settings.openrouter_api_key or "").strip()),
+        "openrouter_key": bool(creds.openrouter_api_key if effective else settings_gateway_key(settings)),
         "proxyapi_key": bool(creds.openai_api_key if effective else (settings.openai_api_key or "").strip()),
         "gemini_key": bool(
             (creds.gemini_api_key if effective else (settings.gemini_api_key or "").strip())
@@ -388,7 +486,7 @@ def model_plan(*, text: bool = False) -> dict[str, list[str]]:
     settings = get_settings()
     route = get_route()
     plan = _empty_plan()
-    or_model = sanitize_openrouter_model(current_creds().openrouter_model)
+    or_model = sanitize_openrouter_model(current_creds().openrouter_model) or get_timeweb_model()
     gemini_primary = (settings.gemini_model or "").strip() or "gemini-3.1-pro-preview"
     gemini_translate = (getattr(settings, "gemini_translate_model", None) or "").strip() or "gemini-3.1-pro-preview"
     if text:

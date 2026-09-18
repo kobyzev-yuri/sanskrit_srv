@@ -35,11 +35,11 @@ def _page(no: int, src: str = SMALL):
 
 def test_translate_batch_size_by_plan():
     assert translate_batch_size_for_plan(
-        {"openrouter": ["google/gemini-2.5-flash"], "anthropic": [], "gemini": [], "openai": []}
-    ) == 1
+        {"openrouter": ["google/gemini-3.5-flash"], "anthropic": [], "gemini": [], "openai": []}
+    ) == 3
     assert translate_batch_size_for_plan(
-        {"openrouter": ["stealth/ox-alpha"], "anthropic": [], "gemini": [], "openai": []}
-    ) == 2
+        {"openrouter": ["z-ai/glm-5.3-flash"], "anthropic": [], "gemini": [], "openai": []}
+    ) == 3
     assert translate_batch_size_for_plan(
         {"openrouter": [], "anthropic": [], "gemini": ["gemini-3.1-pro-preview"], "openai": []}
     ) == 6

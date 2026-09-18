@@ -1,14 +1,4 @@
-"""OpenRouter stealth/ox-alpha call shape.
-
-ox-alpha is free and reasoning-mandatory. Catalog default effort is ``max``, which
-burns 5–15 minutes per page and often fills the 32k completion cap with chain-of-thought
-instead of HTML. We keep the model (quality + price) and turn the knobs:
-
-- translate: effort=low (HTML transform of known source)
-- digitize: effort=high (vision fidelity, still not max)
-- completion cap well below 32k so thinking cannot starve the HTML
-- retry 429 from the shared free pool instead of skipping the page
-"""
+"""OpenAI-compatible chat completions (Timeweb AI Gateway; ox-alpha knobs kept for leftover ids)."""
 from __future__ import annotations
 
 import logging
@@ -20,7 +10,7 @@ import httpx
 from app.config import get_settings
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, is_quota_response, set_quota_alert
 
-log = logging.getLogger("sanskrit.openrouter")
+log = logging.getLogger("sanskrit.gateway")
 
 TASK_TRANSLATE = "translate"
 TASK_DRAFT = "draft"
@@ -35,14 +25,20 @@ _COMPLETION_CAP = {
     TASK_DRAFT: 16384,
 }
 
-OPENROUTER_402_MSG = (
-    "OpenRouter: HTTP 402 — нет средств на эту модель. "
-    "Пополните баланс на openrouter.ai или смените маршрут в бэкофисе."
+TIMEWEB_402_MSG = (
+    "Timeweb AI Gateway: HTTP 402 — нет средств на эту модель. "
+    "Пополните баланс в панели Timeweb Cloud (ИИ-сервисы → AI Gateway) или смените маршрут в бэкофисе."
 )
+OPENROUTER_402_MSG = TIMEWEB_402_MSG
 
 
-def quota_message_for_url(_url: str, _body: str = "") -> str:
-    return OPENROUTER_402_MSG
+def quota_message_for_url(url: str = "", _body: str = "") -> str:
+    if "openrouter.ai" in (url or "").lower():
+        return (
+            "OpenRouter: HTTP 402 — нет средств на эту модель. "
+            "Этот маршрут заменён на Timeweb AI Gateway."
+        )
+    return TIMEWEB_402_MSG
 
 
 _RETRY_STATUSES = frozenset({429, 502, 503, 504})
@@ -98,12 +94,9 @@ def apply_ox_chat_options(
 
 
 def openrouter_headers(api_key: str) -> dict[str, str]:
-    settings = get_settings()
     return {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": (settings.openrouter_http_referer or "https://sanskrit-srv.local"),
-        "X-Title": (settings.openrouter_app_title or "sanskrit_srv"),
     }
 
 
@@ -129,7 +122,7 @@ def post_openrouter_chat(
     last_err = ""
     for attempt, wait in enumerate(waits):
         if wait:
-            log.warning("OpenRouter retry in %ss (%s)", wait, last_err[:180])
+            log.warning("LLM gateway retry in %ss (%s)", wait, last_err[:180])
             sleep(wait)
         try:
             resp = do_post(url, headers=headers, json=payload, timeout=timeout)
@@ -142,7 +135,7 @@ def post_openrouter_chat(
         if resp.status_code == 200:
             data = resp.json()
             if not isinstance(data, dict):
-                raise RuntimeError("OpenRouter returned non-object JSON")
+                raise RuntimeError("LLM gateway returned non-object JSON")
             return data
         body = (resp.text or "")[:400]
         if is_quota_response(resp.status_code, body):
@@ -164,4 +157,4 @@ def post_openrouter_chat(
                 )
             continue
         raise RuntimeError(f"HTTP {resp.status_code} {body[:300]}")
-    raise LlmRateLimitError(last_err or "OpenRouter rate limited")
+    raise LlmRateLimitError(last_err or "LLM gateway rate limited")

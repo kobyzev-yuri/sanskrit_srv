@@ -2645,7 +2645,7 @@ function taskLabel(task) {
 function networkLabel(net) {
   const id = String(net || "");
   const names = {
-    openrouter: "OpenRouter",
+    openrouter: "Timeweb",
     gemini: "Gemini",
     anthropic: "Anthropic",
     openai: "OpenAI",
@@ -2732,8 +2732,22 @@ async function loadLlmRoute() {
         return `<option value="${escapeHtml(m.id)}"${sel}>${escapeHtml(m.label)} — ${escapeHtml(m.provider)}:${escapeHtml(m.id)}</option>`;
       })
       .join("");
+    const twModels = route.timeweb_models || [];
+    const currentTw = route.openrouter_model || route.timeweb_model || "";
+    const twOpts = twModels
+      .map((m) => {
+        const sel = m.id === currentTw ? " selected" : "";
+        return `<option value="${escapeHtml(m.id)}"${sel}>${escapeHtml(m.label)} — ${escapeHtml(m.id)}</option>`;
+      })
+      .join("");
     box.innerHTML =
       radios +
+      (twOpts
+        ? `<label class="llm-proxyapi-model">Модель на Timeweb AI Gateway
+            <select id="llm-timeweb-model">${twOpts}</select>
+          </label>
+          <p class="muted">Список — модели со зрением (скан). Тот же ключ Timeweb, другая модель. Переключает маршрут на Gateway.</p>`
+        : "") +
       (selectOpts
         ? `<label class="llm-proxyapi-model">Модель на ProxyAPI.ru
             <select id="llm-proxyapi-model">${selectOpts}</select>
@@ -2766,6 +2780,17 @@ async function loadLlmRoute() {
       pxSelect.onchange = async () => {
         try {
           await applyRoute({ route: "opus", proxyapi_model: pxSelect.value });
+        } catch (e) {
+          toast(e.message, true);
+          await loadLlmRoute();
+        }
+      };
+    }
+    const twSelect = $("#llm-timeweb-model");
+    if (twSelect) {
+      twSelect.onchange = async () => {
+        try {
+          await applyRoute({ route: "openrouter", openrouter_model: twSelect.value });
         } catch (e) {
           toast(e.message, true);
           await loadLlmRoute();
@@ -2876,8 +2901,8 @@ async function loadAccountLlm() {
   }
   if (hint) {
     hint.textContent = llm.allow_default_llm
-      ? `Бэкофис: ${llm.default_label}. Gemini ${llm.default_gemini_keys > 1 ? llm.default_gemini_keys + " ключей" : (llm.default_gemini_key ? "задан" : "не задан")}, OpenRouter ${llm.default_openrouter_key ? "задан" : "не задан"}, ProxyAPI ${llm.default_proxyapi_key ? "задан" : "не задан"}.`
-      : "Администратор не назначил вам токены сервера — нужен свой ключ OpenRouter или ProxyAPI.";
+      ? `Бэкофис: ${llm.default_label}. Gemini ${llm.default_gemini_keys > 1 ? llm.default_gemini_keys + " ключей" : (llm.default_gemini_key ? "задан" : "не задан")}, Timeweb ${llm.default_openrouter_key ? "задан" : "не задан"}, ProxyAPI ${llm.default_proxyapi_key ? "задан" : "не задан"}.`
+      : "Администратор не назначил вам токены сервера — нужен свой ключ Timeweb или ProxyAPI.";
   }
   if (useDef) {
     useDef.checked = Boolean(llm.use_default_llm);
@@ -2886,11 +2911,27 @@ async function loadAccountLlm() {
   if (resetBtn) resetBtn.hidden = !llm.allow_default_llm;
   const orHint = $("#account-or-hint");
   const pxHint = $("#account-px-hint");
-  if (orHint) orHint.textContent = llm.has_openrouter_key ? `Сохранён OpenRouter …${llm.openrouter_hint || ""}` : "Свой OpenRouter не задан";
+  if (orHint) orHint.textContent = llm.has_openrouter_key ? `Сохранён Timeweb …${llm.openrouter_hint || ""}` : "Свой Timeweb не задан";
   if (pxHint) pxHint.textContent = llm.has_proxyapi_key ? `Сохранён ProxyAPI …${llm.proxyapi_hint || ""}` : "Свой ProxyAPI не задан";
   const orModel = $("#account-openrouter-model");
   if (orModel) {
-    orModel.value = llm.openrouter_model || "";
+    const twModels = llm.timeweb_models || [];
+    const current = llm.openrouter_model || "";
+    const opts = twModels
+      .map((m) => {
+        const sel = m.id === current ? " selected" : "";
+        return `<option value="${escapeHtml(m.id)}"${sel}>${escapeHtml(m.label)}</option>`;
+      })
+      .join("");
+    orModel.innerHTML = opts;
+    if (current && ![...orModel.options].some((o) => o.value === current)) {
+      const extra = document.createElement("option");
+      extra.value = current;
+      extra.textContent = current;
+      extra.selected = true;
+      orModel.prepend(extra);
+    }
+    if (!orModel.value && twModels[0]) orModel.value = twModels[0].id;
     orModel.disabled = Boolean(llm.use_default_llm);
   }
   const box = $("#account-llm-route-box");
