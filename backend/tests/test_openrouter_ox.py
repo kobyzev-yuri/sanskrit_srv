@@ -10,6 +10,7 @@ from app.services.openrouter_ox import (
     TASK_TRANSLATE,
     apply_ox_chat_options,
     completion_cap,
+    is_missing_gateway_model_error,
     post_openrouter_chat,
     quota_message_for_url,
 )
@@ -161,6 +162,16 @@ def test_post_429_exhausted_raises_rate_limit():
             sleep=lambda _s: None,
             post=always_429,
         )
+
+
+def test_missing_gateway_model_is_hard_error():
+    assert is_missing_gateway_model_error(
+        "Timeweb: модель google/gemini-3.5-flash не найдена в каталоге шлюза."
+    )
+    assert is_missing_gateway_model_error(
+        'HTTP 404 {"error":{"message":"The requested model was not found."}}'
+    )
+    assert not is_missing_gateway_model_error("timeout after 180s")
 
 
 def test_post_402_is_quota():

@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -30,6 +31,7 @@ from app.services.llm_proofread import (
     remaining_after_apply,
     save_page_proofread,
 )
+from app.services.llm_route import llm_user_context
 from app.services.llm_status import LlmQuotaError, LlmRateLimitError, set_quota_alert
 from app.services.llm_translate import (
     BLANK_IAST_ARTICLE,
@@ -45,6 +47,7 @@ from app.services.llm_translate import (
     visible_html_text,
 )
 from app.services.llm_usage import record_usage
+from app.services.openrouter_ox import is_missing_gateway_model_error
 from app.services.pdf_extract import (
     classify_pdf,
     extract_page_text_html,
@@ -127,6 +130,25 @@ def enqueue_project_pipeline(
     db.commit()
     db.refresh(job)
     return job
+
+
+def resolve_pipeline_user(db: Session, job_id: uuid.UUID | None) -> User | None:
+    """Expert who queued the mass job — same keys as a per-page click."""
+    if job_id is None:
+        return None
+    job = db.get(Job, job_id)
+    raw = (job.payload or {}).get("user_id") if job is not None else None
+    if not raw:
+        return None
+    try:
+        return db.get(User, uuid.UUID(str(raw)))
+    except (ValueError, TypeError):
+        return None
+
+
+def _llm_for_job(db: Session, job_id: uuid.UUID | None):
+    user = resolve_pipeline_user(db, job_id)
+    return llm_user_context(user) if user is not None else nullcontext()
 
 
 def page_is_agreed(page: Page) -> bool:
@@ -407,13 +429,14 @@ def process_one_translate_page(
 
     try:
         runner = transliterate_from_source if is_iast else translate_from_source
-        html, model, usage = runner(
-            source_html=source_html,
-            cfg=cfg,
-            current_html=None,
-            directive=None,
-            on_chunk=on_chunk,
-        )
+        with _llm_for_job(db, job_id):
+            html, model, usage = runner(
+                source_html=source_html,
+                cfg=cfg,
+                current_html=None,
+                directive=None,
+                on_chunk=on_chunk,
+            )
     finally:
         stop_wait.set()
     if not recorded:
@@ -493,7 +516,9 @@ def translate_one_by_one(
             notes.append(process_one_translate_page(db, p, job_id=job_id, auto_agree=auto_agree))
         except (LlmQuotaError, LlmRateLimitError):
             raise
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            if is_missing_gateway_model_error(str(exc)):
+                raise
             log.exception("single-page translate failed page %s", p.page_no)
             notes.append(f"fail:{p.page_no}")
             page = db.get(Page, p.id)
@@ -554,14 +579,18 @@ def process_translate_run(
     batch_runner = transliterate_from_sources if is_iast else translate_from_sources
     op = "transliterate" if is_iast else "translate"
     try:
-        html_by_no, model, usage = batch_runner(
-            [{k: v for k, v in row.items() if k != "page"} for row in payloads],
-            cfg=cfg,
-        )
+        with _llm_for_job(db, job_id):
+            html_by_no, model, usage = batch_runner(
+                [{k: v for k, v in row.items() if k != "page"} for row in payloads],
+                cfg=cfg,
+            )
     except (LlmQuotaError, LlmRateLimitError):
         _revert_empty_translate_drafts(db, pages)
         raise
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        if is_missing_gateway_model_error(str(exc)):
+            _revert_empty_translate_drafts(db, pages)
+            raise
         log.exception(
             "batch translate %s–%s failed; falling back per page",
             pages[0].page_no,
@@ -628,16 +657,17 @@ def process_one_translate_proofread(
 
     nb = neighbor_html(db, page)
     cfg = translation_cfg(project)
-    suggestions, model, usage = proofread_translation(
-        page_no=page.page_no,
-        source_html=source,
-        current_html=draft,
-        prev_draft=nb["prev_draft"],
-        prev_source=nb["prev_source"],
-        next_draft=nb["next_draft"],
-        next_source=nb["next_source"],
-        style=str(cfg.get("style") or "interlinear"),
-    )
+    with _llm_for_job(db, job_id):
+        suggestions, model, usage = proofread_translation(
+            page_no=page.page_no,
+            source_html=source,
+            current_html=draft,
+            prev_draft=nb["prev_draft"],
+            prev_source=nb["prev_source"],
+            next_draft=nb["next_draft"],
+            next_source=nb["next_source"],
+            style=str(cfg.get("style") or "interlinear"),
+        )
     record_usage(
         db,
         project_id=project.id,
@@ -730,13 +760,15 @@ def process_one_page(
         figs = extract_embedded_figures(pdf_path, project.id, page.page_no)
     except Exception:  # noqa: BLE001
         log.exception("figure extract failed page %s", page.page_no)
-    html, model, usage = revise_from_scan(
-        Path(page.scan_path),
-        page_no=page.page_no,
-        current_html=page.current_html,
-        directive="Сделай полный HTML-черновик всей страницы по скану, сохранив стиль и компоновку книги.",
-        available_figures=figs or None,
-    )
+    html, model, usage = None, "", {}
+    with _llm_for_job(db, job_id):
+        html, model, usage = revise_from_scan(
+            Path(page.scan_path),
+            page_no=page.page_no,
+            current_html=page.current_html,
+            directive="Сделай полный HTML-черновик всей страницы по скану, сохранив стиль и компоновку книги.",
+            available_figures=figs or None,
+        )
     html = finalize_page_html(
         html,
         scan_path=Path(page.scan_path),
@@ -803,7 +835,9 @@ def digitize_one_by_one(
             )
         except (LlmQuotaError, LlmRateLimitError):
             raise
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            if is_missing_gateway_model_error(str(exc)):
+                raise
             log.exception("single-page digitize failed page %s", p.page_no)
             notes.append(f"fail:{p.page_no}")
             page = db.get(Page, p.id)
@@ -869,12 +903,15 @@ def process_digitize_run(
         )
 
     try:
-        html_by_no, model, usage = revise_from_scans(
-            [{k: v for k, v in row.items() if k != "page"} for row in payloads]
-        )
+        with _llm_for_job(db, job_id):
+            html_by_no, model, usage = revise_from_scans(
+                [{k: v for k, v in row.items() if k != "page"} for row in payloads]
+            )
     except (LlmQuotaError, LlmRateLimitError):
         raise
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        if is_missing_gateway_model_error(str(exc)):
+            raise
         log.exception("batch digitize %s–%s failed; falling back per page", pages[0].page_no, pages[-1].page_no)
         notes = digitize_one_by_one(
             db, pages, force=force, force_llm=force_llm, job_id=job_id
@@ -934,13 +971,7 @@ def process_digitize_run(
 def run_pipeline_job(db: Session, job: Job) -> None:
     from app.services.llm_route import bind_llm_user, reset_llm_user
 
-    raw = (job.payload or {}).get("user_id")
-    user = None
-    if raw:
-        try:
-            user = db.get(User, uuid.UUID(str(raw)))
-        except (ValueError, TypeError):
-            user = None
+    user = resolve_pipeline_user(db, job.id)
     token = bind_llm_user(user)
     try:
         _run_pipeline_job_body(db, job)
@@ -1084,6 +1115,22 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
                 db.commit()
                 return
             except Exception as exc:  # noqa: BLE001
+                if is_missing_gateway_model_error(str(exc)):
+                    job.status = JobStatus.failed
+                    job.error = str(exc)[:2000]
+                    job.progress = {
+                        "done": done,
+                        "total": total,
+                        "current_page": label,
+                        "source_kind": project_source_kind(project),
+                        "last_error": job.error,
+                        "open_only": open_only,
+                        "scope": "whole_book",
+                        "batch_pages": batch_n,
+                    }
+                    project.status = "in_progress"
+                    db.commit()
+                    return
                 log.exception("pages %s failed", label)
                 for page in run:
                     page = db.get(Page, page.id)
@@ -1103,6 +1150,7 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
                     "batch_pages": batch_n,
                 }
                 db.commit()
+                continue
             done += len(run)
             job.progress = {
                 "done": done,
@@ -1116,7 +1164,12 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
             db.commit()
 
         project.status = "in_progress"
-        job.status = JobStatus.done
+        last_error = str((job.progress or {}).get("last_error") or "").strip()
+        if total and done == 0:
+            job.status = JobStatus.failed
+            job.error = last_error or "оцифровка: ни одна страница не обработана"
+        else:
+            job.status = JobStatus.done
         job.progress = {
             "done": done,
             "total": total,
@@ -1124,6 +1177,7 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
             "source_kind": project_source_kind(project),
             "open_only": open_only,
             "scope": "whole_book",
+            "last_error": last_error or None,
         }
         db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -1143,25 +1197,11 @@ def _run_translate_pipeline(
     task = project_task(project)
     if task == "transliterate":
         if not transliteration_agreed(project):
-            user = None
-            raw = (job.payload or {}).get("user_id")
-            if raw:
-                try:
-                    user = db.get(User, uuid.UUID(str(raw)))
-                except (ValueError, TypeError):
-                    user = None
-            lock_transliteration_template(project, user)
+            lock_transliteration_template(project, resolve_pipeline_user(db, job.id))
             flag_modified(project, "settings")
             db.commit()
     elif not translation_agreed(project):
-        user = None
-        raw = (job.payload or {}).get("user_id")
-        if raw:
-            try:
-                user = db.get(User, uuid.UUID(str(raw)))
-            except (ValueError, TypeError):
-                user = None
-        lock_translation_template(project, user)
+        lock_translation_template(project, resolve_pipeline_user(db, job.id))
         flag_modified(project, "settings")
         db.commit()
 
@@ -1310,6 +1350,24 @@ def _run_translate_pipeline(
                 time.sleep(wait)
             continue
         except Exception as exc:  # noqa: BLE001
+            if is_missing_gateway_model_error(str(exc)):
+                log.error("translate %s gateway model missing: %s", label, exc)
+                _revert_empty_translate_drafts(db, run)
+                job.status = JobStatus.failed
+                job.error = str(exc)[:2000]
+                job.progress = {
+                    "done": done,
+                    "skipped": skipped,
+                    "total": total,
+                    "current_page": label,
+                    "last_error": job.error,
+                    "open_only": open_only,
+                    "scope": "translate_all",
+                    "batch_pages": batch_n,
+                }
+                project.status = "in_progress"
+                db.commit()
+                return
             log.exception("translate %s failed", label)
             _revert_empty_translate_drafts(db, run)
             job.progress = {
@@ -1338,7 +1396,12 @@ def _run_translate_pipeline(
         db.commit()
 
     project.status = "in_progress"
-    job.status = JobStatus.done
+    last_error = str((job.progress or {}).get("last_error") or "").strip()
+    if total and done == 0:
+        job.status = JobStatus.failed
+        job.error = last_error or "конвейер: ни одна страница не обработана"
+    else:
+        job.status = JobStatus.done
     job.progress = {
         "done": done,
         "skipped": skipped,
@@ -1347,6 +1410,7 @@ def _run_translate_pipeline(
         "open_only": open_only,
         "scope": "translate_all",
         "batch_pages": batch_n,
+        "last_error": last_error or None,
     }
     db.commit()
 
@@ -1494,6 +1558,26 @@ def _run_translate_proofread(
                 time.sleep(wait)
             continue
         except Exception as exc:  # noqa: BLE001
+            if is_missing_gateway_model_error(str(exc)):
+                job.status = JobStatus.failed
+                job.error = str(exc)[:2000]
+                set_job_progress(
+                    db,
+                    job,
+                    done=done,
+                    skipped=skipped,
+                    applied_high=applied_high,
+                    flagged=flagged,
+                    total=total,
+                    current_page=page.page_no,
+                    last_error=job.error,
+                    open_only=open_only,
+                    scope="translate_proofread",
+                    checked=checked,
+                )
+                project.status = "in_progress"
+                db.commit()
+                return
             log.exception("proofread translate page %s failed", page.page_no)
             set_job_progress(
                 db,

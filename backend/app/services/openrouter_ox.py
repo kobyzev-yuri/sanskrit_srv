@@ -93,6 +93,16 @@ def apply_ox_chat_options(
     return payload
 
 
+def is_missing_gateway_model_error(text: str) -> bool:
+    """Timeweb 404 on a bad catalog id — retrying other pages will not help."""
+    low = (text or "").lower()
+    return (
+        "не найдена в каталоге" in low
+        or "requested model was not found" in low
+        or "model was not found" in low
+    )
+
+
 def openrouter_headers(api_key: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {api_key}",
