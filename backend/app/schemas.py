@@ -254,6 +254,19 @@ class PageHtmlIn(BaseModel):
     source_html: str | None = None
 
 
+class PageDraftIn(BaseModel):
+    html: str | None = None
+    source_html: str | None = None
+    note: str | None = None
+    iast_lines: list[str] | None = None
+
+
+class SourceFixOut(BaseModel):
+    page: PageDetailOut
+    changed: int = 0
+    synced: bool = False
+
+
 class PageReviseIn(BaseModel):
     """Natural-language directive to re-draft the page from its scan."""
     directive: str = Field(min_length=3, max_length=NOTES_MAX)
@@ -305,6 +318,10 @@ class SpawnTransliterationIn(BaseModel):
 
 class PageTranslateIn(BaseModel):
     directive: str | None = Field(default=None, max_length=NOTES_MAX)
+
+
+class PageMergeIn(BaseModel):
+    alt_text: str = Field(min_length=8, max_length=NOTES_MAX)
 
 
 class LlmUsageTotalsOut(BaseModel):

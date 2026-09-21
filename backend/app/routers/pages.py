@@ -1,7 +1,8 @@
+import logging
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -13,7 +14,9 @@ from app.models import Page, PageStatus, PageVersion, Project, Role, User, Versi
 from app.schemas import (
     DraftSearchOut,
     PageDetailOut,
+    PageDraftIn,
     PageHtmlIn,
+    PageMergeIn,
     PageOut,
     PageReviewAgainIn,
     PageReviseIn,
@@ -22,6 +25,7 @@ from app.schemas import (
     ProofreadApplyIn,
     ProofreadOut,
     ProofreadSuggestion,
+    SourceFixOut,
 )
 from app.services.directive_fix import apply_directive_replacements
 from app.services.draft_search import search_pages
@@ -44,6 +48,7 @@ from app.services.llm_proofread import (
 )
 from app.services.llm_status import GEMINI_RATE_LIMIT_MSG, LlmQuotaError, LlmRateLimitError
 from app.services.llm_route import llm_user_context
+from app.services.llm_merge import merge_translations
 from app.services.llm_translate import (
     BLANK_IAST_ARTICLE,
     english_passthrough_html,
@@ -53,7 +58,8 @@ from app.services.llm_translate import (
 )
 from app.services.llm_usage import record_usage
 from app.services.pipeline import DEFAULT_REVIEW_DIRECTIVE, ensure_page_scan, process_one_page
-from app.services.source_sync import sync_sanskrit_to_digitize
+from app.services.iast_correct import apply_iast_corrections, source_for_digitize
+from app.services.source_sync import linked_digitize_page, sync_sanskrit_to_digitize
 from app.services.translation_style import (
     ENGLISH_KEEP,
     is_source_html_task,
@@ -67,6 +73,7 @@ from app.services.translation_style import (
 )
 
 router = APIRouter(tags=["pages"])
+log = logging.getLogger("sanskrit.pages")
 
 
 def _uid(value: str) -> uuid.UUID:
@@ -417,6 +424,61 @@ def translate_one_page(
     return get_page(str(page.id), user, db)
 
 
+@router.post("/pages/{page_id}/merge-translations", response_model=PageDetailOut)
+def merge_translations_page(
+    page_id: str,
+    body: PageMergeIn,
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Merge current Russian draft with an alternative (expert) translation."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    project = db.get(Project, page.project_id)
+    if project is None or project_task(project) != "translate":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Не проект перевода")
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
+    source_html = (page.source_html or "").strip()
+    draft = (page.current_html or "").strip()
+    if not source_html:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет выверенного санскрита на этой странице")
+    if not draft:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет текущего черновика перевода")
+    cfg = translation_cfg(project)
+    try:
+        with llm_user_context(user):
+            html, model, usage = merge_translations(
+                source_html=source_html,
+                draft_html=draft,
+                alt_text=body.alt_text,
+                style=str(cfg.get("style") or "interlinear"),
+            )
+    except (LlmQuotaError, LlmRateLimitError) as exc:
+        _raise_llm_http(exc)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("merge translations page %s failed", page.page_no)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail=f"Слияние переводов не удалось: {exc}",
+        ) from exc
+
+    record_usage(
+        db,
+        project_id=page.project_id,
+        page_id=page.id,
+        network=str(usage.get("network") or "openrouter"),
+        model=str(usage.get("model") or model.split(":", 1)[-1]),
+        usage=usage,
+        operation="merge",
+    )
+    note = f"merge {cfg.get('style')} | {model}"
+    return _save_page_html(db, page, user, html, source=VersionSource.llm, note=note)
+
+
 def _apply_translate_revision(
     db: Session,
     page: Page,
@@ -441,13 +503,17 @@ def _apply_translate_revision(
             html, model, usage = translate_from_source(
                 source_html=source_html,
                 cfg=cfg,
-                current_html=page.current_html,
+                current_html=page.current_html if (directive or "").strip() else None,
                 directive=directive,
             )
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Translate failed: {exc}") from exc
+        log.exception("translate page %s failed", page.page_no)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail=f"Перевод не удался: {exc}",
+        ) from exc
 
     record_usage(
         db,
@@ -477,6 +543,109 @@ def transliterate_one_page(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
     page = _apply_transliterate_revision(db, page, user, body.directive)
     return get_page(str(page.id), user, db)
+
+
+def _version_source_for(user: User) -> VersionSource:
+    return VersionSource.expert if user.role in (Role.admin, Role.expert) else VersionSource.scholar
+
+
+def _require_open_derived(page: Page, project: Project | None, *, iast_only: bool = False) -> Project:
+    if project is None or not is_source_html_task(project):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Только в проекте перевода или IAST")
+    if iast_only and project_task(project) != "transliterate":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Правка по IAST — только в проекте транслитерации",
+        )
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
+    return project
+
+
+@router.post("/pages/{page_id}/iast-correct", response_model=SourceFixOut)
+def iast_correct_page(
+    page_id: str,
+    body: PageDraftIn = Body(default_factory=PageDraftIn),
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Rewrite Devanagari from manually edited IAST lines. Does not touch digitize."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    _require_open_derived(page, db.get(Project, page.project_id), iast_only=True)
+    draft = body.html if body.html is not None else (page.current_html or "")
+    source = body.source_html if body.source_html is not None else (page.source_html or "")
+    result = apply_iast_corrections(draft, source, iast_lines=getattr(body, "iast_lines", None))
+    if not result.changed:
+        return SourceFixOut(page=get_page(str(page.id), user, db), changed=0, synced=False)
+    page.source_html = result.source_html
+    bits = [f"{c.old}→{c.new}" for c in result.changes[:6]]
+    note = "iast→deva | " + "; ".join(bits)
+    _save_page_html(
+        db,
+        page,
+        user,
+        result.draft_html,
+        source=_version_source_for(user),
+        note=note,
+    )
+    return SourceFixOut(page=get_page(str(page.id), user, db), changed=result.changed, synced=False)
+
+
+@router.post("/pages/{page_id}/sync-digitize", response_model=SourceFixOut)
+def sync_digitize_page(
+    page_id: str,
+    body: PageDraftIn = Body(default_factory=PageDraftIn),
+    user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
+    db: Session = Depends(get_db),
+):
+    """Write corrected Devanagari onto the linked digitize page (snapshot first)."""
+    page = db.get(Page, _uid(page_id))
+    if page is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
+    project = _require_open_derived(page, db.get(Project, page.project_id))
+    if linked_digitize_page(db, project, page.page_no) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет связанного проекта оцифровки")
+    draft = body.html if body.html is not None else (page.current_html or "")
+    new_source, changes = source_for_digitize(
+        saved_source=page.source_html or "",
+        incoming_source=body.source_html,
+        draft_html=draft,
+    )
+    if not (new_source or "").strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Нет санскрита, который можно записать")
+    old_source = page.source_html or ""
+    old_draft = page.current_html or ""
+    page.source_html = new_source
+    if draft.strip():
+        page.current_html = preserve_figure_srcs(page.source_html or "", draft)
+    synced = sync_sanskrit_to_digitize(
+        db,
+        translate_project=project,
+        translate_page=page,
+        html=page.source_html or "",
+        user=user,
+        reason=body.note or "digitize fix",
+    )
+    source_changed = (page.source_html or "") != old_source
+    draft_changed = (page.current_html or "") != old_draft
+    if not synced and not source_changed and not draft_changed:
+        db.commit()
+        return SourceFixOut(page=get_page(str(page.id), user, db), changed=0, synced=False)
+    bits = [f"{c.old}→{c.new}" for c in changes[:6]]
+    note = "digitize sync"
+    if bits:
+        note += " | " + "; ".join(bits)
+    _save_page_html(
+        db,
+        page,
+        user,
+        page.current_html or draft,
+        source=_version_source_for(user),
+        note=note,
+    )
+    return SourceFixOut(page=get_page(str(page.id), user, db), changed=len(changes), synced=synced)
 
 
 def _apply_transliterate_revision(

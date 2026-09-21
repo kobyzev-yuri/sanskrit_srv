@@ -70,7 +70,22 @@ async function api(path, opts = {}) {
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(opts.json);
   }
-  const res = await fetch(API + path, { ...opts, headers });
+  let res;
+  try {
+    res = await fetch(API + path, { ...opts, headers });
+  } catch (e) {
+    const raw = String(e && e.message ? e.message : e);
+    if (
+      raw === "Failed to fetch" ||
+      raw === "Load failed" ||
+      raw === "NetworkError when attempting to fetch resource."
+    ) {
+      throw new Error(
+        "Связь оборвалась, пока модель думала (сервер перезапустился или сеть). Нажмите ещё раз."
+      );
+    }
+    throw e;
+  }
   if (res.status === 401) {
     logout(false);
     throw new Error("Требуется вход");
@@ -595,6 +610,8 @@ function syncTaskUi() {
       ? "Смысловая проверка перевода: обрывы, стык страниц, санскрит, смысл"
       : "Второй проход: смысловая проверка со сканом";
   }
+  const mergeWrap = $("#merge-alt-wrap");
+  if (mergeWrap) mergeWrap.hidden = !tr;
   const review = $("#btn-review-again");
   if (review) {
     review.hidden = derived;
@@ -644,6 +661,7 @@ function syncTaskUi() {
   if (back) {
     back.hidden = !derived || !p?.source_project_id;
   }
+  syncWyTools();
   syncExportButtons();
 }
 
@@ -1131,6 +1149,10 @@ function updateEditMode() {
   if (proofBtn) {
     proofBtn.disabled = accepted || !hasHtml;
   }
+  const mergeBtn = $("#btn-merge-translations");
+  const mergeAlt = $("#merge-alt-input");
+  if (mergeBtn) mergeBtn.disabled = accepted || !hasHtml;
+  if (mergeAlt) mergeAlt.disabled = accepted;
   if (isDerived()) {
     const trPage = $("#btn-translate-page");
     if (trPage) trPage.disabled = accepted;
@@ -1146,6 +1168,7 @@ function updateEditMode() {
   if (reviewBtn && !isDerived()) {
     reviewBtn.textContent = hasHtml ? "Пересмотри страницу" : "Оцифровать страницу";
   }
+  syncWyTools(accepted);
 }
 
 let pipelineTimer = null;
@@ -1371,6 +1394,129 @@ function pageSavePayload(note) {
   return payload;
 }
 
+function blockPlainText(el) {
+  return String(el?.innerText || el?.textContent || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[\n\r]+/g, "")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
+function collectIastLines() {
+  const box = $("#html-wysiwyg");
+  if (!box || box.querySelector(".wy-empty")) return [];
+  return wysiwygBlocks(box)
+    .filter((el) => isIastLine(el))
+    .map((el) => blockPlainText(el))
+    .filter(Boolean);
+}
+
+function pageDraftPayload() {
+  const payload = { html: currentDraftHtml() };
+  if (isDerived()) {
+    const src = currentSourceHtml();
+    if ((src || "").trim()) payload.source_html = src;
+  }
+  if (isTransliterate()) {
+    const lines = collectIastLines();
+    if (lines.length) payload.iast_lines = lines;
+  }
+  return payload;
+}
+
+function syncWyTools(accepted) {
+  if (accepted === undefined) {
+    const hasHtml = pageHasDraftHtml();
+    accepted = state.page?.status === "expert_done" && hasHtml;
+  }
+  const tools = $("#wy-tools");
+  const iastBtn = $("#btn-iast-correct");
+  const syncBtn = $("#btn-sync-digitize");
+  const derived = isDerived();
+  const iast = isTransliterate();
+  const locked = Boolean(accepted);
+  if (tools) tools.hidden = !derived || locked;
+  if (iastBtn) {
+    iastBtn.hidden = !iast;
+    iastBtn.disabled = locked;
+  }
+  if (syncBtn) {
+    syncBtn.hidden = !derived || !state.project?.source_project_id;
+    syncBtn.disabled = locked;
+  }
+}
+
+function applySourceFix(data) {
+  if (!data?.page) return;
+  state.page = data.page;
+  setDraftHtml(state.page.current_html || "");
+  setSourceHtml(state.page.source_html || "");
+  const st =
+    state.page.status === "expert_done"
+      ? "согласовано"
+      : state.page.status === "expert_review"
+        ? "на правке"
+        : state.page.status;
+  $("#page-status").textContent = st;
+}
+
+async function correctFromIast() {
+  if (!state.page || !isTransliterate()) return;
+  if (
+    !confirm(
+      "Обновить деванагари по строкам IAST, которые выправили вручную?\n\nОцифровка пока не меняется — её запишет «Правка оцифровки»."
+    )
+  ) {
+    return;
+  }
+  try {
+    const data = await api(`/pages/${state.page.id}/iast-correct`, {
+      method: "POST",
+      json: pageDraftPayload(),
+    });
+    applySourceFix(data);
+    await renderLeftPane();
+    if (data.changed) {
+      toast(`Девангари обновлён по IAST: ${data.changed} строк. Оцифровка не тронута.`);
+    } else {
+      toast("Расхождений IAST с деванагари нет");
+    }
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function syncDigitizeFix() {
+  if (!state.page || !isDerived()) return;
+  if (!state.project?.source_project_id) {
+    toast("Нет связанного проекта оцифровки", true);
+    return;
+  }
+  if (
+    !confirm(
+      "Записать выправленный санскрит в проект оцифровки?\n\nТекущая страница оцифровки сохранится в истории (бэкап). Если она была согласована — согласие снимется."
+    )
+  ) {
+    return;
+  }
+  try {
+    const data = await api(`/pages/${state.page.id}/sync-digitize`, {
+      method: "POST",
+      json: pageDraftPayload(),
+    });
+    applySourceFix(data);
+    await renderLeftPane();
+    if (data.synced) {
+      const n = data.changed ? `, строк: ${data.changed}` : "";
+      toast(`Оцифровка обновлена (бэкап в истории)${n}`);
+    } else {
+      toast("Оцифровка уже совпадает с этим санскритом");
+    }
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 function looksRussian(el) {
   return /[А-Яа-яЁёІіѢѣѲѳѴѵ]/.test(el.textContent || "");
 }
@@ -1485,7 +1631,7 @@ function renderWysiwyg(html) {
     hint.textContent = isTranslate()
       ? "Можно править и санскрит, и русский (разный цвет рамки). Теги не показываются."
       : isTransliterate()
-        ? "Можно править санскрит слева (пишется в оцифровку) и IAST справа. Теги не показываются."
+        ? "Правьте IAST (фиолетовая рамка) или деванагари. «Правка по IAST» обновит деванагари; «Правка оцифровки» запишет его в исходник с бэкапом."
         : "Правите санскрит прямо в строках, как в книге. Скан слева, теги не показываются.";
   }
   let src = (html || "").trim();
@@ -2023,6 +2169,49 @@ async function ensureTranslationAgreed() {
   return true;
 }
 
+async function mergeTranslations() {
+  if (!state.page) return;
+  if (!isTranslate()) {
+    toast("Слияние — только в проекте перевода", true);
+    return;
+  }
+  const alt = ($("#merge-alt-input")?.value || "").trim();
+  if (alt.length < 8) {
+    toast("Вставьте второй перевод (хотя бы одну шлоку)", true);
+    return;
+  }
+  if (!pageHasDraftHtml()) {
+    toast("Сначала нужен черновик перевода", true);
+    return;
+  }
+  const st = $("#revise-status");
+  const mergeBtn = $("#btn-merge-translations");
+  const reviseBtn = $("#btn-revise");
+  const trBtn = $("#btn-translate-page");
+  const proofBtn = $("#btn-proofread");
+  if (mergeBtn) mergeBtn.disabled = true;
+  if (reviseBtn) reviseBtn.disabled = true;
+  if (trBtn) trBtn.disabled = true;
+  if (proofBtn) proofBtn.disabled = true;
+  st.textContent = "Сливаем два перевода… до 1–2 мин";
+  try {
+    state.page = await api(`/pages/${state.page.id}/merge-translations`, {
+      method: "POST",
+      json: { alt_text: alt },
+    });
+    setDraftHtml(state.page.current_html || "");
+    switchTab("wysiwyg");
+    $("#page-status").textContent = state.page.status;
+    toast("Слитный черновик готов");
+    st.textContent = "готово";
+  } catch (e) {
+    toast(e.message, true);
+    st.textContent = "";
+  } finally {
+    updateEditMode();
+  }
+}
+
 async function translatePage() {
   if (!state.page) return;
   if (!(await ensureTranslationAgreed())) return;
@@ -2032,7 +2221,7 @@ async function translatePage() {
   const reviseBtn = $("#btn-revise");
   if (trBtn) trBtn.disabled = true;
   if (reviseBtn) reviseBtn.disabled = true;
-  st.textContent = iast ? "LLM делает IAST… до 1–2 мин" : "LLM переводит страницу… до 1–2 мин";
+  st.textContent = iast ? "LLM делает IAST… до 5 мин" : "LLM переводит страницу… пословно может занять 5–8 мин";
   try {
     const directive = $("#directive-input").value.trim();
     const path = iast ? "transliterate" : "translate";
@@ -3077,6 +3266,10 @@ function wire() {
   $("#btn-cancel-whole-book").onclick = cancelWholeBook;
   $("#btn-save").onclick = saveHtml;
   $("#btn-accept").onclick = acceptPage;
+  const btnIastCorrect = $("#btn-iast-correct");
+  if (btnIastCorrect) btnIastCorrect.onclick = correctFromIast;
+  const btnSyncDig = $("#btn-sync-digitize");
+  if (btnSyncDig) btnSyncDig.onclick = syncDigitizeFix;
   $("#btn-revoke").onclick = revokePage;
   $("#btn-revise").onclick = revisePage;
   $("#btn-review-again").onclick = reviewAgain;
@@ -3137,6 +3330,8 @@ function wire() {
   bindPromptFileInput($("#iast-notes-file"), formField($("#iast-form"), "notes"));
   const btnTrPage = $("#btn-translate-page");
   if (btnTrPage) btnTrPage.onclick = translatePage;
+  const btnMerge = $("#btn-merge-translations");
+  if (btnMerge) btnMerge.onclick = mergeTranslations;
   const trForm = $("#translate-form");
   if (trForm) trForm.onsubmit = spawnTranslation;
   const btnCancelTr = $("#btn-cancel-translate");

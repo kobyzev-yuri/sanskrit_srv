@@ -170,3 +170,53 @@ def test_sync_from_transliterate_project():
     )
     assert vers[-1].html == "IAST-SRC"
     assert "from transliteration" in (vers[-1].note or "")
+
+
+def test_iast_overlay_sync_keeps_digitize_backup():
+    from app.services.iast_correct import apply_iast_corrections, source_for_digitize
+
+    src_html = (
+        '<article class="page-style" lang="sa">'
+        '<p class="sa shloka" lang="sa">यज्ञो वै श्रेष्ठतमं कर्म</p>'
+        "</article>"
+    )
+    draft = (
+        '<article class="page-style" lang="sa">'
+        '<p class="sa shloka" lang="sa">यज्ञो वै श्रेष्ठतमं कर्म</p>'
+        '<p class="iast" lang="sa-Latn">yajño vai śreṣṭhatamaṃ karmaḥ</p>'
+        "</article>"
+    )
+    db = _session()
+    user, _src, tr, src_page, tr_page = _pair(db, html=src_html, status=PageStatus.expert_done)
+    tr.settings = {**tr.settings, "task": "transliterate"}
+    tr_page.source_html = src_html
+    tr_page.current_html = draft
+    db.flush()
+    fixed = apply_iast_corrections(draft, src_html)
+    assert fixed.changed == 1
+    new_source, changes = source_for_digitize(
+        saved_source=src_html,
+        incoming_source=fixed.source_html,
+        draft_html=fixed.draft_html,
+    )
+    assert changes
+    assert sync_sanskrit_to_digitize(
+        db,
+        translate_project=tr,
+        translate_page=tr_page,
+        html=new_source,
+        user=user,
+        reason="digitize fix",
+    )
+    db.commit()
+    page = db.get(Page, src_page.id)
+    assert "कर्मः" in (page.current_html or "")
+    assert page.status == PageStatus.expert_review
+    vers = list(
+        db.scalars(
+            select(PageVersion).where(PageVersion.page_id == src_page.id).order_by(PageVersion.version)
+        ).all()
+    )
+    assert [v.html for v in vers] == [src_html, new_source]
+    assert vers[0].note == "snapshot before source sync"
+

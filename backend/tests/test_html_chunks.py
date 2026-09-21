@@ -56,3 +56,14 @@ def test_merge_translated_chunks():
     assert merged.count("<article") == 1
     assert "один" in merged and "два" in merged
     assert 'lang="ru"' in merged.lower()
+
+
+def test_pack_iast_gloss_units_keeps_article():
+    from app.services.html_chunks import pack_iast_gloss_units
+
+    paras = "".join(f"<p class='sa'>यज्ञः {i}</p>" for i in range(6))
+    html = f'<article class="page-style" lang="sa">{paras}</article>'
+    packs = pack_iast_gloss_units(html, max_chars=40)
+    assert len(packs) > 1
+    assert all("<article" in p.lower() for p in packs)
+    assert "यज्ञः 0" in packs[0]

@@ -13,6 +13,46 @@ _ARTICLE_OPEN_RE = re.compile(r"(?is)^\s*(<article\b[^>]*>)\s*")
 _ARTICLE_CLOSE_RE = re.compile(r"(?is)\s*(</article>)\s*$")
 _TAG_RE = re.compile(r"<!--.*?-->|</?([a-zA-Z][\w:-]*)\b[^>]*>", re.S)
 _VOID = frozenset({"hr", "br", "img", "meta", "link", "input", "wbr", "area", "base", "col", "embed", "source", "track"})
+_SA_HYPHEN_JOIN = re.compile(
+    r"""([\u0900-\u097F])-\s*</p>\s*<p\b[^>]*\bclass=["'][^"']*\bsa\b[^"']*["'][^>]*>""",
+    re.I,
+)
+
+
+def glue_hyphenated_sa_lines(html: str) -> str:
+    """Join Devanagari line-wraps: '...पदाव-</p><p class=sa>भासन...' → one paragraph."""
+    text = html or ""
+    for _ in range(80):
+        nxt = _SA_HYPHEN_JOIN.sub(r"\1", text)
+        if nxt == text:
+            return text
+        text = nxt
+    return text
+
+
+def pack_iast_gloss_units(source_html: str, *, max_chars: int = 220) -> list[str]:
+    """Small <article> packs for word-gloss: Qwen skips a full commentary page."""
+    glued = glue_hyphenated_sa_lines(source_html)
+    open_tag, inner, _ = unwrap_article(glued)
+    open_tag = open_tag or '<article class="page-style" lang="sa">'
+    blocks = split_top_level_blocks(inner) if inner.strip() else [glued]
+    if not blocks:
+        return [glued] if glued.strip() else []
+    packs: list[list[str]] = []
+    buf: list[str] = []
+    size = 0
+    for block in blocks:
+        blen = len(block)
+        if buf and size + blen > max_chars:
+            packs.append(buf)
+            buf = []
+            size = 0
+        buf.append(block)
+        size += blen
+    if buf:
+        packs.append(buf)
+    close_tag = "</article>"
+    return [f"{open_tag}\n{''.join(p).strip()}\n{close_tag}" for p in packs]
 
 
 def unwrap_article(html: str) -> tuple[str, str, str]:
