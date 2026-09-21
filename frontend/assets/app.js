@@ -448,6 +448,17 @@ function isDerived() {
   return isTranslate() || isTransliterate();
 }
 
+function syncMergeUi() {
+  const wrap = $("#merge-alt-wrap");
+  if (!wrap) return;
+  const accepted = state.page?.status === "expert_done" && pageHasDraftHtml();
+  wrap.hidden = !isTranslate() || accepted;
+  const mergeBtn = $("#btn-merge-translations");
+  const mergeAlt = $("#merge-alt-input");
+  if (mergeBtn) mergeBtn.disabled = accepted || !pageHasDraftHtml();
+  if (mergeAlt) mergeAlt.disabled = accepted;
+}
+
 function translationCfg() {
   if (isTransliterate()) {
     return state.project?.transliteration || state.project?.settings?.transliteration || {};
@@ -610,8 +621,7 @@ function syncTaskUi() {
       ? "Смысловая проверка перевода: обрывы, стык страниц, санскрит, смысл"
       : "Второй проход: смысловая проверка со сканом";
   }
-  const mergeWrap = $("#merge-alt-wrap");
-  if (mergeWrap) mergeWrap.hidden = !tr;
+  syncMergeUi();
   const review = $("#btn-review-again");
   if (review) {
     review.hidden = derived;
@@ -1149,10 +1159,7 @@ function updateEditMode() {
   if (proofBtn) {
     proofBtn.disabled = accepted || !hasHtml;
   }
-  const mergeBtn = $("#btn-merge-translations");
-  const mergeAlt = $("#merge-alt-input");
-  if (mergeBtn) mergeBtn.disabled = accepted || !hasHtml;
-  if (mergeAlt) mergeAlt.disabled = accepted;
+  syncMergeUi();
   if (isDerived()) {
     const trPage = $("#btn-translate-page");
     if (trPage) trPage.disabled = accepted;
@@ -2184,7 +2191,7 @@ async function mergeTranslations() {
     toast("Сначала нужен черновик перевода", true);
     return;
   }
-  const st = $("#revise-status");
+  const st = $("#merge-status") || $("#revise-status");
   const mergeBtn = $("#btn-merge-translations");
   const reviseBtn = $("#btn-revise");
   const trBtn = $("#btn-translate-page");
@@ -2193,7 +2200,7 @@ async function mergeTranslations() {
   if (reviseBtn) reviseBtn.disabled = true;
   if (trBtn) trBtn.disabled = true;
   if (proofBtn) proofBtn.disabled = true;
-  st.textContent = "Сливаем два перевода… до 1–2 мин";
+  if (st) st.textContent = "Сливаем два перевода… до 1–2 мин";
   try {
     state.page = await api(`/pages/${state.page.id}/merge-translations`, {
       method: "POST",
@@ -2203,10 +2210,10 @@ async function mergeTranslations() {
     switchTab("wysiwyg");
     $("#page-status").textContent = state.page.status;
     toast("Слитный черновик готов");
-    st.textContent = "готово";
+    if (st) st.textContent = "готово";
   } catch (e) {
     toast(e.message, true);
-    st.textContent = "";
+    if (st) st.textContent = "";
   } finally {
     updateEditMode();
   }
