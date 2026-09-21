@@ -476,7 +476,8 @@ def merge_translations_page(
         operation="merge",
     )
     note = f"merge {cfg.get('style')} | {model}"
-    return _save_page_html(db, page, user, html, source=VersionSource.llm, note=note)
+    _save_page_html(db, page, user, html, source=VersionSource.llm, note=note)
+    return get_page(str(page.id), user, db)
 
 
 def _apply_translate_revision(

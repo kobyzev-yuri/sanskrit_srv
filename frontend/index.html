@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260921merge2" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260921merge3" />
 </head>
 <body>
   <div class="app-shell">
@@ -215,12 +215,8 @@
                     </div>
                   </div>
                   <div id="merge-alt-wrap" class="merge-alt-wrap" hidden>
-                    <label for="merge-alt-input">Второй перевод (профессор / другой вариант)</label>
-                    <textarea id="merge-alt-input" rows="3" maxlength="20000" placeholder="Вставьте перевод — можно одну шлоку с ॥ n ॥. Сольётся с текущим черновиком Gemini."></textarea>
-                    <div class="merge-alt-actions">
-                      <button type="button" id="btn-merge-translations" title="Собрать лучшее из черновика и вставленного перевода">Слить переводы</button>
-                      <span class="muted" id="merge-status"></span>
-                    </div>
+                    <p class="muted" style="margin:0">Под каждой шлокой — пустое поле для перевода профессора и кнопка «Слить эту шлоку».</p>
+                    <span class="muted" id="merge-status"></span>
                   </div>
                   <div id="preview-save" class="edit-actions">
                     <button type="button" id="btn-save">Сохранить правку</button>
@@ -498,6 +494,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260921merge2"></script>
+  <script src="/assets/app.js?v=20260921merge3"></script>
 </body>
 </html>

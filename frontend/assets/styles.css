@@ -896,32 +896,36 @@ mark.draft-hl-current {
 .merge-alt-wrap {
   display: grid;
   gap: 0.35rem;
-  padding: 0.55rem 0.75rem;
+  padding: 0.45rem 0.75rem;
   border-top: 1px solid var(--line);
   background: #eef4ea;
 }
 .merge-alt-wrap[hidden] {
   display: none !important;
 }
-.merge-alt-wrap label {
-  font-size: 0.88rem;
-  color: var(--muted);
+.merge-alt-slot {
+  margin: 0.15rem 0 0.85rem;
+  padding: 0.4rem 0.5rem 0.45rem;
+  background: #eef4ea;
+  border: 1px dashed #8aa57a;
+  border-radius: 6px;
+  display: grid;
+  gap: 0.3rem;
 }
-.merge-alt-wrap textarea {
-  min-height: 3.4rem;
+.merge-alt-slot textarea {
+  width: 100%;
+  min-height: 2.6rem;
   font-family: var(--font-ui);
   font-size: 0.92rem;
-  width: 100%;
   resize: vertical;
 }
-.merge-alt-wrap button {
-  justify-self: start;
-}
-.merge-alt-actions {
-  display: flex;
-  gap: 0.6rem;
-  align-items: center;
-  flex-wrap: wrap;
+.html-preview .merge-alt-slot,
+.html-preview .merge-alt-slot textarea,
+.wysiwyg-preview .merge-alt-slot,
+.wysiwyg-preview .merge-alt-slot textarea {
+  font-family: var(--font-ui);
+  font-size: 0.92rem;
+  color: var(--text);
 }
 .proofread-box {
   border-top: 1px solid var(--line);

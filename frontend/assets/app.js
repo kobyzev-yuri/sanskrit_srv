@@ -453,10 +453,8 @@ function syncMergeUi() {
   if (!wrap) return;
   const accepted = state.page?.status === "expert_done" && pageHasDraftHtml();
   wrap.hidden = !isTranslate() || accepted;
-  const mergeBtn = $("#btn-merge-translations");
-  const mergeAlt = $("#merge-alt-input");
-  if (mergeBtn) mergeBtn.disabled = accepted || !pageHasDraftHtml();
-  if (mergeAlt) mergeAlt.disabled = accepted;
+  attachMergeSlots($("#html-preview"));
+  attachMergeSlots($("#html-wysiwyg"));
 }
 
 function translationCfg() {
@@ -1218,6 +1216,57 @@ function startPipelinePoll() {
   }, 8000);
 }
 
+function prevSaBlock(ruEl) {
+  let el = ruEl?.previousElementSibling || null;
+  while (el && el.classList.contains("merge-alt-slot")) el = el.previousElementSibling;
+  while (el && !(el.classList.contains("sa") || el.classList.contains("shloka"))) {
+    el = el.previousElementSibling;
+  }
+  return el;
+}
+
+function attachMergeSlots(root) {
+  if (!root || !isTranslate()) return;
+  const kept = {};
+  root.querySelectorAll(".merge-alt-slot").forEach((el) => {
+    kept[el.dataset.idx || ""] = el.querySelector("textarea")?.value || "";
+  });
+  root.querySelectorAll(".merge-alt-slot").forEach((el) => el.remove());
+  const accepted = state.page?.status === "expert_done" && pageHasDraftHtml();
+  if (accepted) return;
+  const rus = [...root.querySelectorAll("p.ru, p.tr")].filter(
+    (el) => el.classList.contains("ru") && !el.closest(".merge-alt-slot")
+  );
+  rus.forEach((ru, i) => {
+    const sa = prevSaBlock(ru);
+    const slot = document.createElement("div");
+    slot.className = "merge-alt-slot";
+    slot.dataset.idx = String(i);
+    const ta = document.createElement("textarea");
+    ta.rows = 2;
+    ta.maxLength = 20000;
+    ta.placeholder = "Пустое поле: вставьте перевод профессора этой шлоки";
+    ta.value = kept[String(i)] || "";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Слить эту шлоку";
+    btn.onclick = () => mergeSlot(slot, sa);
+    slot.append(ta, btn);
+    ru.insertAdjacentElement("afterend", slot);
+  });
+}
+
+async function mergeSlot(slot, saEl) {
+  const text = (slot?.querySelector("textarea")?.value || "").trim();
+  if (text.length < 8) {
+    toast("Вставьте перевод профессора в это поле", true);
+    return;
+  }
+  const saText = (saEl?.innerText || saEl?.textContent || "").trim();
+  const payload = saText ? `${saText}\n\n${text}` : text;
+  await mergeTranslations(payload, slot.querySelector("button"));
+}
+
 function renderPreview(html) {
   const box = $("#html-preview");
   const src = (html || "").trim();
@@ -1234,6 +1283,7 @@ function renderPreview(html) {
   hydratePreviewFigures(box);
   if (state.proofSuggestions?.length) highlightProofSuggestions(box, state.proofSuggestions);
   highlightDraftQuery(box);
+  attachMergeSlots(box);
 }
 
 /** /api/.../figures/* require Bearer — plain <img src> gets 401 and shows only alt text. */
@@ -1281,7 +1331,8 @@ function isWysiwygActive() {
 }
 
 function serializeWysiwyg(box) {
-  const clone = box.cloneNode(true);
+    const clone = box.cloneNode(true);
+  clone.querySelectorAll(".merge-alt-slot").forEach((el) => el.remove());
   clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
   clone.querySelectorAll(".wy-edit, .wy-lock, .wy-sa, .wy-ru, .wy-iast").forEach((el) => {
     el.classList.remove("wy-edit", "wy-lock", "wy-sa", "wy-ru", "wy-iast");
@@ -1555,7 +1606,7 @@ function wysiwygBlocks(root) {
         "p, h1, h2, h3, h4, li, td, th, blockquote, figcaption, dt, dd, .running-head, .page-num, .footer"
       ),
     ]),
-  ];
+  ].filter((el) => !el.closest(".merge-alt-slot"));
 }
 
 function setWysiwygEditable(el, enabled) {
@@ -1670,6 +1721,7 @@ function renderWysiwyg(html) {
   box.innerHTML = src;
   hydratePreviewFigures(box);
   markWysiwygEditable(box, !$("#html-editor")?.readOnly);
+  attachMergeSlots(box);
 }
 
 function switchTab(name) {
@@ -2176,15 +2228,15 @@ async function ensureTranslationAgreed() {
   return true;
 }
 
-async function mergeTranslations() {
+async function mergeTranslations(altOverride, busyBtn) {
   if (!state.page) return;
   if (!isTranslate()) {
     toast("Слияние — только в проекте перевода", true);
     return;
   }
-  const alt = ($("#merge-alt-input")?.value || "").trim();
+  const alt = (altOverride || $("#merge-alt-input")?.value || "").trim();
   if (alt.length < 8) {
-    toast("Вставьте второй перевод (хотя бы одну шлоку)", true);
+    toast("Вставьте второй перевод в поле под шлокой", true);
     return;
   }
   if (!pageHasDraftHtml()) {
@@ -2192,14 +2244,17 @@ async function mergeTranslations() {
     return;
   }
   const st = $("#merge-status") || $("#revise-status");
-  const mergeBtn = $("#btn-merge-translations");
-  const reviseBtn = $("#btn-revise");
-  const trBtn = $("#btn-translate-page");
-  const proofBtn = $("#btn-proofread");
+  const mergeBtn = busyBtn || $("#btn-merge-translations");
+  const extraBtns = [
+    $("#btn-revise"),
+    $("#btn-translate-page"),
+    $("#btn-proofread"),
+    ...$$(".btn-merge-slot, .merge-alt-slot button"),
+  ].filter(Boolean);
   if (mergeBtn) mergeBtn.disabled = true;
-  if (reviseBtn) reviseBtn.disabled = true;
-  if (trBtn) trBtn.disabled = true;
-  if (proofBtn) proofBtn.disabled = true;
+  extraBtns.forEach((b) => {
+    b.disabled = true;
+  });
   if (st) st.textContent = "Сливаем два перевода… до 1–2 мин";
   try {
     state.page = await api(`/pages/${state.page.id}/merge-translations`, {
@@ -2207,7 +2262,7 @@ async function mergeTranslations() {
       json: { alt_text: alt },
     });
     setDraftHtml(state.page.current_html || "");
-    switchTab("wysiwyg");
+    switchTab(currentPreviewTab() === "preview" ? "preview" : "wysiwyg");
     $("#page-status").textContent = state.page.status;
     toast("Слитный черновик готов");
     if (st) st.textContent = "готово";
@@ -2215,6 +2270,9 @@ async function mergeTranslations() {
     toast(e.message, true);
     if (st) st.textContent = "";
   } finally {
+    extraBtns.forEach((b) => {
+      b.disabled = false;
+    });
     updateEditMode();
   }
 }
