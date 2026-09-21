@@ -117,6 +117,63 @@ def test_merge_translations_uses_llm_and_splices(monkeypatch):
     assert "буквально" not in html
 
 
+def test_nested_shloka_div_keeps_other_verses():
+    draft = (
+        '<article class="page-style" lang="ru">'
+        '<p class="sa centered">ओं</p><p class="ru tr">Ом (oṃ).</p>'
+        '<div class="shloka sa">'
+        f'<p class="narrow">{SA_3}</p>'
+        f'<p class="ru tr" lang="ru">{RU_3}</p>'
+        "</div>"
+        '<div class="shloka sa">'
+        '<p class="narrow">धीमन्दराचलवलत्परमागमाब्धे-</p>'
+        f'<p class="narrow indent">संचर्व्यतामविरतं परशक्तिपूतैः ॥ ४ ॥</p>'
+        f'<p class="ru tr" lang="ru">{GEMINI_4}</p>'
+        "</div>"
+        "</article>"
+    )
+    out, n = apply_merged_pairs(draft, MERGED_ONE)
+    assert n == 1
+    assert "Ом (oṃ)" in out
+    assert RU_3 in out
+    assert GEMINI_4 not in out
+    _assert_hybrid(out)
+
+
+def test_unmatched_single_verse_does_not_wipe_page():
+    draft = DRAFT
+    merged = (
+        '<article class="page-style" lang="ru">'
+        '<p class="sa shloka">अन्यः श्लोकः ॥ ९९ ॥</p>'
+        '<p class="ru tr">Чужой текст (anyaḥ).</p>'
+        "</article>"
+    )
+    out, n = apply_merged_pairs(draft, merged)
+    assert n == 0
+    assert out == draft
+    assert SA_3 in out and SA_4 in out
+
+
+def test_merge_refuses_to_replace_page_with_one_verse(monkeypatch):
+    def fake_prompt(*_a, **_k):
+        html = (
+            '<article class="page-style" lang="ru">'
+            '<p class="sa shloka">अन्यः ॥ ९९ ॥</p>'
+            '<p class="ru tr">Чужой достаточно длинный перевод (anyaḥ) для проверки.</p>'
+            "</article>"
+        )
+        return html, "gemini:test", {"network": "gemini", "model": "test"}
+
+    monkeypatch.setattr("app.services.llm_merge.run_text_prompt", fake_prompt)
+    with pytest.raises(ValueError, match="не изменена"):
+        merge_translations(
+            source_html=SOURCE,
+            draft_html=DRAFT,
+            alt_text=PROFESSOR_4,
+            style="iast_gloss",
+        )
+
+
 def test_merge_rejects_empty_alt():
     with pytest.raises(ValueError, match="второй"):
         merge_translations(source_html=SOURCE, draft_html=DRAFT, alt_text="нет")

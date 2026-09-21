@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.services.html_chunks import split_top_level_blocks, unwrap_article
 from app.services.llm_translate import run_text_prompt, validate_translation_html
 from app.services.translation_style import NOTES_MAX
 
@@ -43,15 +42,6 @@ def _classes(block: str) -> set[str]:
     return {c.lower() for c in m.group(1).split()}
 
 
-def _is_sa(block: str) -> bool:
-    c = _classes(block)
-    return ("sa" in c or "shloka" in c) and "ru" not in c and "iast" not in c
-
-
-def _is_ru(block: str) -> bool:
-    return "ru" in _classes(block)
-
-
 def _deva_key(text: str) -> str:
     return "".join(_DEVA_RE.findall(text or ""))
 
@@ -63,84 +53,96 @@ def _verse_key(text: str) -> str:
     return m.group(1).translate(_DIGIT)
 
 
-def apply_merged_pairs(draft_html: str, merged_html: str) -> tuple[str, int]:
-    """Replace Russian of matching Devanagari blocks; keep the rest of the draft.
+_P_RE = re.compile(r"<p(\s[^>]*)?>(.*?)</p>", re.I | re.S)
 
-    Returns (html, n_replaced). If nothing matched, returns merged_html as a full page.
-    """
-    draft = (draft_html or "").strip()
-    merged = (merged_html or "").strip()
-    if not merged:
-        return draft, 0
-    open_tag, inner, close_tag = unwrap_article(draft)
-    blocks = split_top_level_blocks(inner) if inner.strip() else split_top_level_blocks(draft)
-    if not blocks:
-        return merged, 0
 
-    _m_open, m_inner, _m_close = unwrap_article(merged)
-    m_blocks = split_top_level_blocks(m_inner) if m_inner.strip() else split_top_level_blocks(merged)
+def _paragraphs(html: str) -> list[tuple[str, str, str]]:
+    return [(m.group(0), m.group(1) or "", m.group(2) or "") for m in _P_RE.finditer(html or "")]
 
-    by_deva: dict[str, str] = {}
-    by_verse: dict[str, str] = {}
-    by_prefix: dict[str, str | None] = {}
-    i = 0
-    while i < len(m_blocks):
-        block = m_blocks[i]
-        ru = ""
-        if i + 1 < len(m_blocks) and _is_ru(m_blocks[i + 1]):
-            ru = m_blocks[i + 1]
-        if ru and (_is_sa(block) or _deva_key(block)):
-            d = _deva_key(block)
-            v = _verse_key(block) or _verse_key(ru)
-            if d:
-                by_deva[d] = ru
-                pref = d[:24]
-                if len(d) >= 16:
-                    by_prefix[pref] = None if pref in by_prefix else ru
+
+def _tag_classes(attrs: str) -> set[str]:
+    return _classes(f"<p{attrs}>")
+
+
+def _is_ru_attrs(attrs: str) -> bool:
+    return "ru" in _tag_classes(attrs)
+
+
+def ru_count(html: str) -> int:
+    return sum(1 for _full, attrs, _inner in _paragraphs(html) if _is_ru_attrs(attrs))
+
+
+def _ru_lookup(html: str) -> dict[tuple[str, str], str]:
+    """Map (kind, key) → full <p class=ru> from merged HTML (works inside div.shloka)."""
+    index: dict[tuple[str, str], str] = {}
+    pending: list[str] = []
+    verse = ""
+    for full, attrs, inner in _paragraphs(html):
+        classes = _tag_classes(attrs)
+        if "ru" in classes:
+            d = "".join(_deva_key(x) for x in pending)
+            v = verse or _verse_key(inner)
             if v:
-                by_verse[v] = ru
-            i += 2
+                index[("v", v)] = full
+            if d:
+                index[("d", d)] = full
+                if len(d) >= 12:
+                    index.setdefault(("p", d[:20]), full)
+            pending, verse = [], ""
             continue
-        i += 1
+        if "iast" in classes:
+            continue
+        chunk = inner
+        d = _deva_key(chunk)
+        if d:
+            pending.append(chunk)
+            verse = _verse_key(chunk) or verse
+    return index
 
-    def lookup(sa_block: str) -> str:
-        d = _deva_key(sa_block)
-        if d and d in by_deva:
-            return by_deva[d]
-        v = _verse_key(sa_block)
-        if v and v in by_verse:
-            return by_verse[v]
-        if d and len(d) >= 16:
-            hit = by_prefix.get(d[:24])
-            if hit:
-                return hit
-        return ""
 
-    out: list[str] = []
+def apply_merged_pairs(draft_html: str, merged_html: str) -> tuple[str, int]:
+    """Replace matching Russian <p> tags; never drop unmatched verses.
+
+    Returns (html, n_replaced). If nothing matched, returns the original draft.
+    """
+    draft = draft_html or ""
+    merged = merged_html or ""
+    if not merged.strip() or not draft.strip():
+        return draft, 0
+    idx = _ru_lookup(merged)
+    if not idx:
+        return draft, 0
+
     replaced = 0
-    i = 0
-    while i < len(blocks):
-        block = blocks[i]
-        if _is_sa(block) or (_deva_key(block) and not _is_ru(block)):
-            ru_new = lookup(block)
-            has_ru = i + 1 < len(blocks) and _is_ru(blocks[i + 1])
-            if ru_new:
-                out.append(block)
-                out.append(ru_new)
-                i += 2 if has_ru else 1
+    pending: list[str] = []
+    verse = ""
+    pieces: list[str] = []
+    last = 0
+    for m in _P_RE.finditer(draft):
+        attrs, inner = m.group(1) or "", m.group(2) or ""
+        classes = _tag_classes(attrs)
+        if "ru" in classes:
+            d = "".join(_deva_key(x) for x in pending)
+            v = verse or _verse_key(inner)
+            new_ru = (idx.get(("v", v)) if v else None) or (idx.get(("d", d)) if d else None)
+            if not new_ru and d and len(d) >= 12:
+                new_ru = idx.get(("p", d[:20]))
+            pending, verse = [], ""
+            if new_ru and new_ru != m.group(0):
+                pieces.append(draft[last : m.start()])
+                pieces.append(new_ru)
+                last = m.end()
                 replaced += 1
-                continue
-        out.append(block)
-        i += 1
-
+            continue
+        if "iast" in classes:
+            continue
+        if _deva_key(inner):
+            pending.append(inner)
+            verse = _verse_key(inner) or verse
     if replaced == 0:
-        return merged, 0
-    open_tag = open_tag or '<article class="page-style" lang="ru">'
-    close_tag = close_tag or "</article>"
-    body = "".join(out)
-    if not body.strip().startswith("<article"):
-        body = f"{open_tag}\n{body}\n{close_tag}"
-    return body, replaced
+        return draft, 0
+    pieces.append(draft[last:])
+    return "".join(pieces), replaced
 
 
 def _alt_looks_single_verse(alt: str) -> bool:
@@ -186,4 +188,10 @@ def merge_translations(
     spliced, n = apply_merged_pairs(draft, merged)
     if n:
         return spliced, model, usage
+    # A one-śloka model reply must never replace the rest of the leaf.
+    if ru_count(merged) < ru_count(draft):
+        raise ValueError(
+            "Не удалось сопоставить шлоку с черновиком — страница не изменена. "
+            "Вставьте перевод в поле под нужной шлокой ещё раз."
+        )
     return merged, model, usage
