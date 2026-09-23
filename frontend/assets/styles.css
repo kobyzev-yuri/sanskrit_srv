@@ -912,6 +912,28 @@ mark.draft-hl-current {
   display: grid;
   gap: 0.3rem;
 }
+.merge-alt-slot .merge-slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.voice-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+.voice-panel-row input,
+.voice-panel-row select {
+  min-width: 8rem;
+  flex: 1 1 8rem;
+}
+#voice-card-preview {
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  max-height: 8rem;
+  overflow: auto;
+}
 .merge-alt-slot textarea {
   width: 100%;
   min-height: 2.6rem;

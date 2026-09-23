@@ -47,6 +47,7 @@ def default_translation_settings(
     style: str = STYLE_INTERLINEAR,
     english_comments: str = ENGLISH_REPLACE,
     notes: str = "",
+    voice_id: str | None = None,
 ) -> dict[str, Any]:
     st = style if style in STYLES else STYLE_INTERLINEAR
     en = english_comments if english_comments in ENGLISH_POLICIES else ENGLISH_REPLACE
@@ -54,6 +55,7 @@ def default_translation_settings(
         "style": st,
         "english_comments": en,
         "notes": (notes or "").strip()[:NOTES_MAX],
+        "voice_id": (voice_id or "").strip() or None,
         "agreed": True,
         "agreed_by": None,
         "agreed_at": None,
@@ -171,11 +173,14 @@ def _english_prompt(policy: str) -> str:
 - If a Latin phrase is a conventional siglum (e.g. cf., viz.) you may drop it or render in Russian."""
 
 
-def _engine_system(*, style: str, policy: str, notes: str) -> str:
+def _engine_system(*, style: str, policy: str, notes: str, voice_block: str = "") -> str:
+    voice = (voice_block or "").strip()
     if style == STYLE_IAST_GLOSS:
         parts = [_read_prompt("iast_gloss_system.txt"), _english_prompt(policy)]
         if notes:
             parts.append("ДОПОЛНИТЕЛЬНЫЙ СЛОВАРЬ / ЗАМЕТКИ ЭКСПЕРТА:\n" + notes[:NOTES_MAX])
+        if voice:
+            parts.append(voice)
         return "\n\n".join(parts)
     parts = [
         "You produce a Russian translation HTML fragment of a Sanskrit page already restored as HTML.",
@@ -192,6 +197,8 @@ def _engine_system(*, style: str, policy: str, notes: str) -> str:
     ]
     if notes:
         parts.append("EXPERT NOTES (binding):\n" + notes[:NOTES_MAX])
+    if voice:
+        parts.append(voice)
     return "\n\n".join(parts)
 
 
@@ -237,7 +244,8 @@ def build_translate_messages(
     style = str(cfg.get("style") or STYLE_INTERLINEAR)
     policy = str(cfg.get("english_comments") or ENGLISH_REPLACE)
     notes = (cfg.get("notes") or "").strip()
-    system = _engine_system(style=style, policy=policy, notes=notes)
+    voice_block = str(cfg.get("voice_block") or "").strip()
+    system = _engine_system(style=style, policy=policy, notes=notes, voice_block=voice_block)
     extras = _user_extras(
         directive=directive,
         current_html=current_html,
@@ -286,9 +294,10 @@ def build_translate_batch_messages(
     style = str(cfg.get("style") or STYLE_INTERLINEAR)
     policy = str(cfg.get("english_comments") or ENGLISH_REPLACE)
     notes = (cfg.get("notes") or "").strip()
+    voice_block = str(cfg.get("voice_block") or "").strip()
     nos = [int(n) for n, _ in pages]
     first, last = nos[0], nos[-1]
-    system = _engine_system(style=style, policy=policy, notes=notes)
+    system = _engine_system(style=style, policy=policy, notes=notes, voice_block=voice_block)
     user_parts = [
         f"You are given {len(pages)} consecutive pages {first}–{last}. "
         "Use neighbors for verse continuation and consistent terminology. "

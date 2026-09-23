@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.db import ensure_schema, get_engine
 from app.models import Base
-from app.routers import admin, auth, pages, projects, system
+from app.routers import admin, auth, pages, projects, system, voices
 from app.services.storage import ensure_dirs
 
 settings = get_settings()
@@ -36,6 +36,7 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
 app.include_router(pages.router, prefix="/api/v1")
+app.include_router(voices.router, prefix="/api/v1")
 
 
 @app.get("/health")

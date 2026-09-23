@@ -14,6 +14,7 @@ const state = {
   /** @type {""|"draft"|"source"} */
   workFocus: "",
   workFocusPinned: false,
+  voices: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -597,8 +598,14 @@ function syncTaskUi() {
     if (agreeBtn) agreeBtn.hidden = true;
     if (revokeBtn) revokeBtn.hidden = true;
     if (mark) mark.textContent = canEdit ? "шаблон можно править" : "";
+    syncVoiceUi();
   } else {
     setStyleNotesOpen(false);
+    setVoicePanelOpen(false);
+    const vs = $("#voice-select");
+    const vb = $("#btn-toggle-voice");
+    if (vs) vs.hidden = true;
+    if (vb) vb.hidden = true;
   }
 
   const dir = $("#directive-input");
@@ -1247,11 +1254,21 @@ function attachMergeSlots(root) {
     ta.maxLength = 20000;
     ta.placeholder = "Пустое поле: вставьте перевод профессора этой шлоки";
     ta.value = kept[String(i)] || "";
+    const actions = document.createElement("div");
+    actions.className = "merge-slot-actions";
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.className = "btn-merge-slot";
     btn.textContent = "Слить эту шлоку";
     btn.onclick = () => mergeSlot(slot, sa);
-    slot.append(ta, btn);
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.className = "btn-voice-slot";
+    pin.textContent = "В голос";
+    pin.title = "Сохранить текущую пару SA+RU в выбранный голос";
+    pin.onclick = () => pinVerseToVoice(sa, ru);
+    actions.append(btn, pin);
+    slot.append(ta, actions);
     ru.insertAdjacentElement("afterend", slot);
   });
 }
@@ -2497,6 +2514,9 @@ async function patchTranslationStyle(agree) {
     english_comments: $("#style-english").value,
     notes: $("#style-notes").value,
   };
+  if (isTranslate()) {
+    payload.voice_id = $("#voice-select")?.value || "";
+  }
   if (agree === true || agree === false) payload.agree = agree;
   try {
     state.project = await api(
@@ -2515,6 +2535,192 @@ async function patchTranslationStyle(agree) {
   } catch (e) {
     toast(e.message, true);
     return false;
+  }
+}
+
+function voicePanelOpen() {
+  const panel = $("#voice-panel");
+  return Boolean(panel && !panel.hidden);
+}
+
+function setVoicePanelOpen(open) {
+  const panel = $("#voice-panel");
+  const btn = $("#btn-toggle-voice");
+  if (!panel) return;
+  panel.hidden = !open;
+  if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) refreshVoiceCardPreview();
+}
+
+function toggleVoicePanel() {
+  if (!isTranslate()) return;
+  setVoicePanelOpen(!voicePanelOpen());
+}
+
+async function loadVoices() {
+  try {
+    state.voices = await api("/voices");
+  } catch (e) {
+    state.voices = [];
+    console.warn(e);
+  }
+  fillVoiceSelect();
+}
+
+function fillVoiceSelect() {
+  const sel = $("#voice-select");
+  if (!sel) return;
+  const want = translationCfg().voice_id || "";
+  const voices = state.voices || [];
+  sel.innerHTML =
+    `<option value="">Голос: нет</option>` +
+    voices
+      .map(
+        (v) =>
+          `<option value="${v.id}">${escapeHtml(v.display_name)} (${v.example_count})</option>`
+      )
+      .join("");
+  if (want && voices.some((v) => v.id === want)) sel.value = want;
+  else sel.value = "";
+}
+
+function syncVoiceUi() {
+  const tr = isTranslate();
+  const sel = $("#voice-select");
+  const btn = $("#btn-toggle-voice");
+  if (sel) {
+    sel.hidden = !tr;
+    sel.disabled = !canAgreeStyle();
+  }
+  if (btn) btn.hidden = !tr;
+  if (tr) {
+    if (!state.voices) loadVoices();
+    else fillVoiceSelect();
+  }
+}
+
+function selectedVoiceId() {
+  return ($("#voice-select")?.value || translationCfg().voice_id || "").trim();
+}
+
+function selectedVoice() {
+  const id = selectedVoiceId();
+  return (state.voices || []).find((v) => v.id === id) || null;
+}
+
+function refreshVoiceCardPreview() {
+  const el = $("#voice-card-preview");
+  if (!el) return;
+  const v = selectedVoice();
+  if (!v) {
+    el.textContent = "Выберите голос в списке или создайте новый.";
+    return;
+  }
+  const card = v.style_card || {};
+  const lex = card.lexicon || {};
+  const lexN = Object.keys(lex).length;
+  const sample = Object.entries(lex)
+    .slice(0, 8)
+    .map(([k, val]) => `${k} → ${val}`)
+    .join("; ");
+  el.textContent =
+    `${v.display_name} · домен ${v.domain} · эталонов ${v.example_count} · лексикон ${lexN}` +
+    (sample ? `\n${sample}` : "\nКарточка пуста — добавьте эталоны и нажмите «Обновить карточку».");
+}
+
+async function createVoice() {
+  const name = ($("#voice-new-name")?.value || "").trim();
+  if (name.length < 2) {
+    toast("Укажите имя голоса", true);
+    return;
+  }
+  const slug = ($("#voice-new-slug")?.value || "").trim() || undefined;
+  const domain = $("#voice-new-domain")?.value || "kashmir_shaivism";
+  try {
+    const voice = await api("/voices", {
+      method: "POST",
+      json: { display_name: name, slug, domain },
+    });
+    await loadVoices();
+    const sel = $("#voice-select");
+    if (sel) sel.value = voice.id;
+    await patchTranslationStyle();
+    refreshVoiceCardPreview();
+    toast(`Голос «${voice.display_name}» создан и привязан к проекту`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function addVoiceBatch() {
+  const id = selectedVoiceId();
+  if (!id) {
+    toast("Сначала выберите или создайте голос", true);
+    return;
+  }
+  const text = ($("#voice-batch")?.value || "").trim();
+  if (text.length < 8) {
+    toast("Вставьте эталоны в формате SA: / RU: через ===", true);
+    return;
+  }
+  try {
+    const created = await api(`/voices/${id}/examples/batch`, {
+      method: "POST",
+      json: { text, distill: true },
+    });
+    if ($("#voice-batch")) $("#voice-batch").value = "";
+    await loadVoices();
+    refreshVoiceCardPreview();
+    toast(`Добавлено эталонов: ${created.length}`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function distillVoiceCard() {
+  const id = selectedVoiceId();
+  if (!id) {
+    toast("Выберите голос", true);
+    return;
+  }
+  try {
+    await api(`/voices/${id}/distill`, { method: "POST", json: {} });
+    await loadVoices();
+    refreshVoiceCardPreview();
+    toast("Карточка стиля обновлена из эталонов");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function pinVerseToVoice(saEl, ruEl) {
+  const id = selectedVoiceId();
+  if (!id) {
+    toast("Выберите голос в полосе шаблона", true);
+    setVoicePanelOpen(true);
+    return;
+  }
+  const sa = (saEl?.innerText || saEl?.textContent || "").trim();
+  const ru = (ruEl?.innerText || ruEl?.textContent || "").trim();
+  if (sa.length < 2 || ru.length < 4) {
+    toast("Нет пары SA+RU для записи в голос", true);
+    return;
+  }
+  try {
+    await api(`/voices/${id}/examples`, {
+      method: "POST",
+      json: {
+        source_sa: sa,
+        target_ru: ru,
+        origin: "merge",
+        project_id: state.project?.id || null,
+        page_id: state.page?.id || null,
+      },
+    });
+    await loadVoices();
+    toast("Эталон записан в голос");
+  } catch (e) {
+    toast(e.message, true);
   }
 }
 
@@ -3376,15 +3582,28 @@ function wire() {
   if (btnToggleStyle) btnToggleStyle.onclick = () => toggleStyleNotes();
   const btnSaveStyle = $("#btn-save-style");
   if (btnSaveStyle) btnSaveStyle.onclick = () => saveStyleAndClose();
+  const btnToggleVoice = $("#btn-toggle-voice");
+  if (btnToggleVoice) btnToggleVoice.onclick = () => toggleVoicePanel();
+  const btnVoiceCreate = $("#btn-voice-create");
+  if (btnVoiceCreate) btnVoiceCreate.onclick = () => createVoice();
+  const btnVoiceBatch = $("#btn-voice-batch");
+  if (btnVoiceBatch) btnVoiceBatch.onclick = () => addVoiceBatch();
+  const btnVoiceDistill = $("#btn-voice-distill");
+  if (btnVoiceDistill) btnVoiceDistill.onclick = () => distillVoiceCard();
+  const btnVoiceClose = $("#btn-voice-close");
+  if (btnVoiceClose) btnVoiceClose.onclick = () => setVoicePanelOpen(false);
   for (const id of ["btn-show-left", "btn-show-agent", "btn-show-draft"]) {
     const el = $(`#${id}`);
     if (el) el.onclick = restoreWorkPanes;
   }
-  for (const id of ["style-select", "style-english"]) {
+  for (const id of ["style-select", "style-english", "voice-select"]) {
     const el = $(`#${id}`);
     if (!el || el.dataset.boundStyle) continue;
     el.dataset.boundStyle = "1";
-    el.addEventListener("change", () => patchTranslationStyle());
+    el.addEventListener("change", () => {
+      if (id === "voice-select") refreshVoiceCardPreview();
+      patchTranslationStyle();
+    });
   }
   bindPromptFileInput($("#style-notes-file"), $("#style-notes"));
   bindPromptFileInput($("#directive-file"), $("#directive-input"));

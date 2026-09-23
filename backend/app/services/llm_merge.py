@@ -158,6 +158,7 @@ def merge_translations(
     draft_html: str,
     alt_text: str,
     style: str = "iast_gloss",
+    voice_block: str = "",
 ) -> tuple[str, str, dict[str, Any]]:
     source = (source_html or "").strip()
     draft = (draft_html or "").strip()
@@ -168,6 +169,17 @@ def merge_translations(
         raise ValueError("Нет выверенного санскрита на этой странице")
     if not draft:
         raise ValueError("Нет текущего черновика перевода")
+
+    system = MERGE_SYSTEM
+    voice = (voice_block or "").strip()
+    if voice:
+        system = (
+            system
+            + "\n\n"
+            + voice
+            + "\n\nЕсли B молчит по термину — опирайся на лексикон голоса; "
+            "живая вставка B важнее карточки при явном конфликте."
+        )
 
     user_parts = [
         f"Шаблон перевода: {style}.",
@@ -182,7 +194,7 @@ def merge_translations(
         )
     text, model, usage = run_text_prompt(
         "\n\n".join(user_parts),
-        system=MERGE_SYSTEM,
+        system=system,
     )
     merged = validate_translation_html(text, source_html=source)
     spliced, n = apply_merged_pairs(draft, merged)

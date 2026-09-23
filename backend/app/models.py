@@ -146,6 +146,49 @@ class Job(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class Voice(Base):
+    """Named translator voice (e.g. a professor) reusable across translation projects."""
+
+    __tablename__ = "voices"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    # Domain hint: kashmir_shaivism, vedanta, … — soft filter, not a hard gate.
+    domain: Mapped[str] = mapped_column(String(64), default="kashmir_shaivism", index=True)
+    # Compact style card: {lexicon, grammar, phrase, prefer, domain}.
+    style_card: Mapped[dict] = mapped_column(JSON, default=dict)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    examples: Mapped[list[VoiceExample]] = relationship(
+        back_populates="voice", cascade="all, delete-orphan"
+    )
+
+
+class VoiceExample(Base):
+    """One approved śloka pair used as few-shot memory for a voice."""
+
+    __tablename__ = "voice_examples"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    voice_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("voices.id"), index=True
+    )
+    source_sa: Mapped[str] = mapped_column(Text)
+    target_ru: Mapped[str] = mapped_column(Text)
+    verse_key: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    origin: Mapped[str] = mapped_column(String(32), default="paste")  # paste | merge | agreed
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id"), nullable=True
+    )
+    page_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("pages.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    voice: Mapped[Voice] = relationship(back_populates="examples")
+
+
 class LlmUsageEvent(Base):
     """One successful ProxyAPI call — for per-project billing by network/model."""
 

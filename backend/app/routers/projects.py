@@ -481,6 +481,9 @@ def update_translation_style(
         cfg["english_comments"] = body.english_comments
     if body.notes is not None:
         cfg["notes"] = body.notes.strip()[:NOTES_MAX]
+    if body.voice_id is not None:
+        vid = body.voice_id.strip()
+        cfg["voice_id"] = vid or None
     persist_translation_cfg(project, cfg)
     if body.agree is True:
         lock_translation_template(project, user)

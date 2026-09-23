@@ -449,11 +449,17 @@ def merge_translations_page(
     cfg = translation_cfg(project)
     try:
         with llm_user_context(user):
+            from app.services.voice_memory import attach_voice_to_cfg
+
+            cfg = attach_voice_to_cfg(
+                db, cfg, source_html=source_html, draft_html=draft
+            )
             html, model, usage = merge_translations(
                 source_html=source_html,
                 draft_html=draft,
                 alt_text=body.alt_text,
                 style=str(cfg.get("style") or "interlinear"),
+                voice_block=str(cfg.get("voice_block") or ""),
             )
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
@@ -501,6 +507,14 @@ def _apply_translate_revision(
     cfg = translation_cfg(project)
     try:
         with llm_user_context(user):
+            from app.services.voice_memory import attach_voice_to_cfg
+
+            cfg = attach_voice_to_cfg(
+                db,
+                cfg,
+                source_html=source_html,
+                draft_html=page.current_html if (directive or "").strip() else None,
+            )
             html, model, usage = translate_from_source(
                 source_html=source_html,
                 cfg=cfg,

@@ -390,6 +390,10 @@ def process_one_translate_page(
     if not source_html:
         return "skip_no_source"
     cfg = transliteration_cfg(project) if is_iast else translation_cfg(project)
+    if not is_iast:
+        from app.services.voice_memory import attach_voice_to_cfg
+
+        cfg = attach_voice_to_cfg(db, cfg, source_html=source_html, draft_html=None)
     if not visible_html_text(source_html):
         _save_version(
             db,
@@ -607,6 +611,13 @@ def process_translate_run(
         return ",".join(translate_one_by_one(db, pages, job_id=job_id, auto_agree=auto_agree))
 
     cfg = transliteration_cfg(project) if is_iast else translation_cfg(project)
+    if not is_iast and payloads:
+        from app.services.voice_memory import attach_voice_to_cfg
+
+        # One voice block for the batch (examples ranked vs first page; card is shared).
+        cfg = attach_voice_to_cfg(
+            db, cfg, source_html=payloads[0]["source_html"], draft_html=None
+        )
     batch_runner = transliterate_from_sources if is_iast else translate_from_sources
     op = "transliterate" if is_iast else "translate"
     try:

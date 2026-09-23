@@ -297,7 +297,67 @@ class TranslationStyleIn(BaseModel):
     style: str | None = None
     english_comments: str | None = None
     notes: str | None = Field(default=None, max_length=NOTES_MAX)
+    voice_id: str | None = None  # UUID of Voice, or "" to detach
     agree: bool | None = None
+
+
+class VoiceCreateIn(BaseModel):
+    display_name: str = Field(min_length=2, max_length=255)
+    slug: str | None = Field(default=None, max_length=128)
+    domain: str = Field(default="kashmir_shaivism", max_length=64)
+    notes: str | None = Field(default=None, max_length=NOTES_MAX)
+    style_card: dict[str, Any] | None = None
+
+
+class VoiceUpdateIn(BaseModel):
+    display_name: str | None = Field(default=None, min_length=2, max_length=255)
+    domain: str | None = Field(default=None, max_length=64)
+    notes: str | None = Field(default=None, max_length=NOTES_MAX)
+    style_card: dict[str, Any] | None = None
+
+
+class VoiceOut(BaseModel):
+    id: uuid.UUID
+    slug: str
+    display_name: str
+    domain: str
+    style_card: dict[str, Any] = Field(default_factory=dict)
+    notes: str | None = None
+    example_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class VoiceExampleIn(BaseModel):
+    source_sa: str = Field(min_length=2, max_length=NOTES_MAX)
+    target_ru: str = Field(min_length=4, max_length=NOTES_MAX)
+    verse_key: str | None = Field(default=None, max_length=32)
+    tags: list[str] = Field(default_factory=list)
+    origin: str = Field(default="paste", max_length=32)
+    project_id: str | None = None
+    page_id: str | None = None
+
+
+class VoiceExampleBatchIn(BaseModel):
+    text: str = Field(min_length=8, max_length=NOTES_MAX)
+    distill: bool = True
+
+
+class VoiceExampleOut(BaseModel):
+    id: uuid.UUID
+    voice_id: uuid.UUID
+    source_sa: str
+    target_ru: str
+    verse_key: str | None = None
+    tags: list[Any] = Field(default_factory=list)
+    origin: str
+    project_id: uuid.UUID | None = None
+    page_id: uuid.UUID | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class SpawnTranslationIn(BaseModel):

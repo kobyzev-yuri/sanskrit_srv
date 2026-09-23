@@ -65,3 +65,12 @@ def test_notes_keep_long_prompt():
     assert len(cfg["notes"]) == 5000
     cfg = default_translation_settings(notes="я" * (NOTES_MAX + 100))
     assert len(cfg["notes"]) == NOTES_MAX
+
+
+def test_voice_block_in_translate_system():
+    cfg = default_translation_settings(style=STYLE_IAST_GLOSS)
+    cfg["voice_block"] = "ГОЛОС ПЕРЕВОДЧИКА «Профессор X»:\n  - āgama: агама"
+    src = '<article class="page-style" lang="sa"><p class="sa">यज्ञः</p></article>'
+    system, _user = build_translate_messages(source_html=src, cfg=cfg)
+    assert "Профессор X" in system
+    assert "āgama" in system

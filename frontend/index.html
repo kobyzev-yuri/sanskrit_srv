@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Devanagari:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260921merge3" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260923voice1" />
 </head>
 <body>
   <div class="app-shell">
@@ -138,12 +138,34 @@
                 <option value="replace">англ. → русский</option>
                 <option value="drop">англ. убрать</option>
               </select>
+              <select id="voice-select" aria-label="Голос переводчика" hidden title="Именованный стиль профессора (переносится между проектами)">
+                <option value="">Голос: нет</option>
+              </select>
+              <button type="button" id="btn-toggle-voice" hidden title="Создать голос, вставить эталоны, обновить карточку">Голос</button>
               <button type="button" id="btn-toggle-style" title="Открыть заметки и промпт шаблона" aria-expanded="false">Шаблон</button>
               <button type="button" class="primary" id="btn-agree-style" hidden>Согласовать шаблон</button>
               <button type="button" id="btn-revoke-style" hidden>Отозвать шаблон</button>
               <button type="button" class="primary" id="btn-translate-all" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Перевести несогласованные</button>
               <button type="button" id="btn-proofread-all" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Проверить несогласованные</button>
               <span class="muted" id="style-agreed-mark"></span>
+              <div class="style-notes-wrap" id="voice-panel" hidden>
+                <div class="voice-panel-row">
+                  <input id="voice-new-name" type="text" maxlength="255" placeholder="Имя голоса, напр. Профессор X" />
+                  <input id="voice-new-slug" type="text" maxlength="128" placeholder="slug (латиница)" />
+                  <select id="voice-new-domain" aria-label="Домен">
+                    <option value="kashmir_shaivism">кашмирский шиваизм</option>
+                    <option value="general">общий</option>
+                  </select>
+                  <button type="button" class="primary" id="btn-voice-create">Создать</button>
+                </div>
+                <textarea id="voice-batch" rows="6" maxlength="20000" placeholder="Эталоны пакетом (блоки через ===):&#10;SA:&#10;…деванагари…&#10;RU:&#10;…рус. (IAST)…&#10;===&#10;SA:&#10;…&#10;RU:&#10;…"></textarea>
+                <div class="style-notes-side">
+                  <button type="button" id="btn-voice-batch">Добавить эталоны</button>
+                  <button type="button" id="btn-voice-distill">Обновить карточку</button>
+                  <button type="button" id="btn-voice-close">Закрыть</button>
+                </div>
+                <p class="muted" id="voice-card-preview"></p>
+              </div>
               <div class="style-notes-wrap" id="style-notes-panel" hidden>
                 <textarea id="style-notes" rows="6" maxlength="20000" placeholder="Заметки или свой промпт к шаблону — можно загрузить из файла"></textarea>
                 <div class="style-notes-side">
@@ -494,6 +516,6 @@
     </div>
   </div>
   <div id="toast" class="toast"></div>
-  <script src="/assets/app.js?v=20260921merge3"></script>
+  <script src="/assets/app.js?v=20260923voice1"></script>
 </body>
 </html>
