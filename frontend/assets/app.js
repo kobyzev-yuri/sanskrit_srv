@@ -1282,8 +1282,11 @@ async function mergeSlot(slot, saEl) {
     return;
   }
   const saText = (saEl?.innerText || saEl?.textContent || "").trim();
-  const payload = saText ? `${saText}\n\n${text}` : text;
-  await mergeTranslations(payload, slot.querySelector("button"));
+  const payload = saText ? `${saText}
+
+${text}` : text;
+  const btn = slot.querySelector(".btn-merge-slot") || slot.querySelector("button");
+  await mergeTranslations(payload, btn, slot);
 }
 
 function renderPreview(html) {
@@ -2247,7 +2250,7 @@ async function ensureTranslationAgreed() {
   return true;
 }
 
-async function mergeTranslations(altOverride, busyBtn) {
+async function mergeTranslations(altOverride, busyBtn, slotEl) {
   if (!state.page) return;
   if (!isTranslate()) {
     toast("Слияние — только в проекте перевода", true);
@@ -2262,7 +2265,10 @@ async function mergeTranslations(altOverride, busyBtn) {
     toast("Сначала нужен черновик перевода", true);
     return;
   }
-  const st = $("#merge-status") || $("#revise-status");
+  const st =
+    (slotEl && slotEl.querySelector(".merge-slot-status")) ||
+    ($("#merge-status") && !$("#merge-alt-wrap")?.hidden ? $("#merge-status") : null) ||
+    $("#revise-status");
   const mergeBtn = busyBtn || $("#btn-merge-translations");
   const extraBtns = [
     $("#btn-revise"),
@@ -2270,11 +2276,19 @@ async function mergeTranslations(altOverride, busyBtn) {
     $("#btn-proofread"),
     ...$$(".btn-merge-slot, .merge-alt-slot button"),
   ].filter(Boolean);
-  if (mergeBtn) mergeBtn.disabled = true;
+  const prevLabel = mergeBtn?.textContent || "";
+  if (mergeBtn) {
+    mergeBtn.disabled = true;
+    if (mergeBtn.classList?.contains("btn-merge-slot")) {
+      mergeBtn.textContent = "Сливаем…";
+    }
+  }
   extraBtns.forEach((b) => {
     b.disabled = true;
   });
-  if (st) st.textContent = "Сливаем два перевода… до 1–2 мин";
+  const msg = "Сливаем два перевода… обычно 30–90 сек";
+  if (st) st.textContent = msg;
+  toast(msg);
   try {
     state.page = await api(`/pages/${state.page.id}/merge-translations`, {
       method: "POST",
@@ -2283,7 +2297,7 @@ async function mergeTranslations(altOverride, busyBtn) {
     setDraftHtml(state.page.current_html || "");
     switchTab(currentPreviewTab() === "preview" ? "preview" : "wysiwyg");
     $("#page-status").textContent = state.page.status;
-    toast("Слитный черновик готов");
+    toast("Слитный черновик готов — смотрите русский абзац над зелёным полем");
     if (st) st.textContent = "готово";
   } catch (e) {
     toast(e.message, true);
@@ -2292,6 +2306,12 @@ async function mergeTranslations(altOverride, busyBtn) {
     extraBtns.forEach((b) => {
       b.disabled = false;
     });
+    if (mergeBtn) {
+      mergeBtn.disabled = false;
+      if (mergeBtn.classList?.contains("btn-merge-slot") && prevLabel) {
+        mergeBtn.textContent = prevLabel;
+      }
+    }
     updateEditMode();
   }
 }
