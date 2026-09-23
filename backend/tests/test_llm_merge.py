@@ -178,6 +178,30 @@ def test_restore_sa_strips_iast_pollution_from_sanskrit_line():
     assert "pradaḥ" in out
 
 
+def test_restore_sa_fixes_bengali_leak_in_deva_line():
+    from app.services.llm_merge import restore_sa_from_source
+
+    source = (
+        '<article class="page-style" lang="sa">'
+        '<p class="sa centered">ओंनमश्चिद्भैरववपुषे स्वात्मशंभवे ॥</p>'
+        '<p class="sa centered">अथ</p>'
+        "</article>"
+    )
+    # Bengali র (U+09B0) instead of Devanagari र
+    draft = (
+        '<article class="page-style" lang="ru">'
+        '<p class="sa centered" lang="sa">ओंनमश्चिद्भৈরववपुषে स्वात्मशंभवे ॥</p>'
+        '<p class="ru tr">Ом (oṃ).</p>'
+        '<p class="sa centered" lang="sa">अथ</p>'
+        '<p class="ru tr">Итак (atha).</p>'
+        "</article>"
+    )
+    out = restore_sa_from_source(draft, source)
+    assert "র" not in out
+    assert "चिद्भैरववपुषे" in out
+    assert "oṃ" in out
+
+
 def test_merge_restores_sa_even_when_llm_returns_iast_in_sa(monkeypatch):
     bad = (
         '<article class="page-style" lang="ru">'

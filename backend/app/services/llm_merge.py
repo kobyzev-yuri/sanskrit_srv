@@ -14,6 +14,11 @@ _DIGIT = str.maketrans("०१२३४५६७८९", "0123456789")
 _IAST_LATIN_RE = re.compile(
     r"[A-Za-zāīūṛṝḷḹṅñṭḍṇśṣḥṃṁĀĪŪṚṜḶḸṄÑṬḌṆŚṢḤṂṀ]{3,}"
 )
+# Other Brahmic blocks that sometimes leak into «Devanagari» lines (e.g. Bengali র).
+_NON_DEVA_INDIC_RE = re.compile(
+    r"[\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0B80-\u0BFF"
+    r"\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]"
+)
 _P_RE = re.compile(r"<p(\s[^>]*)?>(.*?)</p>", re.I | re.S)
 MIN_ALT = 8
 
@@ -77,19 +82,20 @@ def ru_count(html: str) -> int:
 
 
 def _sa_polluted(inner: str) -> bool:
-    """True if a Sanskrit line mixes Devanagari with Latin/IAST body text."""
+    """True if a Sanskrit line has Latin/IAST or non-Devanagari Indic letters."""
     text = re.sub(r"<[^>]+>", "", inner or "")
-    dewa = _deva_key(text)
-    if not dewa:
-        return bool(_IAST_LATIN_RE.search(text))
-    return bool(_IAST_LATIN_RE.search(text))
+    if _IAST_LATIN_RE.search(text):
+        return True
+    if _NON_DEVA_INDIC_RE.search(text):
+        return True
+    return False
 
 
 def restore_sa_from_source(draft_html: str, source_html: str) -> str:
     """Replace Sanskrit <p> bodies in the draft with matching SOURCE Devanagari.
 
-    Never leave IAST inside sa-lines after merge. Matching: verse number,
-    then Devanagari overlap, then next unused source paragraph for polluted lines.
+    Never leave IAST / foreign Indic scripts inside sa-lines after merge.
+    Prefer 1:1 order when SA paragraph counts match; else verse / Devanagari overlap.
     """
     draft = draft_html or ""
     source = source_html or ""
@@ -106,9 +112,26 @@ def restore_sa_from_source(draft_html: str, source_html: str) -> str:
     if not src_paras:
         return draft
 
-    used: set[int] = set()
+    draft_sa_matches: list[re.Match[str]] = []
+    for m in _P_RE.finditer(draft):
+        attrs, inner = m.group(1) or "", m.group(2) or ""
+        classes = _tag_classes(attrs)
+        is_sa = (
+            ("sa" in classes or "shloka" in classes or bool(_deva_key(inner)))
+            and "ru" not in classes
+            and "tr" not in classes
+            and "iast" not in classes
+        )
+        if is_sa:
+            draft_sa_matches.append(m)
 
-    def pick(inner: str) -> str | None:
+    used: set[int] = set()
+    by_order = len(draft_sa_matches) == len(src_paras)
+
+    def pick(inner: str, order_i: int) -> str | None:
+        if by_order and 0 <= order_i < len(src_paras):
+            used.add(order_i)
+            return src_paras[order_i][2]
         v = _verse_key(inner)
         d = _deva_key(inner)
         if v:
@@ -132,18 +155,9 @@ def restore_sa_from_source(draft_html: str, source_html: str) -> str:
 
     pieces: list[str] = []
     last = 0
-    for m in _P_RE.finditer(draft):
+    for order_i, m in enumerate(draft_sa_matches):
         attrs, inner = m.group(1) or "", m.group(2) or ""
-        classes = _tag_classes(attrs)
-        is_sa = (
-            ("sa" in classes or "shloka" in classes or bool(_deva_key(inner)))
-            and "ru" not in classes
-            and "tr" not in classes
-            and "iast" not in classes
-        )
-        if not is_sa:
-            continue
-        new_inner = pick(inner)
+        new_inner = pick(inner, order_i)
         if new_inner is None and _sa_polluted(inner):
             for i, (_f, _a, sinn) in enumerate(src_paras):
                 if i in used:
