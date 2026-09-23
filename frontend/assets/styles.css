@@ -916,6 +916,10 @@ mark.draft-hl-current {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
+  align-items: center;
+}
+.merge-alt-slot .merge-slot-status {
+  font-size: 0.85rem;
 }
 .voice-panel-row {
   display: flex;

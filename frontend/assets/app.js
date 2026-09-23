@@ -1267,7 +1267,9 @@ function attachMergeSlots(root) {
     pin.textContent = "В голос";
     pin.title = "Сохранить текущую пару SA+RU в выбранный голос";
     pin.onclick = () => pinVerseToVoice(sa, ru);
-    actions.append(btn, pin);
+    const status = document.createElement("span");
+    status.className = "muted merge-slot-status";
+    actions.append(btn, pin, status);
     slot.append(ta, actions);
     ru.insertAdjacentElement("afterend", slot);
   });
