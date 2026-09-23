@@ -453,7 +453,8 @@ function syncMergeUi() {
   const wrap = $("#merge-alt-wrap");
   if (!wrap) return;
   const accepted = state.page?.status === "expert_done" && pageHasDraftHtml();
-  wrap.hidden = !isTranslate() || accepted;
+  const allow = isTranslate() && Boolean(selectedVoiceId()) && !accepted;
+  wrap.hidden = !allow;
   attachMergeSlots($("#html-preview"));
   attachMergeSlots($("#html-wysiwyg"));
 }
@@ -1240,7 +1241,7 @@ function attachMergeSlots(root) {
   });
   root.querySelectorAll(".merge-alt-slot").forEach((el) => el.remove());
   const accepted = state.page?.status === "expert_done" && pageHasDraftHtml();
-  if (accepted) return;
+  if (accepted || !selectedVoiceId()) return;
   const rus = [...root.querySelectorAll("p.ru, p.tr")].filter(
     (el) => el.classList.contains("ru") && !el.closest(".merge-alt-slot")
   );
@@ -2256,6 +2257,11 @@ async function mergeTranslations(altOverride, busyBtn, slotEl) {
     toast("Слияние — только в проекте перевода", true);
     return;
   }
+  if (!selectedVoiceId()) {
+    toast("Сначала выберите голос в полосе шаблона", true);
+    setVoicePanelOpen(true);
+    return;
+  }
   const alt = (altOverride || $("#merge-alt-input")?.value || "").trim();
   if (alt.length < 8) {
     toast("Вставьте второй перевод в поле под шлокой", true);
@@ -2646,9 +2652,14 @@ function refreshVoiceCardPreview() {
     .slice(0, 8)
     .map(([k, val]) => `${k} → ${val}`)
     .join("; ");
+  const hint =
+    sample
+      ? `\n${sample}`
+      : v.example_count > 0
+        ? "\nЛексикон пуст — нажмите «Обновить карточку» (из глосс рус.(IAST) в эталонах)."
+        : "\nКарточка пуста — добавьте эталоны и нажмите «Обновить карточку».";
   el.textContent =
-    `${v.display_name} · домен ${v.domain} · эталонов ${v.example_count} · лексикон ${lexN}` +
-    (sample ? `\n${sample}` : "\nКарточка пуста — добавьте эталоны и нажмите «Обновить карточку».");
+    `${v.display_name} · домен ${v.domain} · эталонов ${v.example_count} · лексикон ${lexN}` + hint;
 }
 
 async function createVoice() {
@@ -2669,6 +2680,7 @@ async function createVoice() {
     if (sel) sel.value = voice.id;
     await patchTranslationStyle();
     refreshVoiceCardPreview();
+    syncMergeUi();
     toast(`Голос «${voice.display_name}» создан и привязан к проекту`);
   } catch (e) {
     toast(e.message, true);
@@ -2741,7 +2753,8 @@ async function pinVerseToVoice(saEl, ruEl) {
       },
     });
     await loadVoices();
-    toast("Эталон записан в голос");
+    refreshVoiceCardPreview();
+    toast("Эталон записан в голос, карточка обновлена");
   } catch (e) {
     toast(e.message, true);
   }
@@ -3624,7 +3637,10 @@ function wire() {
     if (!el || el.dataset.boundStyle) continue;
     el.dataset.boundStyle = "1";
     el.addEventListener("change", () => {
-      if (id === "voice-select") refreshVoiceCardPreview();
+      if (id === "voice-select") {
+        refreshVoiceCardPreview();
+        syncMergeUi();
+      }
       patchTranslationStyle();
     });
   }

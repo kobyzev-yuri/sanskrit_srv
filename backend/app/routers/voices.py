@@ -219,6 +219,13 @@ def add_example(
         page_id=page_id,
     )
     db.add(ex)
+    db.flush()
+    examples = list(
+        db.scalars(select(VoiceExample).where(VoiceExample.voice_id == voice.id)).all()
+    )
+    voice.style_card = distill_style_card(
+        examples, domain=voice.domain, existing=voice.style_card
+    )
     voice.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(ex)
