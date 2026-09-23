@@ -2300,8 +2300,9 @@ async function mergeTranslations(altOverride, busyBtn, slotEl) {
     toast("Слитный черновик готов — смотрите русский абзац над зелёным полем");
     if (st) st.textContent = "готово";
   } catch (e) {
-    toast(e.message, true);
-    if (st) st.textContent = "";
+    const err = e.message || String(e);
+    toast(err, true);
+    if (st) st.textContent = err.length > 80 ? "не удалось — см. сообщение" : err;
   } finally {
     extraBtns.forEach((b) => {
       b.disabled = false;

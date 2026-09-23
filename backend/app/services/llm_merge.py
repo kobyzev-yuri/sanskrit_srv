@@ -258,6 +258,7 @@ def _ru_lookup(html: str) -> dict[tuple[str, str], str]:
                 index[("d", d)] = full
                 if len(d) >= 12:
                     index.setdefault(("p", d[:20]), full)
+                    index.setdefault(("s", d[-24:]), full)
             pending, verse = [], ""
             continue
         if "iast" in classes:
@@ -268,6 +269,38 @@ def _ru_lookup(html: str) -> dict[tuple[str, str], str]:
             pending.append(chunk)
             verse = _verse_key(chunk) or verse
     return index
+
+
+def _lookup_ru(
+    idx: dict[tuple[str, str], str],
+    *,
+    verse: str,
+    dewa: str,
+) -> str | None:
+    """Find merged RU for a draft śloka; tolerate last-pāda-only model replies."""
+    if verse:
+        hit = idx.get(("v", verse))
+        if hit:
+            return hit
+    if dewa:
+        hit = idx.get(("d", dewa)) or (idx.get(("p", dewa[:20])) if len(dewa) >= 12 else None)
+        if hit:
+            return hit
+        if len(dewa) >= 24:
+            hit = idx.get(("s", dewa[-24:]))
+            if hit:
+                return hit
+        # Model often returns only the last pāda as SA — overlap on suffix / containment.
+        for kind, key in list(idx.keys()):
+            if kind not in ("d", "s", "p") or len(key) < 12:
+                continue
+            if key in dewa or dewa.endswith(key) or key.endswith(dewa[-20:]):
+                return idx[(kind, key)]
+    verses_in_idx = {vk for (k, vk) in idx if k == "v"}
+    if not verse and len(verses_in_idx) == 1:
+        vk = next(iter(verses_in_idx))
+        return idx.get(("v", vk))
+    return None
 
 
 def apply_merged_pairs(draft_html: str, merged_html: str) -> tuple[str, int]:
@@ -294,9 +327,7 @@ def apply_merged_pairs(draft_html: str, merged_html: str) -> tuple[str, int]:
         if "ru" in classes:
             d = "".join(_deva_key(x) for x in pending)
             v = verse or _verse_key(inner)
-            new_ru = (idx.get(("v", v)) if v else None) or (idx.get(("d", d)) if d else None)
-            if not new_ru and d and len(d) >= 12:
-                new_ru = idx.get(("p", d[:20]))
+            new_ru = _lookup_ru(idx, verse=v, dewa=d)
             pending, verse = [], ""
             if new_ru and new_ru != m.group(0):
                 pieces.append(draft[last : m.start()])
