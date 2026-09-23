@@ -91,11 +91,37 @@ def _sa_polluted(inner: str) -> bool:
     return False
 
 
+def _looks_like_multiline_sa(inner: str) -> bool:
+    """One <p> holding several pādas (common in translation drafts)."""
+    if re.search(r"<br\s*/?>", inner or "", re.I):
+        return True
+    # Several Devanagari chunks separated by punctuation / newlines
+    parts = [p for p in re.split(r"[\n।॥]+", re.sub(r"<[^>]+>", "\n", inner or "")) if _deva_key(p)]
+    return len(parts) >= 2
+
+
+def _join_source_verse_block(
+    src_paras: list[tuple[str, str, str]],
+    end_idx: int,
+    used: set[int],
+) -> str:
+    """Join pādas from the start of the verse up to end_idx (the numbered line)."""
+    start = end_idx
+    while start > 0 and start - 1 not in used and not _verse_key(src_paras[start - 1][2]):
+        start -= 1
+    for i in range(start, end_idx + 1):
+        used.add(i)
+    parts = [src_paras[i][2].strip() for i in range(start, end_idx + 1)]
+    return "<br>".join(parts)
+
+
 def restore_sa_from_source(draft_html: str, source_html: str) -> str:
     """Replace Sanskrit <p> bodies in the draft with matching SOURCE Devanagari.
 
     Never leave IAST / foreign Indic scripts inside sa-lines after merge.
     Prefer 1:1 order when SA paragraph counts match; else verse / Devanagari overlap.
+    Multi-pāda draft blocks (with <br>) are restored as a joined verse block — never
+    replaced by only the last numbered pāda.
     """
     draft = draft_html or ""
     source = source_html or ""
@@ -134,11 +160,22 @@ def restore_sa_from_source(draft_html: str, source_html: str) -> str:
             return src_paras[order_i][2]
         v = _verse_key(inner)
         d = _deva_key(inner)
+        multiline = _looks_like_multiline_sa(inner)
         if v:
             for i, (_f, _a, sinn) in enumerate(src_paras):
                 if i in used:
                     continue
                 if _verse_key(sinn) == v:
+                    has_prev_pada = (
+                        i > 0
+                        and i - 1 not in used
+                        and not _verse_key(src_paras[i - 1][2])
+                        and bool(_deva_key(src_paras[i - 1][2]))
+                    )
+                    # Multi-pāda śloka in source: never leave only the last numbered line
+                    # when the draft is a single block (with <br>) or was truncated to the end-pāda.
+                    if multiline or has_prev_pada:
+                        return _join_source_verse_block(src_paras, i, used)
                     used.add(i)
                     return sinn
         if d and len(d) >= 8:
@@ -149,6 +186,17 @@ def restore_sa_from_source(draft_html: str, source_html: str) -> str:
                 if not sd:
                     continue
                 if d == sd or d[:16] == sd[:16] or d in sd or sd in d:
+                    # Whole-śloka draft matched a single pāda — expand to verse block.
+                    if multiline or (len(d) > len(sd) * 1.3 and _verse_key(inner)):
+                        # find numbered line of this verse in source
+                        vv = _verse_key(inner)
+                        end = i
+                        if vv:
+                            for j, (__f, __a, sj) in enumerate(src_paras):
+                                if _verse_key(sj) == vv:
+                                    end = j
+                                    break
+                        return _join_source_verse_block(src_paras, end, used)
                     used.add(i)
                     return sinn
         return None
@@ -166,6 +214,23 @@ def restore_sa_from_source(draft_html: str, source_html: str) -> str:
                     new_inner = sinn
                     used.add(i)
                     break
+        if new_inner is None or new_inner == inner:
+            # Truncated verse (only last pāda left after a bad restore): rebuild from source.
+            v = _verse_key(inner)
+            d = _deva_key(inner)
+            if v and d:
+                for i, (_f, _a, sinn) in enumerate(src_paras):
+                    if i in used:
+                        continue
+                    if _verse_key(sinn) == v and (
+                        d == _deva_key(sinn) or d in _deva_key(sinn) or _deva_key(sinn) in d
+                    ):
+                        # Draft equals only the last pāda — expand.
+                        if len(_deva_key(sinn)) >= len(d) * 0.8:
+                            block = _join_source_verse_block(src_paras, i, used)
+                            if block != inner and _deva_key(block) != d:
+                                new_inner = block
+                        break
         if new_inner is None or new_inner == inner:
             continue
         pieces.append(draft[last : m.start()])

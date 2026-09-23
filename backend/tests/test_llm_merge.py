@@ -178,6 +178,33 @@ def test_restore_sa_strips_iast_pollution_from_sanskrit_line():
     assert "pradaḥ" in out
 
 
+def test_restore_sa_expands_truncated_verse_to_full_padas():
+    """Draft kept only the last pāda after a bad restore — rebuild whole śloka with <br>."""
+    from app.services.llm_merge import restore_sa_from_source
+
+    source = (
+        '<article class="page-style" lang="sa">'
+        '<div class="shloka sa">'
+        '<p class="narrow">श्रीमच्छ्रीकण्ठनाथप्रभृतिगुरुवरादिष्टसन्नीतिमार्गो</p>'
+        '<p class="narrow">लब्ध्वा यत्रैव सम्यक्पटिमनि घटनामीश्वराद्वैतवादः ।</p>'
+        '<p class="narrow">काश्मीरेभ्यः प्रसृत्य प्रकटपरिमलो रञ्जयन्सर्वदेश्यान्</p>'
+        '<p class="narrow">देशोऽप्यस्मिन्नदृष्टो घृसृणविसरवत्स्तान्मुदे सज्जनानाम् ॥ १ ॥</p>'
+        "</div></article>"
+    )
+    draft = (
+        '<article class="page-style" lang="ru">'
+        '<div class="shloka narrow">'
+        '<p class="sa">देशोऽप्यस्मिन्नदृष्टो घृसृणविसरवत्स्तान्मुदे सज्जनानाम् ॥ १ ॥</p>'
+        '<p class="ru tr">Учение (vādaḥ) о недвойственности (advaita).</p>'
+        "</div></article>"
+    )
+    out = restore_sa_from_source(draft, source)
+    assert "श्रीमच्छ्रीकण्ठनाथ" in out
+    assert "काश्मीरेभ्यः" in out
+    assert "vādaḥ" in out
+    assert out.count("॥ १ ॥") == 1
+
+
 def test_restore_sa_fixes_bengali_leak_in_deva_line():
     from app.services.llm_merge import restore_sa_from_source
 
