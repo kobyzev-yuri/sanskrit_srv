@@ -11,6 +11,10 @@ _CLASS_RE = re.compile(r"""\bclass=["']([^"']*)["']""", re.I)
 _DEVA_RE = re.compile(r"[\u0900-\u097F]+")
 _VERSE_RE = re.compile(r"॥\s*([०-९0-9]+)\s*॥")
 _DIGIT = str.maketrans("०१२३४५६७८९", "0123456789")
+_IAST_LATIN_RE = re.compile(
+    r"[A-Za-zāīūṛṝḷḹṅñṭḍṇśṣḥṃṁĀĪŪṚṜḶḸṄÑṬḌṆŚṢḤṂṀ]{3,}"
+)
+_P_RE = re.compile(r"<p(\s[^>]*)?>(.*?)</p>", re.I | re.S)
 MIN_ALT = 8
 
 MERGE_SYSTEM = """Ты склеиваешь ДВА русских перевода одной санскритской страницы в ОДИН.
@@ -29,7 +33,10 @@ MERGE_SYSTEM = """Ты склеиваешь ДВА русских перевод
 6. При равной грамматике бери более естественную русскую связку (часто A).
 
 Не копируй целиком A или B. Не усредняй синонимы в ущерб грамматике.
-Деванагари в <p class="sa …"> копируй из SOURCE символ в символ.
+КРИТИЧНО — ДЕВАНАГАРИ:
+- В каждом <p class="sa …"> копируй текст ТОЛЬКО из SOURCE HTML, символ в символ.
+- ЗАПРЕЩЕНО писать IAST / латиницу внутри санскритских <p class="sa"> (никаких mārgaḥ, svayoginī и т.п. в sa-блоках).
+- IAST допустим ТОЛЬКО в русских строках <p class="ru …"> внутри скобок (…).
 Выход: ТОЛЬКО HTML <article class="page-style" lang="ru">…</article>.
 Если B — одна шлока, выведи article только с этой парой sa + ru tr. Остальное страница не трогай.
 """
@@ -53,9 +60,6 @@ def _verse_key(text: str) -> str:
     return m.group(1).translate(_DIGIT)
 
 
-_P_RE = re.compile(r"<p(\s[^>]*)?>(.*?)</p>", re.I | re.S)
-
-
 def _paragraphs(html: str) -> list[tuple[str, str, str]]:
     return [(m.group(0), m.group(1) or "", m.group(2) or "") for m in _P_RE.finditer(html or "")]
 
@@ -70,6 +74,93 @@ def _is_ru_attrs(attrs: str) -> bool:
 
 def ru_count(html: str) -> int:
     return sum(1 for _full, attrs, _inner in _paragraphs(html) if _is_ru_attrs(attrs))
+
+
+def _sa_polluted(inner: str) -> bool:
+    """True if a Sanskrit line mixes Devanagari with Latin/IAST body text."""
+    text = re.sub(r"<[^>]+>", "", inner or "")
+    dewa = _deva_key(text)
+    if not dewa:
+        return bool(_IAST_LATIN_RE.search(text))
+    return bool(_IAST_LATIN_RE.search(text))
+
+
+def restore_sa_from_source(draft_html: str, source_html: str) -> str:
+    """Replace Sanskrit <p> bodies in the draft with matching SOURCE Devanagari.
+
+    Never leave IAST inside sa-lines after merge. Matching: verse number,
+    then Devanagari overlap, then next unused source paragraph for polluted lines.
+    """
+    draft = draft_html or ""
+    source = source_html or ""
+    if not draft.strip() or not source.strip():
+        return draft
+
+    src_paras: list[tuple[str, str, str]] = []
+    for full, attrs, inner in _paragraphs(source):
+        classes = _tag_classes(attrs)
+        if "ru" in classes or "tr" in classes or "iast" in classes:
+            continue
+        if "sa" in classes or "shloka" in classes or _deva_key(inner):
+            src_paras.append((full, attrs, inner))
+    if not src_paras:
+        return draft
+
+    used: set[int] = set()
+
+    def pick(inner: str) -> str | None:
+        v = _verse_key(inner)
+        d = _deva_key(inner)
+        if v:
+            for i, (_f, _a, sinn) in enumerate(src_paras):
+                if i in used:
+                    continue
+                if _verse_key(sinn) == v:
+                    used.add(i)
+                    return sinn
+        if d and len(d) >= 8:
+            for i, (_f, _a, sinn) in enumerate(src_paras):
+                if i in used:
+                    continue
+                sd = _deva_key(sinn)
+                if not sd:
+                    continue
+                if d == sd or d[:16] == sd[:16] or d in sd or sd in d:
+                    used.add(i)
+                    return sinn
+        return None
+
+    pieces: list[str] = []
+    last = 0
+    for m in _P_RE.finditer(draft):
+        attrs, inner = m.group(1) or "", m.group(2) or ""
+        classes = _tag_classes(attrs)
+        is_sa = (
+            ("sa" in classes or "shloka" in classes or bool(_deva_key(inner)))
+            and "ru" not in classes
+            and "tr" not in classes
+            and "iast" not in classes
+        )
+        if not is_sa:
+            continue
+        new_inner = pick(inner)
+        if new_inner is None and _sa_polluted(inner):
+            for i, (_f, _a, sinn) in enumerate(src_paras):
+                if i in used:
+                    continue
+                if _deva_key(sinn):
+                    new_inner = sinn
+                    used.add(i)
+                    break
+        if new_inner is None or new_inner == inner:
+            continue
+        pieces.append(draft[last : m.start()])
+        pieces.append(f"<p{attrs}>{new_inner}</p>")
+        last = m.end()
+    if not pieces:
+        return draft
+    pieces.append(draft[last:])
+    return "".join(pieces)
 
 
 def _ru_lookup(html: str) -> dict[tuple[str, str], str]:
@@ -199,11 +290,11 @@ def merge_translations(
     merged = validate_translation_html(text, source_html=source)
     spliced, n = apply_merged_pairs(draft, merged)
     if n:
-        return spliced, model, usage
+        return restore_sa_from_source(spliced, source), model, usage
     # A one-śloka model reply must never replace the rest of the leaf.
     if ru_count(merged) < ru_count(draft):
         raise ValueError(
             "Не удалось сопоставить шлоку с черновиком — страница не изменена. "
             "Вставьте перевод в поле под нужной шлокой ещё раз."
         )
-    return merged, model, usage
+    return restore_sa_from_source(merged, source), model, usage

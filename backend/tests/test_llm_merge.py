@@ -154,6 +154,53 @@ def test_unmatched_single_verse_does_not_wipe_page():
     assert SA_3 in out and SA_4 in out
 
 
+def test_restore_sa_strips_iast_pollution_from_sanskrit_line():
+    from app.services.llm_merge import restore_sa_from_source
+
+    source = (
+        '<article class="page-style" lang="sa">'
+        '<div class="shloka sa">'
+        '<p class="narrow">भीरं वायति यः स्वयोगिनिवहस्तस्य प्रभुर्भैरवो</p>'
+        '<p class="narrow indent">विश्वस्मिन्भरणादिकृद्विजयते विज्ञानरूपः परः ॥१॥</p>'
+        "</div></article>"
+    )
+    draft = (
+        '<article class="page-style" lang="ru">'
+        '<div class="shloka sa">'
+        '<p class="narrow" lang="sa">भीरं वायति यः svayoginivahastasya prabhurbhairavo</p>'
+        '<p class="narrow indent" lang="sa">विश्वस्मिन्भरणादिकृद्विजयते विज्ञानरूपः परः ॥१॥</p>'
+        '<p class="ru tr" lang="ru">Дарующий (pradaḥ) бесстрашие (abhaya).</p>'
+        "</div></article>"
+    )
+    out = restore_sa_from_source(draft, source)
+    assert "svayogini" not in out
+    assert "स्वयोगिनिवहस्तस्य" in out
+    assert "pradaḥ" in out
+
+
+def test_merge_restores_sa_even_when_llm_returns_iast_in_sa(monkeypatch):
+    bad = (
+        '<article class="page-style" lang="ru">'
+        f'<p class="sa shloka" lang="sa">{SA_4[:20]} kimapi paramamrtam ॥ ४ ॥</p>'
+        f'<p class="ru tr" lang="ru">{HYBRID_4}</p>'
+        "</article>"
+    )
+
+    def fake_prompt(*_a, **_k):
+        return bad, "gemini:test", {"network": "gemini", "model": "test"}
+
+    monkeypatch.setattr("app.services.llm_merge.run_text_prompt", fake_prompt)
+    html, _model, _usage = merge_translations(
+        source_html=SOURCE,
+        draft_html=DRAFT,
+        alt_text=PROFESSOR_4,
+        style="iast_gloss",
+    )
+    assert "paramamrtam" not in html
+    assert SA_4 in html
+    assert RU_3 in html
+
+
 def test_merge_refuses_to_replace_page_with_one_verse(monkeypatch):
     def fake_prompt(*_a, **_k):
         html = (
