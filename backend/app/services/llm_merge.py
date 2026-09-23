@@ -277,29 +277,38 @@ def _lookup_ru(
     verse: str,
     dewa: str,
 ) -> str | None:
-    """Find merged RU for a draft śloka; tolerate last-pāda-only model replies."""
+    """Find merged RU for a draft śloka; tolerate last-pāda-only model replies.
+
+    Never broadcast a single-verse merge onto headings, prose, or notes that have
+    no verse number / no strong Devanagari overlap.
+    """
     if verse:
         hit = idx.get(("v", verse))
         if hit:
             return hit
-    if dewa:
-        hit = idx.get(("d", dewa)) or (idx.get(("p", dewa[:20])) if len(dewa) >= 12 else None)
+    if not dewa:
+        return None
+    hit = idx.get(("d", dewa))
+    if hit:
+        return hit
+    if len(dewa) >= 12:
+        hit = idx.get(("p", dewa[:20]))
         if hit:
             return hit
-        if len(dewa) >= 24:
-            hit = idx.get(("s", dewa[-24:]))
-            if hit:
-                return hit
-        # Model often returns only the last pāda as SA — overlap on suffix / containment.
-        for kind, key in list(idx.keys()):
-            if kind not in ("d", "s", "p") or len(key) < 12:
-                continue
-            if key in dewa or dewa.endswith(key) or key.endswith(dewa[-20:]):
-                return idx[(kind, key)]
-    verses_in_idx = {vk for (k, vk) in idx if k == "v"}
-    if not verse and len(verses_in_idx) == 1:
-        vk = next(iter(verses_in_idx))
-        return idx.get(("v", vk))
+    if len(dewa) >= 24:
+        hit = idx.get(("s", dewa[-24:]))
+        if hit:
+            return hit
+    # Strong overlap only (last-pāda reply vs full multi-pāda draft block).
+    for kind, key in list(idx.keys()):
+        if kind not in ("d", "s") or len(key) < 16:
+            continue
+        if key in dewa and len(key) >= 24:
+            return idx[(kind, key)]
+        if dewa.endswith(key) and len(key) >= 24:
+            return idx[(kind, key)]
+        if len(dewa) >= 24 and key.endswith(dewa[-24:]):
+            return idx[(kind, key)]
     return None
 
 
@@ -307,6 +316,7 @@ def apply_merged_pairs(draft_html: str, merged_html: str) -> tuple[str, int]:
     """Replace matching Russian <p> tags; never drop unmatched verses.
 
     Returns (html, n_replaced). If nothing matched, returns the original draft.
+    Each merged RU block is consumed at most once (no broadcast to every line).
     """
     draft = draft_html or ""
     merged = merged_html or ""
@@ -327,6 +337,10 @@ def apply_merged_pairs(draft_html: str, merged_html: str) -> tuple[str, int]:
         if "ru" in classes:
             d = "".join(_deva_key(x) for x in pending)
             v = verse or _verse_key(inner)
+            # Footnotes / notes never receive a śloka merge.
+            if "note" in classes:
+                pending, verse = [], ""
+                continue
             new_ru = _lookup_ru(idx, verse=v, dewa=d)
             pending, verse = [], ""
             if new_ru and new_ru != m.group(0):
@@ -334,6 +348,8 @@ def apply_merged_pairs(draft_html: str, merged_html: str) -> tuple[str, int]:
                 pieces.append(new_ru)
                 last = m.end()
                 replaced += 1
+                # Consume so one model RU cannot paint the whole page.
+                idx = {k: val for k, val in idx.items() if val != new_ru}
             continue
         if "iast" in classes:
             continue
@@ -402,7 +418,7 @@ def merge_translations(
     if n:
         return restore_sa_from_source(spliced, source), model, usage
     # A one-śloka model reply must never replace the rest of the leaf.
-    if ru_count(merged) < ru_count(draft):
+    if ru_count(merged) < ru_count(draft) or _alt_looks_single_verse(alt):
         raise ValueError(
             "Не удалось сопоставить шлоку с черновиком — страница не изменена. "
             "Вставьте перевод в поле под нужной шлокой ещё раз."

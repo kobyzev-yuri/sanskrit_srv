@@ -154,7 +154,33 @@ def test_unmatched_single_verse_does_not_wipe_page():
     assert SA_3 in out and SA_4 in out
 
 
-def test_restore_sa_strips_iast_pollution_from_sanskrit_line():
+def test_splice_does_not_broadcast_one_verse_to_all_ru():
+    """A single-verse merge must not paint headings, prose, or notes."""
+    draft = (
+        '<article class="page-style" lang="ru">'
+        '<p class="sa centered">ओंनमः</p>'
+        '<p class="ru tr">Ом (oṃ).</p>'
+        f'<p class="sa shloka">{SA_4}</p>'
+        f'<p class="ru tr">{GEMINI_4}</p>'
+        '<p class="sa">इह श्रीमान्</p>'
+        '<p class="ru tr">Здесь (iha) достославный (śrīmān).</p>'
+        '<p class="ru note">Строка 5: чтение.</p>'
+        "</article>"
+    )
+    merged = (
+        '<article class="page-style" lang="ru">'
+        f'<p class="sa shloka">{SA_4}</p>'
+        f'<p class="ru tr">{HYBRID_4}</p>'
+        "</article>"
+    )
+    out, n = apply_merged_pairs(draft, merged)
+    assert n == 1
+    assert "Ом (oṃ)" in out
+    assert "Здесь (iha)" in out
+    assert "Строка 5" in out
+    assert "при жизни" in out
+    assert out.count("при жизни") == 1
+    assert out.count("Ом (oṃ)") == 1
     from app.services.llm_merge import restore_sa_from_source
 
     source = (
