@@ -2,11 +2,10 @@
 
 Modes: text (HTML only) | interleave (scan page then HTML for each source page).
 
-Text pages are rendered with headless Chromium when available (correct Devanagari
-shaping). Chromium/poppler then insert spurious U+0020 between glyph clusters on
-copy (reordered ि, conjuncts like कृष्…). We convert painted text to paths and
-overlay MuPDF's clean Unicode as invisible text so Word/Chrome copy stays intact.
-Falls back to PyMuPDF Story if Chromium is missing.
+Text pages go HTML → docx → LibreOffice when soffice is installed. The docx
+stores real Unicode, and LibreOffice writes a PDF whose copy matches the glyphs.
+Chromium is the next choice. PyMuPDF Story is the last fallback: it shapes
+Devanagari but its ToUnicode map splits matras from consonants.
 """
 from __future__ import annotations
 
@@ -19,6 +18,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -150,13 +150,28 @@ def build_project_pdf(
     out_path = out_dir / f"{slug}{suffix}.pdf"
 
     log.info(
-        "PDF build slug=%s mode=%s pages=%s chromium=%s",
+        "PDF build slug=%s mode=%s pages=%s libreoffice=%s chromium=%s",
         slug,
         mode,
         len(pages),
+        bool(_soffice_bin()),
         bool(_chrome_bin()),
     )
     mediabox = _mediabox_for_pages(pages)
+    if _soffice_bin():
+        try:
+            return _build_pdf_libreoffice(
+                out_path,
+                project_id,
+                slug,
+                title,
+                pages,
+                title_sa=title_sa,
+                mode=mode,
+                source_project_id=source_project_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("libreoffice PDF failed (%s); falling back", exc)
     if mode == "text" and _chrome_bin():
         try:
             return _build_pdf_chrome_book(
@@ -537,6 +552,18 @@ def _env_flag(name: str) -> str:
     return (os.environ.get(name) or "").strip().lower()
 
 
+def _use_libreoffice() -> bool:
+    """HTML → docx → LibreOffice. Off only when SANSKRIT_PDF_LIBREOFFICE=0."""
+    flag = _env_flag("SANSKRIT_PDF_LIBREOFFICE")
+    return flag not in ("0", "no", "false", "off")
+
+
+def _soffice_bin() -> str | None:
+    if not _use_libreoffice():
+        return None
+    return shutil.which("soffice") or shutil.which("libreoffice")
+
+
 def _use_chromium() -> bool:
     """HTML→PDF uses Chromium like digitize. Skip inside the 400MB API cgroup unless forced."""
     flag = _env_flag("SANSKRIT_PDF_CHROMIUM")
@@ -612,6 +639,140 @@ def _font_face_css() -> str:
             "}"
         )
     return "\n".join(parts)
+
+
+_DEVANAGARI_RUN = re.compile(r"[\u0900-\u097F]{4,}")
+
+
+def _expect_devanagari(pages: list[tuple[int, str, str | None]]) -> str | None:
+    for _page_no, html, _scan in pages:
+        match = _DEVANAGARI_RUN.search(html or "")
+        if match:
+            return match.group(0)
+    return None
+
+
+def _soffice_convert_argv(
+    soffice: str,
+    profile: Path,
+    work: Path,
+    docx_path: Path,
+) -> list[str]:
+    """Convert docx outside the API cgroup when that cgroup is only 400MB.
+
+    soffice as a child of sanskrit-srv is killed by MemoryMax. A transient
+    unit on system.slice has its own cap and can use swap on the 1GB VPS.
+    """
+    lo = [
+        soffice,
+        "--headless",
+        "--norestore",
+        "--nolockcheck",
+        "--nologo",
+        f"-env:UserInstallation={profile.resolve().as_uri()}",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        work.as_posix(),
+        docx_path.as_posix(),
+    ]
+    if _pdf_low_ram() and shutil.which("systemd-run"):
+        return [
+            "systemd-run",
+            "--wait",
+            "--collect",
+            "--pipe",
+            "--quiet",
+            "--slice=system.slice",
+            "-p",
+            "MemoryMax=512M",
+            "--",
+            *lo,
+        ]
+    return lo
+
+
+def _docx_use_noto(docx_path: Path) -> None:
+    """Point complex-script runs at a face LibreOffice has on Linux.
+
+    The Word download keeps Nirmala UI. That face is not installed here, and
+    without it soffice drops matras while shaping.
+    """
+    tmp = docx_path.with_suffix(".noto.docx")
+    with zipfile.ZipFile(docx_path) as src, zipfile.ZipFile(tmp, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename.endswith(".xml"):
+                data = data.replace(b"Nirmala UI", "Noto Serif Devanagari".encode())
+            dst.writestr(info, data)
+    tmp.replace(docx_path)
+
+
+def _build_pdf_libreoffice(
+    out_path: Path,
+    project_id: uuid.UUID,
+    slug: str,
+    title: str,
+    pages: list[tuple[int, str, str | None]],
+    *,
+    title_sa: str | None,
+    mode: str,
+    source_project_id: uuid.UUID | None,
+) -> Path:
+    """HTML → docx → LibreOffice. Copy text is the Unicode stored in the docx."""
+    from app.services.export_docx import build_project_docx
+
+    soffice = _soffice_bin()
+    if not soffice:
+        raise RuntimeError("soffice is not installed")
+    work = Path(tempfile.mkdtemp(prefix="sanskrit-pdf-"))
+    profile = work / "lo-profile"
+    try:
+        docx_path = work / f"{slug}.docx"
+        build_project_docx(
+            project_id,
+            slug,
+            title,
+            pages,
+            title_sa=title_sa,
+            mode=mode,
+            source_project_id=source_project_id,
+            out_path=docx_path,
+        )
+        _docx_use_noto(docx_path)
+        timeout = max(120, 40 + len(pages) * 2)
+        proc = subprocess.run(
+            _soffice_convert_argv(soffice, profile, work, docx_path),
+            check=False,
+            timeout=timeout,
+            capture_output=True,
+        )
+        pdf_path = work / f"{slug}.pdf"
+        if proc.returncode != 0 or not pdf_path.is_file() or pdf_path.stat().st_size < 500:
+            err = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace")[-500:]
+            raise RuntimeError(f"soffice exit {proc.returncode}: {err}")
+        doc = fitz.open(pdf_path.as_posix())
+        try:
+            blob = "".join(page.get_text() for page in doc)
+            needle = _expect_devanagari(pages) or (title_sa or "")
+            needle = needle.strip()
+            if len(needle) >= 4 and needle not in blob.replace(" ", ""):
+                raise RuntimeError(f"PDF text layer lost Devanagari sample {needle!r}")
+            doc.set_metadata(
+                {
+                    "producer": "sanskrit_srv/libreoffice",
+                    "creator": "Sanskrit SRV",
+                    "title": title or slug,
+                }
+            )
+            tmp_out = out_path.with_suffix(f".{uuid.uuid4().hex}.tmp.pdf")
+            doc.save(tmp_out.as_posix(), garbage=3, deflate=True)
+        finally:
+            doc.close()
+        tmp_out.replace(out_path)
+        return out_path
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def _html_to_doc(

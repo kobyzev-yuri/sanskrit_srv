@@ -11,6 +11,16 @@ source .venv/bin/activate
 pip install -q --upgrade pip
 pip install -q -r backend/requirements.txt
 
+# PDF export is HTML → docx → LibreOffice. The API cgroup is 400MB, so
+# soffice is started later as its own unit. Noto Serif Devanagari is the face
+# the docx names for complex script.
+if ! command -v soffice >/dev/null 2>&1 || ! fc-list 2>/dev/null | grep -q "Noto Serif Devanagari"; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y --no-install-recommends libreoffice-writer fonts-noto-core
+  fc-cache -f >/dev/null 2>&1 || true
+fi
+
 mkdir -p data storage
 if [[ ! -f .env ]]; then
   echo "WARN: $APP_ROOT/.env missing — copy secrets via scp before serving traffic" >&2

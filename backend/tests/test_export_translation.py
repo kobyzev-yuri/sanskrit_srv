@@ -1,4 +1,4 @@
-"""Translation project exports Word (docx); PDF builds without Chromium."""
+"""Translation exports: docx Unicode, LibreOffice PDF, Story fallback."""
 import uuid
 from pathlib import Path
 
@@ -41,6 +41,7 @@ def test_translation_docx_has_sa_and_ru(monkeypatch, tmp_path: Path):
 
 def test_translation_pdf_story_without_chromium(monkeypatch, tmp_path: Path):
     _storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANSKRIT_PDF_LIBREOFFICE", "0")
     monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
     monkeypatch.setenv("SANSKRIT_PDF_COPYFIX", "0")
     from app.services.export_pdf import build_project_pdf, _chrome_bin, _use_chromium
@@ -108,6 +109,7 @@ def test_reembed_pdf_images_uses_device_rgb_jpeg(tmp_path: Path):
 
 def test_story_pdf_embeds_figure(monkeypatch, tmp_path: Path):
     _storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANSKRIT_PDF_LIBREOFFICE", "0")
     monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
     monkeypatch.setenv("SANSKRIT_PDF_COPYFIX", "0")
     import fitz
@@ -147,6 +149,7 @@ def test_story_pdf_embeds_figure(monkeypatch, tmp_path: Path):
 
 def test_story_pdf_copy_keeps_conjuncts(monkeypatch, tmp_path: Path):
     _storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANSKRIT_PDF_LIBREOFFICE", "0")
     monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
     monkeypatch.setenv("SANSKRIT_PDF_COPYFIX", "1")
     import fitz
@@ -176,6 +179,7 @@ def test_story_pdf_copy_keeps_conjuncts(monkeypatch, tmp_path: Path):
 
 def test_story_pdf_copy_covers_wrapped_lines(monkeypatch, tmp_path: Path):
     _storage(monkeypatch, tmp_path)
+    monkeypatch.setenv("SANSKRIT_PDF_LIBREOFFICE", "0")
     monkeypatch.setenv("SANSKRIT_PDF_CHROMIUM", "0")
     monkeypatch.delenv("SANSKRIT_PDF_COPYFIX", raising=False)
     import fitz
@@ -201,4 +205,34 @@ def test_story_pdf_copy_covers_wrapped_lines(monkeypatch, tmp_path: Path):
         doc.close()
     assert n_copy >= 4, n_copy
     assert "слово01" in blob and "слово60" in blob
+
+
+def test_libreoffice_pdf_copies_conjuncts(monkeypatch, tmp_path: Path):
+    _storage(monkeypatch, tmp_path)
+    import shutil
+
+    import fitz
+
+    from app.services.export_pdf import build_project_pdf
+
+    if not (shutil.which("soffice") or shutil.which("libreoffice")):
+        return
+    html = """
+<article class="page-style">
+  <p class="sa" lang="sa">विज्ञानभैरवः</p>
+  <p class="sa" lang="sa">यज्ञो वै श्रेष्ठतमं कर्म</p>
+  <p class="sa" lang="sa">कृष्ण</p>
+</article>
+"""
+    path = build_project_pdf(uuid.uuid4(), "book-sa", "Vijnana", [(1, html, None)])
+    doc = fitz.open(path.as_posix())
+    try:
+        blob = "".join(page.get_text() for page in doc)
+        producer = doc.metadata.get("producer") or ""
+    finally:
+        doc.close()
+    assert "sanskrit_srv/libreoffice" in producer
+    assert "विज्ञानभैरवः" in blob
+    assert "यज्ञो वै श्रेष्ठतमं कर्म" in blob
+    assert "कृष्ण" in blob
 

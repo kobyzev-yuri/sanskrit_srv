@@ -45,6 +45,7 @@ def build_project_docx(
     title_sa: str | None = None,
     mode: str = "text",
     source_project_id: uuid.UUID | None = None,
+    out_path: Path | None = None,
 ) -> Path:
     """pages: list of (page_no, html_fragment, scan_path|None).
 
@@ -58,7 +59,10 @@ def build_project_docx(
     out_dir = ensure_dirs() / "exports" / str(project_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = "-interleave" if mode == "interleave" else ""
-    out_path = out_dir / f"{slug}{suffix}.docx"
+    if out_path is None:
+        out_path = out_dir / f"{slug}{suffix}.docx"
+    else:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
     doc = Document()
     _setup_styles(doc)
