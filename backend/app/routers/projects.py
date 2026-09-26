@@ -789,6 +789,7 @@ def export_pdf(
             path,
             media_type="application/pdf",
             filename=filename,
+            headers={"Cache-Control": "no-store"},
         )
 
     if err.is_file():

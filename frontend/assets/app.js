@@ -3069,8 +3069,10 @@ async function exportDocument(fmt = "pdf", mode = "text", { rebuild = false } = 
       if (mode === "interleave") params.set("mode", "interleave");
       if (askRebuild) params.set("rebuild", "1");
       askRebuild = false;
+      params.set("t", String(Date.now()));
       const q = params.toString() ? `?${params}` : "";
       res = await fetch(`${API}/projects/${state.project.id}/export.${ext}${q}`, {
+        cache: "no-store",
         headers: { Authorization: `Bearer ${state.token}` },
       });
       if (res.status === 202) {
