@@ -9,6 +9,15 @@ from app.services.llm_draft import (
 from app.services.pipeline import digitize_one_by_one
 
 
+def test_digitize_prompt_is_line_transcription():
+    from app.services.llm_draft import BASE_PROMPT
+
+    assert "One printed line" in BASE_PROMPT
+    assert "त्त is त्+त, not त" in BASE_PROMPT
+    assert "type-lg" not in BASE_PROMPT
+    assert "lh-tight" not in BASE_PROMPT
+
+
 def test_split_batch_page_html():
     raw = """
 commentary

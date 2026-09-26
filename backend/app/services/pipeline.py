@@ -70,10 +70,10 @@ from app.services.translation_style import (
 log = logging.getLogger("sanskrit.pipeline")
 
 DEFAULT_REVIEW_DIRECTIVE = (
-    "Пересмотри страницу полностью по скану. HTML только классами (page-style, narrow, shloka, "
-    "indent, centered, running-head, page-num, toc) — без style=, flex и float. "
-    "Двухколоночное оглавление: одна таблица class=toc на всю страницу, ровно 4 ячейки в ряду "
-    "(лево|стр|право|стр), без второй узкой таблицы внизу. Текст построчно, обе колонки до конца."
+    "Пересмотри страницу по скану. Одна печатная строка — один <p class=\"sa\">. "
+    "Номер страницы отдельной строкой. Без style=, flex и float. "
+    "Лигатуру не схлопывай: первый согласный полуформы обязателен, त्त остаётся त्त, не त. "
+    "Не подставляй запомненный стих."
 )
 
 AGREED_STATUSES = (PageStatus.expert_done, PageStatus.scholar_review, PageStatus.published)

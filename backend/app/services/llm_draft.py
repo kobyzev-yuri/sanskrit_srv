@@ -29,101 +29,43 @@ from app.services.llm_route import (
 )
 from app.services.llm_usage import parse_anthropic_usage, parse_openai_usage
 
-BASE_PROMPT = """You restore a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
+BASE_PROMPT = """You transcribe a Devanagari scan page (Sanskrit, Hindi, or mixed) into an HTML fragment.
 
-The IMAGE is ground truth for TEXT, LAYOUT, and TYPOGRAPHY. Match the book visual style as closely as HTML allows.
+The IMAGE is ground truth. Copy the printed letters. Do not invent lines. Do not add commentary.
 
-LANGUAGE (silent first judgment — encode in lang=, do not narrate):
-- Pure Sanskrit → <article … lang="sa">; body/verse blocks class="sa" lang="sa".
-- Pure Hindi → <article … lang="hi">; prose class="sa" lang="hi" (class sa = Devanagari font, not “Sanskrit-only”).
-- Mixed pages are common: Sanskrit śloka / sūtra / mantra + Hindi ṭīkā / vyākhyā / translation.
-  - Mark Sanskrit lines: class="sa shloka" (or plain sa) lang="sa".
-  - Mark Hindi commentary/prose: class="sa" lang="hi".
-  - Article lang= the dominant language of the page (usually "hi" if commentary fills most of the leaf, else "sa").
-- Do NOT Sanskritize Hindi wording, and do NOT translate or modernize Sanskrit into Hindi.
-- Hindi nukta letters (क़ ख़ ग़ ज़ ड़ ढ़ फ़) must be kept when the scan shows them.
+OUTPUT
+- Wrap the page in <article class="page-style" lang="sa"> or lang="hi"> (the dominant language).
+- One printed line → one <p class="sa" lang="sa"> or lang="hi">. A title may be <h1 class="sa">.
+- The page number, when it is printed, is its own <p class="sa">. Keep the digits that are on the scan.
+- Two columns: read the left column from top to bottom, then the right column. Separate lines, not a table.
+- No style=, no flex, no float, no markdown, no extra classes.
 
-First silently judge from the scan:
-1) text column width (narrow / medium / wide) and whether there are ONE or TWO vertical columns
-2) title alignment (center / left)
-3) line height / leading (tight dense print, normal, or loose/open)
-4) body size vs headings (small body + larger title, or even)
-5) ornaments / figures separate from the full-page plate
-6) for lists / TOC: first and last item number in EACH column
+LANGUAGE
+- Sanskrit lines: lang="sa". Hindi commentary: lang="hi". Do not Sanskritize Hindi or translate Sanskrit.
+- Keep Hindi nukta letters (क़ ख़ ग़ ज़ ड़ ढ़ फ़) when the scan shows them.
 
-Then encode that judgment in classes (do not write the judgment as visible text).
+FIDELITY OVER MEMORY
+- Encode ONLY what is printed on THIS scan. Do not substitute a standard, dictionary, GRETIL, or remembered spelling.
+- Familiar hymns are the highest risk. If the plate prints गणपतिग्ं / ऋतग्ं, keep that, not गणपतिं / ऋतं.
+- Do not insert an akṣara to repair sandhi. Hyphens only where the plate has them.
+- Do not "fix" nasalization. ग्ं / ं / ँ / ꣳ are different signs — copy the one on this syllable.
+- Do not rewrite plate …ग्ं… into classical …ं, and do not rewrite plain …ं… into …ग्ं.
 
-LAYOUT (line-by-line, book-like — mandatory):
-- Emit content as a vertical sequence of block tags matching the printed lines top→bottom (and left column then right column if two columns).
-- ONE printed line (or one half-verse line) → usually ONE <p> / <h1> / list row. Do not merge distant lines into one CSS row.
-- Narrow column / short verse -> class="narrow" and/or class="shloka". Do NOT stretch full-width when the book is a narrow column.
-- Two columns (TOC etc.): restore BOTH columns completely through the last numbered line. No empty placeholder rows.
-- Titles: <h1 class="sa centered"> or <p class="running-head sa">. Match center/left as on the scan.
-- Indent first line of a couplet continuation -> class="indent". Verse stack -> class="shloka sa". Prose -> <p class="sa">.
-- Header line: separate blocks only — <p class="page-num">, <p class="running-head sa">, optional section tag. Place them in reading order as on the scan (often page number, then book title, then section in brackets).
-- Page number / imprint: <p class="page-num"> or <footer class="sa"> where the scan has them.
-- Tables stay <table>. 
-- Two-column TOC / अनुक्रमणिका / विषयसूची (critical):
-  Use ONE <table class="toc sa"> for the WHOLE page body with exactly FOUR cells per data row:
-  <td>left title</td><td>left page</td><td>right title</td><td>right page</td>.
-  Pair row i of the left printed column with row i of the right printed column.
-  Section headings (e.g. विविध श्लोकाः) stay inside that same 4-column table (as a cell), never start a second 2-column table underneath — that collapses the layout to one column.
-  Empty <td></td> only when that side has no more lines. Include every numbered line through the end of BOTH columns.
+LIGATURES
+- A conjunct is two or more consonants. The first is often only a short stroke on the left (the half-form). Keep that first consonant. Dropping it is the usual error.
+- Doubled consonants stay doubled. त्त is त्+त, not त. The same for द्द, न्न, क्क, प्प, म्म, ल्ल.
+- ङ्ग (vertical ङ्+ग, ṅga) is not ज्ञ (jña). ज्ञ = ज्+ञ. ञ, ण, न, and ङ are different letters.
+- Do not invent ग after anusvāra: एकहंसः, not एकहंगसः. Gum (ग्ं) only where the plate shows half-ग + ं.
 
-- Prefer class="compact" on <article> when the page is dense.
+SVARA
+- Do not emit ॑ (U+0951) or ॒ (U+0952). Transcribe letters, matras, and nasals only.
+- No <u>, no underscore, no Latin combining marks as stand-ins for tone.
 
-FORBIDDEN (never invent browser layout hacks):
-- No inline style="..." (no flex, float, clear, grid, width%, justify-content, etc.).
-- No <div style=...>, no display:flex / float:left / float:right headers.
-- Layout only via the allowed classes below.
+FIGURES
+- A diagram that is not the whole page: <figure class="scan-crop" data-box="x,y,w,h"></figure> with fractions 0–1.
+- If figures are listed: <img data-fig="N" alt="" />. Never crop the entire page as a figure.
 
-TYPOGRAPHY:
-- Wrap in <article class="page-style TYPE LH" lang="sa|hi"> where TYPE is type-sm|type-md|type-lg and LH is lh-tight|lh-normal|lh-loose.
-- Headings may add type-lg; body follows the article default.
-- Approximate metal type with size + leading classes and Noto Serif Devanagari (we cannot load the scan font).
-
-TEXT:
-- Capture ALL readable text through the last line of every column. Preserve Devanagari; set lang="sa" or lang="hi" per block as above.
-- Do NOT invent text. Do NOT leave blank rows where the scan still has numbers/text.
-- If a previous draft used flex/float or truncated a column, replace with clean class-based line-by-line HTML from the scan.
-
-FIDELITY OVER MEMORY (critical — this is diplomatic transcription, not editing):
-- Encode ONLY what is printed on THIS scan. Do NOT substitute a "standard", "correct", dictionary, GRETIL, or remembered mantra spelling.
-- Familiar hymns are the highest risk: you will "know" गणपतिं हवामहे / ॐ गणानां त्वा… — if the plate prints गणपतिग्ं / ऋतग्ं / ग्ं / etc., keep the plate, even when it looks non-Classical.
-- Same rule for rare or "wrong-looking" words (ऋतग्ं-, odd sandhi, old orthography): leave them; do not silently normalize.
-- Never insert an extra akṣara to "repair" sandhi or word division. Classic false add: plate मीश्वरस्सर्व- / मीश्वर-स्सर्व- misread as मीश्वर-रस्सर्व- (spurious र before स्). Hyphens only where the plate has them; no invented र / रा / य / व for sandhi.
-- Never "fix" nasalization either way. ग्ं / गुंँ / गँ / म् / ं / ँ / ꣳ are different signs — copy the one printed on THIS syllable.
-- Hard ban both directions:
-  - Do NOT rewrite plate …ग्ं… into classical …ं (wrong: गणपतिग्ं → गणपतिं, ऋतग्ं → ऋतं).
-  - Do NOT rewrite ordinary plate …ं… into …ग्ं / गुंँ / ँ / ꣳ. Most anusvāras stay plain ं. Gum is only where the plate shows half-ग + ं (or another marked gum form).
-- Illustrations only (not a global replace rule; omit ॑/॒ in output per tone policy below):
-  - if plate has …गणपतिग्ं… → keep …गणपतिग्ं…; if plate has …गणपतिं… → keep …गणपतिं…
-  - if plate has …ऋतग्ं… → keep …ऋतग्ं…; if plate has …ऋतं… → keep …ऋतं…
-
-DEVANAGARI CONJUNCTS (critical — do not "guess" from Latin habits):
-- Stacked vertical ङ् + ग on the scan is the ligature ङ्ग (ṅga). Encode as ङ्ग (U+0919 VIRAMA U+0917), NEVER as ज्ञ (jña).
-- Classic false reading at line/page end: scan अङ्गानां / अङ्गानाम् (ṅga ligature) misread as अज्ञानां (jña). Also watch for truncated last words/lines — always finish the paragraph as on the scan.
-- Soft/palatal ñ is ञ; retroflex ṇ is ण; dental n is न; velar ṅ is ङ. Do not swap them.
-- ज्ञ = ज् + ञ (jña). ङ्ग = ङ् + ग (ṅga). They look different; prefer the scan, not a familiar wrong word.
-- Final consonant / nasal: if the scan shows explicit म् / न् etc., keep the virama form; use anusvāra ं (or Vedic ꣳ) only when the scan has that mark.
-- Do not invent an extra ग after anusvāra: wrong एकहंगसः vs correct एकहंसः / एकहꣳसः (haṃsaḥ — anusvāra on ह, then स, no ङ्ग).
-- Vedic "gum" (half-ग + ं) only when visible as such on the plate. Do not sprinkle ग्ं onto every nasal; do not "upgrade" plain ं to gum from hymn memory.
-- Half-forms and conjuncts (त्र, प्र, क्ष, त्त, ङ्ग, ज्ञ, …) must stay as proper Unicode conjuncts so the font can draw the ligature.
-
-VEDIC SVARA / TONE MARKS — OMIT ENTIRELY:
-- Do NOT emit ॑ (U+0951) or ॒ (U+0952) at all. False positives are too frequent; bare akṣaras without tones are required.
-- Ignore anudātta underlines and udātta/svarita strokes on the scan for encoding purposes — transcribe letters/matras/nasals only.
-- Do NOT use HTML <u>, CSS underline, underscore _, or Latin diacritics as stand-ins for tones.
-- Also never emit: U+0346, U+0304, U+0305, U+0323, U+0303, U+0307, or other combining tone fakes.
-
-FIGURES:
-- Ornaments/diagrams (not the full page): <figure class="scan-crop" data-box="x,y,w,h"></figure> with fractions 0-1.
-- Embedded figures if listed: <img data-fig="N" alt="..." />.
-- Never crop the entire page as a figure.
-
-Return ONLY a raw HTML fragment starting with <article …> (no markdown, no commentary, no English step-by-step).
-Do not narrate your judgment — encode it in classes and emit HTML immediately.
-Allowed classes: page-style, type-sm, type-md, type-lg, lh-tight, lh-normal, lh-loose, narrow, indent, shloka, centered, compact, running-head, page-num, footer, scan-crop, page-figure, toc, data-box, data-fig.
+Return ONLY the HTML fragment, starting with <article>.
 """
 
 GARBAGE_ANYWHERE = re.compile(
@@ -343,7 +285,7 @@ def revise_from_scan(
     parts = [
         BASE_PROMPT,
         f"Page number: {page_no}.",
-        "First silently judge: column width, title alignment, verse vs prose, ornaments — then emit HTML that mirrors that.",
+        "One printed line, one <p class=\"sa\">. Do not drop the first consonant of a conjunct (त्त stays त्त, not त).",
     ]
     if available_figures:
         figs = ", ".join(
@@ -354,10 +296,10 @@ def revise_from_scan(
         )
     if current_html and looks_like_page_html(current_html):
         parts.append(
-            "Current draft HTML (may be incomplete/wrong — fix from the scan; "
-            "strip any style=/flex/float and rebuild line-by-line with classes only). "
-            "Distrust dictionary spellings in this draft: re-read nasals from the scan "
-            "(keep गणपतिग्ं / ऋतग्ं if printed, do not keep गणपतिं / ऋतं from memory). "
+            "Current draft HTML (may be wrong — re-read the scan). "
+            "One printed line, one <p class=\"sa\">. "
+            "Distrust dictionary spellings: keep गणपतिग्ं / ऋतग्ं if printed, "
+            "and do not collapse a doubled consonant (त्त must not become त). "
             "Strip any ॑/॒ — tones are not used in drafts:\n"
             + current_html.strip()
         )
@@ -376,9 +318,7 @@ def revise_from_scan(
         )
     else:
         parts.append(
-            "Produce a complete layout-faithful draft for the whole page "
-            "(line-by-line classes only; no inline CSS). "
-            "Output ONLY the HTML fragment — no English commentary, no step lists."
+            "Transcribe the whole page. Output ONLY the HTML fragment."
         )
     user_text = "\n\n".join(parts)
     # Keep ॑/॒ only when the editor directive explicitly names them.
@@ -542,7 +482,7 @@ def revise_from_scans(
             page_no=int(p["page_no"]),
             current_html=p.get("current_html"),
             directive=p.get("directive")
-            or "Сделай полный HTML-черновик всей страницы по скану, сохранив стиль и компоновку книги.",
+            or "Сделай полный черновик страницы по скану: одна печатная строка — один <p class=\"sa\">. Лигатуру не схлопывай: त्त остаётся त्त.",
             available_figures=p.get("available_figures"),
         )
         return {int(p["page_no"]): html}, model, usage
