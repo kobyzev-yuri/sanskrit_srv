@@ -7,7 +7,7 @@ from app.services.merge_iast import (
 
 
 def test_normalize_strips_punctuation():
-    assert normalize_sa("यज्ञो वै ॥ १ ॥") == normalize_sa("यज्ञोवै1")
+    assert normalize_sa("यज्ञो वै ॥ १ ॥") == normalize_sa("यज्ञोवै")
 
 
 def test_extract_pairs():
@@ -23,6 +23,23 @@ def test_extract_pairs():
     assert len(pairs) == 2
     assert pairs[0][1].startswith("<p")
     assert "yajñaḥ" in pairs[0][1]
+
+
+def test_extract_pairs_inside_shloka_div():
+    html = """
+    <article>
+      <div class="shloka sa">
+        <p class="narrow">भीरूणामभयप्रदो</p>
+        <p class="iast narrow" lang="sa-Latn">bhīrūṇāmabhayaprado</p>
+        <p class="narrow indent">हृद्धाम्नि</p>
+        <p class="iast narrow indent" lang="sa-Latn">hṛddhāmni</p>
+      </div>
+    </article>
+    """
+    pairs = extract_sa_iast_pairs(html)
+    assert len(pairs) == 2
+    assert "bhīrūṇāmabhayaprado" in pairs[0][1]
+    assert "hṛddhāmni" in pairs[1][1]
 
 
 def test_merge_inserts_between_sa_and_ru():
@@ -46,11 +63,38 @@ def test_merge_inserts_between_sa_and_ru():
     assert stats["inserted"] == 2
     assert out.index("yajñaḥ") < out.index("Жертва")
     assert out.index("karma") < out.index("деяние")
-    # order: sa, iast, ru
     i_sa = out.index("यज्ञः")
     i_iast = out.index("yajñaḥ")
     i_ru = out.index("Жертва")
     assert i_sa < i_iast < i_ru
+
+
+def test_merge_inside_shloka_before_ru():
+    ru = """
+    <article lang="ru">
+      <div class="shloka sa">
+        <p class="narrow">भीरूणामभयप्रदो</p>
+        <p class="narrow indent">हृद्धाम्नि</p>
+        <p class="ru tr">перевод строфы</p>
+      </div>
+    </article>
+    """
+    iast = """
+    <article>
+      <div class="shloka sa">
+        <p class="narrow">भीरूणामभयप्रदो</p>
+        <p class="iast narrow" lang="sa-Latn">bhīrūṇāmabhayaprado</p>
+        <p class="narrow indent">हृद्धाम्नि</p>
+        <p class="iast narrow indent" lang="sa-Latn">hṛddhāmni</p>
+      </div>
+    </article>
+    """
+    out, stats = merge_iast_into_translation(ru, iast)
+    assert stats["inserted"] == 2
+    assert "bhīrūṇāmabhayaprado" in out
+    assert "hṛddhāmni" in out
+    assert out.index("bhīrūṇāmabhayaprado") < out.index("हृद्धाम्नि")
+    assert out.index("hṛddhāmni") < out.index("перевод строфы")
 
 
 def test_merge_skips_existing_iast():

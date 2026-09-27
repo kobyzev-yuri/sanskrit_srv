@@ -1,19 +1,23 @@
 """Insert IAST lines from a transliteration project into a Russian translation draft.
 
-Target layout per block: Devanagari (sa) → IAST → Russian (ru).
+Target layout per line: Devanagari → IAST → Russian.
+Works inside nested <div class="shloka"> / <footer> (leaf <p>/<h*>), not only
+top-level article children.
 """
 from __future__ import annotations
 
 import re
 import unicodedata
 from difflib import SequenceMatcher
-from html.parser import HTMLParser
 
 
-_BLOCK_TAGS = frozenset({"p", "h1", "h2", "h3", "h4", "li", "div", "figure", "footer", "blockquote"})
-_VOID = frozenset({"img", "br", "hr", "meta", "link", "input", "source", "wbr"})
 _WS = re.compile(r"\s+")
 _PUNCT = re.compile(r"[\s\|।॥\d०-९0-9\.\,\;\:\!\?\-\—\–\'\"“”‘’\(\)\[\]\{\}]+")
+# Leaf text blocks — Sanskrit/IAST/RU lines are almost always these tags.
+_LEAF_RE = re.compile(
+    r"<(p|h[1-6]|li)\b([^>]*)>(.*?)</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def normalize_sa(text: str) -> str:
@@ -22,195 +26,70 @@ def normalize_sa(text: str) -> str:
     return t
 
 
-def _cls(attrs: list[tuple[str, str | None]]) -> list[str]:
-    for k, v in attrs:
-        if k.lower() == "class" and v:
-            return v.lower().split()
-    return []
-
-
-def _attr_str(attrs: list[tuple[str, str | None]]) -> str:
-    parts: list[str] = []
-    for k, v in attrs:
-        if v is None:
-            parts.append(k)
-        else:
-            parts.append(f'{k}="{v}"')
-    return (" " + " ".join(parts)) if parts else ""
-
-
-class _TopBlocks(HTMLParser):
-    """Split HTML into top-level block element serializations (inside article or whole frag)."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=False)
-        self.blocks: list[str] = []
-        self.prefix: list[str] = []
-        self.suffix: list[str] = []
-        self._depth = 0
-        self._buf: list[str] = []
-        self._in_article = False
-        self._after_article = False
-        self._saw_article = False
-
-    def _collecting_blocks(self) -> bool:
-        if self._after_article:
-            return False
-        # With <article>: only inside it. Without: whole document is blocks.
-        return self._in_article or not self._saw_article
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        tag_l = tag.lower()
-        raw = f"<{tag}{_attr_str(attrs)}>"
-        if tag_l == "article" and self._depth == 0 and not self._in_article:
-            self._saw_article = True
-            self._in_article = True
-            self.prefix.append(raw)
-            return
-        if tag_l in _VOID:
-            if self._depth == 0:
-                if self._collecting_blocks():
-                    self.blocks.append(raw)
-                elif not self._in_article:
-                    self.prefix.append(raw)
-                else:
-                    self.suffix.append(raw)
-            else:
-                self._buf.append(raw)
-            return
-        if tag_l in _BLOCK_TAGS and self._depth == 0 and self._collecting_blocks():
-            self._depth = 1
-            self._buf = [raw]
-            return
-        if self._depth:
-            self._depth += 1
-            self._buf.append(raw)
-            return
-        if not self._in_article and not self._saw_article:
-            self.prefix.append(raw)
-        elif self._after_article:
-            self.suffix.append(raw)
-
-    def handle_endtag(self, tag: str) -> None:
-        tag_l = tag.lower()
-        raw = f"</{tag}>"
-        if tag_l == "article" and self._in_article and self._depth == 0 and not self._after_article:
-            self.suffix.insert(0, raw)
-            self._after_article = True
-            return
-        if self._depth:
-            self._buf.append(raw)
-            self._depth -= 1
-            if self._depth == 0:
-                self.blocks.append("".join(self._buf))
-                self._buf = []
-            return
-        if not self._in_article:
-            self.prefix.append(raw)
-        else:
-            self.suffix.append(raw)
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
-
-    def handle_data(self, data: str) -> None:
-        if self._depth:
-            self._buf.append(data)
-        elif not self._in_article:
-            self.prefix.append(data)
-        elif self._after_article:
-            self.suffix.append(data)
-        elif data.strip():
-            # Loose text inside article — keep as block-ish chunk
-            self.blocks.append(data)
-
-    def handle_entityref(self, name: str) -> None:
-        self.handle_data(f"&{name};")
-
-    def handle_charref(self, name: str) -> None:
-        self.handle_data(f"&#{name};")
-
-
-def split_article_blocks(html: str) -> tuple[str, list[str], str]:
-    """Return (prefix_including_article_open, blocks, suffix_including_article_close)."""
-    p = _TopBlocks()
-    p.feed(html or "")
-    p.close()
-    if p._in_article or p.blocks:
-        return "".join(p.prefix), p.blocks, "".join(p.suffix)
-    # No article wrapper — treat whole as blocks
-    return "", p.blocks or ([html] if (html or "").strip() else []), ""
-
-
-class _TextOf(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self.parts.append(data)
-
-
 def visible_text(html: str) -> str:
-    p = _TextOf()
-    p.feed(html or "")
-    p.close()
-    return _WS.sub(" ", "".join(p.parts)).strip()
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    text = re.sub(r"&nbsp;", " ", text, flags=re.I)
+    text = re.sub(r"&[a-z]+;", " ", text, flags=re.I)
+    text = re.sub(r"&#\d+;", " ", text)
+    return _WS.sub(" ", text).strip()
 
 
-def block_classes(html: str) -> set[str]:
-    m = re.search(r"<([a-zA-Z0-9]+)([^>]*)>", html or "")
+def _classes_from_attrs(attrs: str) -> set[str]:
+    m = re.search(r'\bclass=["\']([^"\']+)["\']', attrs or "", re.I)
     if not m:
         return set()
-    attrs = m.group(2)
-    cm = re.search(r'\bclass=["\']([^"\']+)["\']', attrs, re.I)
-    if not cm:
-        return set()
-    return set(cm.group(1).lower().split())
+    return set(m.group(1).lower().split())
 
 
-def is_iast_block(html: str) -> bool:
-    return "iast" in block_classes(html)
+def leaf_classes(match: re.Match[str]) -> set[str]:
+    return _classes_from_attrs(match.group(2))
 
 
-def is_sa_block(html: str) -> bool:
-    cls = block_classes(html)
-    if "iast" in cls and "sa" not in cls:
+def is_iast_leaf(match: re.Match[str]) -> bool:
+    return "iast" in leaf_classes(match)
+
+
+def is_ru_leaf(match: re.Match[str]) -> bool:
+    cls = leaf_classes(match)
+    return "ru" in cls and "iast" not in cls
+
+
+def is_sa_leaf(match: re.Match[str]) -> bool:
+    cls = leaf_classes(match)
+    if "iast" in cls:
         return False
     if "ru" in cls and "sa" not in cls:
         return False
     if "sa" in cls or "shloka" in cls:
         return True
-    # Devanagari-heavy block without ru/iast class
-    text = visible_text(html)
+    text = visible_text(match.group(0))
     if not text:
         return False
     deva = sum(1 for ch in text if "\u0900" <= ch <= "\u097F")
-    return deva >= max(4, len(text) // 4) and "ru" not in cls and "iast" not in cls
+    return deva >= max(3, len(text) // 5)
+
+
+def iter_leaves(html: str) -> list[re.Match[str]]:
+    return list(_LEAF_RE.finditer(html or ""))
 
 
 def extract_sa_iast_pairs(iast_html: str) -> list[tuple[str, str]]:
-    """Ordered (normalized_sa, iast_element_html) from an iast_block page."""
-    _, blocks, _ = split_article_blocks(iast_html)
+    """Ordered (normalized_sa, iast_element_html) from leaf sa→iast siblings."""
+    leaves = iter_leaves(iast_html)
     pairs: list[tuple[str, str]] = []
     i = 0
-    while i < len(blocks):
-        b = blocks[i]
-        nxt = blocks[i + 1] if i + 1 < len(blocks) else None
-        if is_sa_block(b) and nxt and is_iast_block(nxt):
-            pairs.append((normalize_sa(visible_text(b)), nxt.strip()))
+    while i < len(leaves):
+        cur = leaves[i]
+        nxt = leaves[i + 1] if i + 1 < len(leaves) else None
+        if is_sa_leaf(cur) and nxt is not None and is_iast_leaf(nxt):
+            pairs.append((normalize_sa(visible_text(cur.group(0))), nxt.group(0).strip()))
             i += 2
             continue
-        if is_iast_block(b) and not is_sa_block(b):
-            # orphan iast — keep with empty sa key so sequential fill can still use it
-            pairs.append(("", b.strip()))
         i += 1
     return pairs
 
 
 def _score(sa_norm: str, key: str) -> float:
-    if not sa_norm and not key:
-        return 0.0
     if not sa_norm or not key:
         return 0.0
     if sa_norm == key:
@@ -229,18 +108,15 @@ def pick_iast(
     *,
     cursor: int,
 ) -> tuple[str | None, int]:
-    """Return (iast_html, new_cursor). Prefer near-cursor then best unused match."""
     best_i = -1
     best_s = 0.0
-    # Prefer sequential: look at cursor .. cursor+6 first
-    window = list(range(cursor, min(len(pairs), cursor + 8)))
+    window = list(range(cursor, min(len(pairs), cursor + 10)))
     window += [i for i in range(len(pairs)) if i not in window]
     for i in window:
         if i in used:
             continue
         key, html = pairs[i]
-        sc = _score(sa_norm, key) if key else (0.55 if not sa_norm else 0.0)
-        # sequential bonus
+        sc = _score(sa_norm, key)
         if i == cursor:
             sc += 0.08
         elif abs(i - cursor) <= 2:
@@ -248,60 +124,88 @@ def pick_iast(
         if sc > best_s:
             best_s = sc
             best_i = i
-    if best_i < 0 or best_s < 0.62:
+    if best_i < 0 or best_s < 0.58:
         return None, cursor
     used.add(best_i)
     return pairs[best_i][1], best_i + 1
 
 
 def merge_iast_into_translation(ru_html: str, iast_html: str) -> tuple[str, dict[str, int]]:
-    """Insert IAST blocks after each Sanskrit block in the Russian draft.
-
-    Skips sa blocks that already have an IAST sibling. Returns (html, stats).
-    """
+    """Insert missing IAST leaves after each Sanskrit leaf in the Russian draft."""
     pairs = extract_sa_iast_pairs(iast_html)
-    prefix, blocks, suffix = split_article_blocks(ru_html)
-    if not blocks and not pairs:
-        return ru_html or "", {"inserted": 0, "skipped_existing": 0, "unmatched_sa": 0, "pairs": 0}
+    src = ru_html or ""
+    leaves = iter_leaves(src)
+    if not leaves:
+        return src, {
+            "inserted": 0,
+            "skipped_existing": 0,
+            "unmatched_sa": 0,
+            "pairs": len(pairs),
+            "used_pairs": 0,
+        }
 
     used: set[int] = set()
     cursor = 0
-    out: list[str] = []
     inserted = 0
     skipped = 0
     unmatched = 0
+    # (insert_at_offset, html) — apply from the end so offsets stay valid
+    insertions: list[tuple[int, str]] = []
 
-    i = 0
-    while i < len(blocks):
-        b = blocks[i]
-        out.append(b)
-        nxt = blocks[i + 1] if i + 1 < len(blocks) else None
-        if is_sa_block(b):
-            if nxt and is_iast_block(nxt):
-                skipped += 1
-                i += 1
-                continue
-            sa_norm = normalize_sa(visible_text(b))
-            iast_el, cursor = pick_iast(sa_norm, pairs, used, cursor=cursor)
-            if iast_el:
-                out.append(iast_el)
-                inserted += 1
-            else:
-                unmatched += 1
-        i += 1
+    for idx, leaf in enumerate(leaves):
+        if not is_sa_leaf(leaf):
+            continue
+        nxt = leaves[idx + 1] if idx + 1 < len(leaves) else None
+        if nxt is not None and is_iast_leaf(nxt):
+            skipped += 1
+            continue
+        sa_norm = normalize_sa(visible_text(leaf.group(0)))
+        iast_el, cursor = pick_iast(sa_norm, pairs, used, cursor=cursor)
+        if iast_el:
+            insertions.append((leaf.end(), "\n" + iast_el))
+            inserted += 1
+        else:
+            unmatched += 1
 
-    if not prefix and "<article" not in (ru_html or "").lower():
-        body = "\n".join(out)
-        html = f'<article class="page-style" lang="ru">\n{body}\n</article>\n'
-    else:
-        html = prefix + "\n".join(out) + suffix
-        if prefix and not html.endswith("\n"):
-            html += "\n"
+    if not insertions:
+        return src, {
+            "inserted": inserted,
+            "skipped_existing": skipped,
+            "unmatched_sa": unmatched,
+            "pairs": len(pairs),
+            "used_pairs": len(used),
+        }
 
-    return html, {
+    parts: list[str] = []
+    pos = len(src)
+    for offset, chunk in sorted(insertions, key=lambda x: x[0], reverse=True):
+        parts.append(src[offset:pos])
+        parts.append(chunk)
+        pos = offset
+    parts.append(src[:pos])
+    parts.reverse()
+    return "".join(parts), {
         "inserted": inserted,
         "skipped_existing": skipped,
         "unmatched_sa": unmatched,
         "pairs": len(pairs),
         "used_pairs": len(used),
     }
+
+
+# --- backwards-compatible helpers used by older tests ---
+
+def split_article_blocks(html: str) -> tuple[str, list[str], str]:
+    """Legacy helper: return leaf outer-HTML list (prefix/suffix empty)."""
+    leaves = [m.group(0) for m in iter_leaves(html)]
+    return "", leaves, ""
+
+
+def is_iast_block(html: str) -> bool:
+    m = _LEAF_RE.search(html or "")
+    return bool(m and is_iast_leaf(m))
+
+
+def is_sa_block(html: str) -> bool:
+    m = _LEAF_RE.search(html or "")
+    return bool(m and is_sa_leaf(m))
