@@ -50,12 +50,14 @@ from app.services.llm_translate import (
 )
 from app.services.llm_usage import record_usage
 from app.services.openrouter_ox import is_missing_gateway_model_error
+from app.config import get_settings
 from app.services.pdf_extract import (
     classify_pdf,
     extract_page_text_html,
     extract_pages,
     pdf_page_count,
 )
+from app.services.tesseract_ocr import ocr_page_html, tesseract_available
 from app.services.translation_style import (
     ENGLISH_KEEP,
     lock_translation_template,
@@ -290,6 +292,27 @@ def page_needs_llm_draft(db: Session, page: Page, force: bool = False) -> bool:
     if has_llm and page.current_html and len(page.current_html.strip()) > 40:
         return False
     return True
+
+
+def page_needs_ocr_draft(db: Session, page: Page, force: bool = False) -> bool:
+    """True if the page still needs a local Tesseract digitize draft."""
+    if force:
+        return True
+    if page.status in (PageStatus.expert_done, PageStatus.scholar_review, PageStatus.published):
+        return False
+    if page.current_html and len(page.current_html.strip()) > 40:
+        return False
+    has_ocr = db.scalar(
+        select(func.count())
+        .select_from(PageVersion)
+        .where(PageVersion.page_id == page.id, PageVersion.source == VersionSource.ocr)
+    )
+    return not bool(has_ocr)
+
+
+def digitize_engine() -> str:
+    engine = (get_settings().digitize_engine or "tesseract").strip().lower()
+    return engine if engine in {"tesseract", "llm"} else "tesseract"
 
 
 def page_needs_text_extract(db: Session, page: Page, force: bool = False) -> bool:
@@ -789,6 +812,42 @@ def process_one_page(
         actions.append("native_text")
         return ",".join(actions)
 
+    engine = digitize_engine()
+    use_tesseract = (not force_llm) and engine == "tesseract"
+
+    if use_tesseract:
+        if not page_needs_ocr_draft(db, page, force=force):
+            if page.status == PageStatus.pending:
+                page.status = PageStatus.expert_done if page.current_html else PageStatus.pending
+                db.commit()
+            return "skip_ocr:" + ",".join(actions or ["ok"])
+        if not tesseract_available():
+            raise RuntimeError(
+                "digitize_engine=tesseract but tesseract/ksts.traineddata unavailable on server"
+            )
+        page.status = PageStatus.ocr
+        db.commit()
+        lang = get_settings().tesseract_lang or "ksts"
+        html = ocr_page_html(Path(page.scan_path), page.page_no, lang=lang)
+        html = finalize_page_html(
+            html,
+            scan_path=Path(page.scan_path),
+            project_id=project.id,
+            page_no=page.page_no,
+            page_id=page.id,
+        )
+        page.ocr_text = html
+        _save_version(
+            db,
+            page,
+            html,
+            VersionSource.ocr,
+            f"tesseract:{lang} (accepted by default)",
+            status=PageStatus.expert_review,
+        )
+        actions.append(f"tesseract:{lang}")
+        return ",".join(actions)
+
     if not page_needs_llm_draft(db, page, force=force or force_llm):
         if page.status == PageStatus.pending:
             page.status = PageStatus.expert_done if page.current_html else PageStatus.pending
@@ -909,6 +968,11 @@ def process_digitize_run(
         raise RuntimeError("project missing")
     kind = project_source_kind(project)
     if kind == "text" and not force_llm:
+        return ",".join(
+            digitize_one_by_one(db, pages, force=force, force_llm=False, job_id=job_id)
+        )
+    # Local Tesseract has no multi-page batch API — always one-by-one.
+    if (not force_llm) and digitize_engine() == "tesseract":
         return ",".join(
             digitize_one_by_one(db, pages, force=force, force_llm=False, job_id=job_id)
         )

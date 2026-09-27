@@ -41,7 +41,18 @@ app.include_router(voices.router, prefix="/api/v1")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "sanskrit_srv", "version": "0.2.0"}
+    from app.config import get_settings
+    from app.services.tesseract_ocr import tesseract_available
+
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "service": "sanskrit_srv",
+        "version": "0.2.0",
+        "digitize_engine": (settings.digitize_engine or "tesseract").strip().lower(),
+        "tesseract": tesseract_available(),
+        "tesseract_lang": settings.tesseract_lang or "ksts",
+    }
 
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"

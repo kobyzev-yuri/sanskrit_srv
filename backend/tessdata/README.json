@@ -1,0 +1,19 @@
+{
+  "model": "data/ocr_models/tesseract/ksts.traineddata",
+  "pipeline": [
+    "rasterize _КШЕМАРАДЖА_/_БХАСКАРА_ PDF → images/{kshemaraja,bhaskara}",
+    "self-train high-conf ksts lines (3695)",
+    "merge with gold vijnana (1473), test stays gold-only",
+    "boost prepare: quote-norm + soft/gray/bin mix + aug + hard oversample → 23630 train",
+    "dawg from vijnana HTML + selftrain (19296 words)",
+    "continue-from previous full-alphabet ksts, 10000 iters, LR 5e-5"
+  ],
+  "train_BCER": 0.03791,
+  "test_original_color_261": {
+    "hin+san": 0.8711,
+    "ksts_prior_full": 0.9407,
+    "ksts_boost": 0.9517,
+    "word_boost": 0.7569,
+    "verse": "अपानेऽस्तं गते प्राणे किञ्चिद्भ्युद्योन्मुखे ।"
+  }
+}

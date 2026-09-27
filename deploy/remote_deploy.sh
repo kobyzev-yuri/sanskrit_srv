@@ -11,6 +11,16 @@ source .venv/bin/activate
 pip install -q --upgrade pip
 pip install -q -r backend/requirements.txt
 
+# Local digitize OCR (KSTS model in backend/tessdata/ksts.traineddata).
+if ! command -v tesseract >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y --no-install-recommends tesseract-ocr
+fi
+if [[ ! -f backend/tessdata/ksts.traineddata ]]; then
+  echo "WARN: backend/tessdata/ksts.traineddata missing — digitize_engine=tesseract will fail" >&2
+fi
+
 # PDF export is HTML → docx → LibreOffice. The API cgroup is 400MB, so
 # soffice is started later as its own unit. Noto Serif Devanagari is the face
 # the docx names for complex script.

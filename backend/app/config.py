@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     digitize_batch_pages: int = 6
     # Consecutive translation pages per text call. Ceiling only — Flash 3, Pro 6, Opus 4.
     translate_batch_pages: int = 6
+    # Digitize engine for scan PDFs: tesseract (local ksts) or llm (vision).
+    # force_llm on a pipeline job still uses the vision model.
+    digitize_engine: str = "tesseract"
+    tesseract_cmd: str = "tesseract"
+    tesseract_lang: str = "ksts"
+    # Empty → backend/tessdata (ships ksts.traineddata).
+    tessdata_dir: str = ""
     # USD per 1M tokens: {"gemini:gemini-2.5-flash":{"in":0.1,"out":0.4}, ...}
     # JSON string in env LLM_PRICE_PER_1M; empty = no cost estimate.
     llm_price_per_1m: str = ""
