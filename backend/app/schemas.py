@@ -273,7 +273,7 @@ class PageReviseIn(BaseModel):
 
 
 class PageReviewAgainIn(BaseModel):
-    """Optional note; empty → default «пересмотри страницу»."""
+    """Optional note; empty → local digitize engine (ksts); non-empty → vision LLM."""
     directive: str | None = Field(default=None, max_length=NOTES_MAX)
 
 

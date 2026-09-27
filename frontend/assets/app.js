@@ -15,6 +15,8 @@ const state = {
   workFocus: "",
   workFocusPinned: false,
   voices: null,
+  /** @type {{engine:string, lang:string, ready:boolean}|null} */
+  digitize: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -127,6 +129,29 @@ function logout(notify = true) {
   if (notify) toast("Выход");
 }
 
+async function loadDigitizeInfo() {
+  try {
+    const h = await fetch("/health").then((r) => (r.ok ? r.json() : null));
+    if (!h) return;
+    state.digitize = {
+      engine: String(h.digitize_engine || "tesseract").toLowerCase(),
+      lang: String(h.tesseract_lang || "ksts"),
+      ready: !!h.tesseract,
+    };
+  } catch {
+    /* keep previous / null */
+  }
+}
+
+function digitizeScanLabel() {
+  const d = state.digitize;
+  if (d && d.engine === "tesseract" && d.ready !== false) {
+    return `скан → ${d.lang || "ksts"}`;
+  }
+  if (d && d.engine === "llm") return "скан → LLM";
+  return "скан → ksts";
+}
+
 async function bootstrap() {
   if (!state.token) {
     showView("login");
@@ -135,7 +160,7 @@ async function bootstrap() {
   try {
     state.user = await api("/auth/me");
     afterLogin();
-    await loadProjects();
+    await Promise.all([loadProjects(), loadDigitizeInfo()]);
     showView("projects");
   } catch {
     logout(false);
@@ -163,7 +188,7 @@ async function login(ev) {
     // refresh full profile
     state.user = await api("/auth/me");
     afterLogin();
-    await loadProjects();
+    await Promise.all([loadProjects(), loadDigitizeInfo()]);
     showView("projects");
     toast("Вход выполнен");
   } catch (e) {
@@ -273,7 +298,7 @@ async function createProject(ev) {
       const kind =
         project.source_kind === "text"
           ? "текстовый PDF"
-          : "скан (LLM на каждую страницу)";
+          : digitizeScanLabel();
       $("#large-book-text").textContent =
         `«${project.title}» — ${project.page_count} страниц (>100). Тип: ${kind}.`;
       $("#large-book-modal").hidden = false;
@@ -282,7 +307,7 @@ async function createProject(ev) {
     const mode =
       project.source_kind === "text"
         ? "текстовый PDF"
-        : "скан — LLM по всей книге";
+        : `${digitizeScanLabel()} по всей книге`;
     toast(`Вся книга в очереди (${project.page_count} стр.): ${mode}`);
     await openProject(project.id);
   } catch (e) {
@@ -323,7 +348,7 @@ function cancelWholeBook() {
 
 function sourceKindLabel(p) {
   if (p.source_kind === "text") return "текстовый PDF";
-  return "скан → LLM";
+  return digitizeScanLabel();
 }
 
 function projectHasHtml() {
@@ -617,8 +642,8 @@ function syncTaskUi() {
       : iast
         ? "Замечание к IAST — или нажмите «Транслитерировать страницу»."
         : hasHtml
-          ? "С чем не согласны — или нажмите «Пересмотри страницу»."
-          : "Задание к странице — или нажмите «Оцифровать страницу».";
+          ? "Замечание → vision LLM. Без текста кнопка «Пересмотри» снова гоняет ksts."
+          : "Оставьте пустым и нажмите «Оцифровать страницу» (ksts). Замечание → vision LLM.";
   }
   const proof = $("#btn-proofread");
   if (proof) {
@@ -632,7 +657,11 @@ function syncTaskUi() {
   if (review) {
     review.hidden = derived;
     const hasHtml = Boolean((state.page?.current_html || "").trim());
+    const eng = digitizeScanLabel();
     review.textContent = hasHtml ? "Пересмотри страницу" : "Оцифровать страницу";
+    review.title = hasHtml
+      ? `Повторная оцифровка (${eng}). Чтобы вызвать vision LLM — напишите замечание и «Отправить задание».`
+      : `Оцифровка страницы: ${eng}`;
   }
   const trPage = $("#btn-translate-page");
   if (trPage) {
@@ -771,10 +800,10 @@ function updatePipelineBar() {
     btn.title = safeTitle;
   } else if (isDigitizeTextPdf()) {
     btn.textContent = "Оцифровать несогласованные по скану";
-    btn.title = safeTitle;
+    btn.title = `${safeTitle} Движок: vision LLM.`;
   } else {
     btn.textContent = "Оцифровать несогласованные";
-    btn.title = safeTitle;
+    btn.title = `${safeTitle} Движок: ${digitizeScanLabel()}.`;
   }
   syncTaskUi();
 }
@@ -1179,7 +1208,11 @@ function updateEditMode() {
   }
   const reviewBtn = $("#btn-review-again");
   if (reviewBtn && !isDerived()) {
+    const eng = digitizeScanLabel();
     reviewBtn.textContent = hasHtml ? "Пересмотри страницу" : "Оцифровать страницу";
+    reviewBtn.title = hasHtml
+      ? `Повторная оцифровка (${eng}). Чтобы вызвать vision LLM — напишите замечание и «Отправить задание».`
+      : `Оцифровка страницы: ${eng}`;
   }
   syncWyTools(accepted);
 }
@@ -2172,7 +2205,7 @@ async function runRevision(directive) {
     ? "LLM переводит страницу… до 1–2 мин"
     : isTransliterate()
       ? "LLM делает IAST… до 1–2 мин"
-      : "LLM смотрит скан… до 1–2 мин";
+      : "Vision LLM правит по замечанию… до 1–2 мин";
   try {
     state.page = await api(`/pages/${state.page.id}/revise`, {
       method: "POST",
@@ -2221,7 +2254,8 @@ async function reviewAgain() {
   const st = $("#revise-status");
   $("#btn-revise").disabled = true;
   $("#btn-review-again").disabled = true;
-  st.textContent = hadHtml ? "Пересмотр страницы…" : "Оцифровка страницы…";
+  const eng = digitizeScanLabel();
+  st.textContent = hadHtml ? `Повторная оцифровка (${eng})…` : `Оцифровка (${eng})…`;
   try {
     state.page = await api(`/pages/${state.page.id}/review-again`, {
       method: "POST",
@@ -2998,7 +3032,7 @@ async function startPipeline() {
   } else if (isDigitizeTextPdf()) {
     msg = `Оцифровать ${n} несогласованных страниц по скану (LLM)? Согласованные не изменятся.`;
   } else {
-    msg = `Оцифровать ${n} несогласованных страниц? Согласованные не изменятся.`;
+    msg = `Оцифровать ${n} несогласованных страниц (${digitizeScanLabel()})? Согласованные не изменятся.`;
   }
   if (!confirm(msg)) return;
   if ((tr || iast) && !(await ensureTranslationAgreed())) return;

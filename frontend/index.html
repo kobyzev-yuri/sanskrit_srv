@@ -49,7 +49,7 @@
             <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" placeholder="my-book" /></label>
             <label>Название <input name="title" required placeholder="Название книги" /></label>
             <label>Название (sa) <input name="title_sa" class="sa" placeholder="देवनागरी" /></label>
-            <p class="muted">Автооцифровка скана — только если в PDF <strong>не больше 10 страниц</strong>. Большую книгу загружаем страницами-заглушками: оцифровывайте по одной, затем при необходимости «Перевод на русский».</p>
+            <p class="muted">Скан оцифровывается локальной моделью <strong>ksts</strong> (Tesseract). Автозапуск всей книги — только если в PDF <strong>не больше 10 страниц</strong>. Большую книгу загружаем страницами-заглушками: «Оцифровать страницу» / «Оцифровать несогласованные», затем при необходимости «Перевод на русский». Vision LLM — только если в задании к странице есть замечание.</p>
             <label>PDF <input name="file" type="file" accept="application/pdf" required /></label>
             <button class="primary" id="btn-upload" type="submit">Загрузить PDF</button>
             <p id="upload-status" class="muted" hidden></p>
@@ -60,7 +60,7 @@
           <div class="modal-card">
             <h2>Большая книга</h2>
             <p id="large-book-text" class="muted"></p>
-            <p>Оцифровать <strong>все страницы</strong>? Для скана это LLM по каждой странице (время и расход токенов бэкофиса).</p>
+            <p>Оцифровать <strong>все страницы</strong>? Для скана это локальная модель <strong>ksts</strong> (без токенов LLM). Vision LLM — только для текстового PDF «по скану» или если в задании к странице есть замечание.</p>
             <div class="edit-actions" style="border:0;padding:0;background:transparent">
               <button type="button" class="primary" id="btn-confirm-whole-book">Да, оцифровать всю книгу</button>
               <button type="button" id="btn-cancel-whole-book">Пока не оцифровывать</button>

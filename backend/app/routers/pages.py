@@ -383,10 +383,11 @@ def _save_page_html(
 @router.post("/pages/{page_id}/draft", response_model=PageDetailOut)
 def draft_one_page(
     page_id: str,
+    force: bool = False,
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Digitize a single page (extract scan + LLM/text). For books uploaded without whole-book pipeline."""
+    """Digitize a single page (text PDF / local ksts / LLM per DIGITIZE_ENGINE)."""
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
@@ -400,7 +401,7 @@ def draft_one_page(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
     try:
         with llm_user_context(user):
-            process_one_page(db, page, force=False, force_llm=False)
+            process_one_page(db, page, force=force, force_llm=False)
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
@@ -852,12 +853,31 @@ def review_again(
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Shortcut: «пересмотри страницу» (optional custom directive)."""
+    """Empty note → configured digitize engine (ksts). Custom note → vision LLM revise."""
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
-    directive = body.directive or DEFAULT_REVIEW_DIRECTIVE
-    page = _apply_llm_revision(db, page, user, directive)
+    note = (body.directive or "").strip()
+    if note:
+        page = _apply_llm_revision(db, page, user, note)
+        return get_page(str(page.id), user, db)
+
+    project = db.get(Project, page.project_id)
+    if project is not None and is_source_html_task(project):
+        # Translate/IAST: keep previous «пересмотри» behaviour.
+        page = _apply_llm_revision(db, page, user, DEFAULT_REVIEW_DIRECTIVE)
+        return get_page(str(page.id), user, db)
+
+    if page.status == PageStatus.expert_done:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
+    try:
+        with llm_user_context(user):
+            process_one_page(db, page, force=True, force_llm=False)
+    except (LlmQuotaError, LlmRateLimitError) as exc:
+        _raise_llm_http(exc)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Digitize failed: {exc}") from exc
+    db.refresh(page)
     return get_page(str(page.id), user, db)
 
 
