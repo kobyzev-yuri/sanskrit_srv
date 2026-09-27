@@ -74,9 +74,9 @@ class Settings(BaseSettings):
     digitize_batch_pages: int = 6
     # Consecutive translation pages per text call. Ceiling only — Flash 3, Pro 6, Opus 4.
     translate_batch_pages: int = 6
-    # Digitize engine for scan PDFs: tesseract (local ksts) or llm (vision).
-    # force_llm on a pipeline job still uses the vision model.
-    digitize_engine: str = "tesseract"
+    # Digitize engine for scan PDFs: llm (vision, default) or tesseract (local ksts).
+    # Per-request engine= / force_llm overrides this. UI can pick ksts optionally.
+    digitize_engine: str = "llm"
     tesseract_cmd: str = "tesseract"
     tesseract_lang: str = "ksts"
     # Page segmentation: 6 = uniform block (keeps body+footnotes on KSTS).

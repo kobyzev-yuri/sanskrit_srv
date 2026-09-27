@@ -49,7 +49,7 @@
             <label>Slug <input name="slug" required pattern="^[a-z0-9][a-z0-9\-]*$" placeholder="my-book" /></label>
             <label>Название <input name="title" required placeholder="Название книги" /></label>
             <label>Название (sa) <input name="title_sa" class="sa" placeholder="देवनागरी" /></label>
-            <p class="muted">Скан оцифровывается локальной моделью <strong>ksts</strong> (Tesseract). Автозапуск всей книги — только если в PDF <strong>не больше 10 страниц</strong>. Большую книгу загружаем страницами-заглушками: «Оцифровать страницу» / «Оцифровать несогласованные», затем при необходимости «Перевод на русский». Vision LLM — только если в задании к странице есть замечание.</p>
+            <p class="muted">По умолчанию скан оцифровывает <strong>vision LLM</strong>. Локальная модель <strong>ksts</strong> включается опционально в редакторе (селектор «движок»). Автозапуск всей книги — только если в PDF <strong>не больше 10 страниц</strong>; большую книгу грузим страницами-заглушками.</p>
             <label>PDF <input name="file" type="file" accept="application/pdf" required /></label>
             <button class="primary" id="btn-upload" type="submit">Загрузить PDF</button>
             <p id="upload-status" class="muted" hidden></p>
@@ -60,7 +60,7 @@
           <div class="modal-card">
             <h2>Большая книга</h2>
             <p id="large-book-text" class="muted"></p>
-            <p>Оцифровать <strong>все страницы</strong>? Для скана это локальная модель <strong>ksts</strong> (без токенов LLM). Vision LLM — только для текстового PDF «по скану» или если в задании к странице есть замечание.</p>
+            <p>Оцифровать <strong>все страницы</strong>? Используется выбранный в редакторе движок (LLM или ksts). Текстовый PDF «по скану» всегда идёт в vision LLM.</p>
             <div class="edit-actions" style="border:0;padding:0;background:transparent">
               <button type="button" class="primary" id="btn-confirm-whole-book">Да, оцифровать всю книгу</button>
               <button type="button" id="btn-cancel-whole-book">Пока не оцифровывать</button>
@@ -121,6 +121,13 @@
 
             <div class="toolbar extract-bar" id="pipeline-bar">
               <span id="pipeline-info" class="muted">Конвейер: —</span>
+              <label id="digitize-engine-wrap" class="digitize-engine" hidden title="LLM — vision Gemini; ksts — локальный Tesseract без токенов">
+                <span class="muted">движок</span>
+                <select id="digitize-engine" aria-label="Движок оцифровки">
+                  <option value="llm">LLM (vision)</option>
+                  <option value="tesseract">ksts (локально)</option>
+                </select>
+              </label>
               <button type="button" id="btn-start-pipeline" hidden title="Только страницы без согласия. Согласованные не перезаписываются.">Оцифровать несогласованные</button>
               <button type="button" class="primary" id="btn-open-translate" hidden>Перевод на русский</button>
               <button type="button" class="primary" id="btn-open-iast" hidden>Транслитерация IAST</button>

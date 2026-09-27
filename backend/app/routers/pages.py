@@ -384,10 +384,11 @@ def _save_page_html(
 def draft_one_page(
     page_id: str,
     force: bool = False,
+    engine: str | None = None,
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Digitize a single page (text PDF / local ksts / LLM per DIGITIZE_ENGINE)."""
+    """Digitize a single page (text PDF / local ksts / LLM). ``engine=llm|tesseract``."""
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
@@ -401,7 +402,7 @@ def draft_one_page(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
     try:
         with llm_user_context(user):
-            process_one_page(db, page, force=force, force_llm=False)
+            process_one_page(db, page, force=force, force_llm=False, engine=engine)
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
@@ -853,7 +854,9 @@ def review_again(
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
-    """Empty note → configured digitize engine (ksts). Custom note → vision LLM revise."""
+    """Empty note → ``engine`` (llm|tesseract). Custom note → vision LLM revise."""
+    from app.services.pipeline import normalize_digitize_engine, resolve_force_llm
+
     page = db.get(Page, _uid(page_id))
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Page not found")
@@ -870,9 +873,21 @@ def review_again(
 
     if page.status == PageStatus.expert_done:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Сначала отзовите согласие")
+
+    want_llm = resolve_force_llm(force_llm=False, engine=body.engine)
+    if want_llm:
+        page = _apply_llm_revision(db, page, user, DEFAULT_REVIEW_DIRECTIVE)
+        return get_page(str(page.id), user, db)
+
     try:
         with llm_user_context(user):
-            process_one_page(db, page, force=True, force_llm=False)
+            process_one_page(
+                db,
+                page,
+                force=True,
+                force_llm=False,
+                engine=normalize_digitize_engine(body.engine or "tesseract"),
+            )
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
@@ -951,6 +966,13 @@ def proofread_page(
     except (LlmQuotaError, LlmRateLimitError) as exc:
         _raise_llm_http(exc)
     except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        # Nested "all models failed" often wraps daily Gemini RPD / 429 text.
+        if "Суточный лимит" in msg or "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=msg,
+            ) from exc
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"Proofread failed: {exc}") from exc
 
     record_usage(

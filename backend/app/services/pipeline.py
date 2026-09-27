@@ -115,8 +115,12 @@ def enqueue_project_pipeline(
     open_only: bool = False,
     translate: bool = False,
     proofread: bool = False,
+    engine: str | None = None,
     user_id: uuid.UUID | None = None,
 ) -> Job:
+    eng = None
+    if engine is not None and str(engine).strip():
+        eng = normalize_digitize_engine(engine)
     job = Job(
         kind="pipeline_project",
         project_id=project_id,
@@ -124,6 +128,7 @@ def enqueue_project_pipeline(
         payload={
             "force": force,
             "force_llm": force_llm,
+            "engine": eng,
             "open_only": open_only,
             "translate": bool(translate) and not proofread,
             "proofread": bool(proofread),
@@ -310,9 +315,26 @@ def page_needs_ocr_draft(db: Session, page: Page, force: bool = False) -> bool:
     return not bool(has_ocr)
 
 
+def normalize_digitize_engine(engine: str | None = None) -> str:
+    """Return 'llm' or 'tesseract'. Aliases: ksts/ocr → tesseract."""
+    raw = (engine if engine is not None else get_settings().digitize_engine) or "llm"
+    raw = str(raw).strip().lower()
+    if raw in {"tesseract", "ksts", "ocr"}:
+        return "tesseract"
+    return "llm"
+
+
 def digitize_engine() -> str:
-    engine = (get_settings().digitize_engine or "tesseract").strip().lower()
-    return engine if engine in {"tesseract", "llm"} else "tesseract"
+    return normalize_digitize_engine()
+
+
+def resolve_force_llm(*, force_llm: bool = False, engine: str | None = None) -> bool:
+    """Per-job engine wins; otherwise force_llm; else server default."""
+    if engine is not None and str(engine).strip():
+        return normalize_digitize_engine(engine) == "llm"
+    if force_llm:
+        return True
+    return digitize_engine() == "llm"
 
 
 def page_needs_text_extract(db: Session, page: Page, force: bool = False) -> bool:
@@ -784,9 +806,10 @@ def process_one_page(
     *,
     force: bool = False,
     force_llm: bool = False,
+    engine: str | None = None,
     job_id: uuid.UUID | None = None,
 ) -> str:
-    """Extract preview image; text-PDF → native text; scan → LLM draft."""
+    """Extract preview image; text-PDF → native text; scan → LLM or local ksts."""
     project = db.get(Project, page.project_id)
     if project is None or not project.source_pdf_path:
         raise RuntimeError("project/pdf missing")
@@ -803,8 +826,10 @@ def process_one_page(
         actions.append("extracted")
         db.commit()
 
+    want_llm = resolve_force_llm(force_llm=force_llm, engine=engine)
+
     # Born-digital / text PDF: never call LLM unless explicitly forced.
-    if kind == "text" and not force_llm:
+    if kind == "text" and not want_llm:
         if not page_needs_text_extract(db, page, force=force):
             return "skip_text:" + ",".join(actions or ["ok"])
         html = extract_page_text_html(pdf_path, page.page_no)
@@ -812,8 +837,7 @@ def process_one_page(
         actions.append("native_text")
         return ",".join(actions)
 
-    engine = digitize_engine()
-    use_tesseract = (not force_llm) and engine == "tesseract"
+    use_tesseract = not want_llm
 
     if use_tesseract:
         if not page_needs_ocr_draft(db, page, force=force):
@@ -850,7 +874,7 @@ def process_one_page(
         actions.append(f"tesseract:{lang}:psm{psm}")
         return ",".join(actions)
 
-    if not page_needs_llm_draft(db, page, force=force or force_llm):
+    if not page_needs_llm_draft(db, page, force=force or want_llm):
         if page.status == PageStatus.pending:
             page.status = PageStatus.expert_done if page.current_html else PageStatus.pending
             db.commit()
@@ -915,6 +939,7 @@ def digitize_one_by_one(
     *,
     force: bool = False,
     force_llm: bool = False,
+    engine: str | None = None,
     job_id: uuid.UUID | None = None,
     skip_nos: set[int] | None = None,
 ) -> list[str]:
@@ -934,7 +959,9 @@ def digitize_one_by_one(
         try:
             log.info("digitize page %s (one-by-one)", p.page_no)
             notes.append(
-                process_one_page(db, p, force=force, force_llm=force_llm, job_id=job_id)
+                process_one_page(
+                    db, p, force=force, force_llm=force_llm, engine=engine, job_id=job_id
+                )
             )
         except (LlmQuotaError, LlmRateLimitError):
             raise
@@ -956,27 +983,38 @@ def process_digitize_run(
     *,
     force: bool = False,
     force_llm: bool = False,
+    engine: str | None = None,
     job_id: uuid.UUID | None = None,
 ) -> str:
     """Digitize a consecutive run. Falls back to one-page calls if the batch is incomplete."""
     if not pages:
         return "empty"
+    want_llm = resolve_force_llm(force_llm=force_llm, engine=engine)
     if len(pages) == 1:
         return process_one_page(
-            db, pages[0], force=force, force_llm=force_llm, job_id=job_id
+            db,
+            pages[0],
+            force=force,
+            force_llm=want_llm,
+            engine=engine,
+            job_id=job_id,
         )
     project = db.get(Project, pages[0].project_id)
     if project is None:
         raise RuntimeError("project missing")
     kind = project_source_kind(project)
-    if kind == "text" and not force_llm:
+    if kind == "text" and not want_llm:
         return ",".join(
-            digitize_one_by_one(db, pages, force=force, force_llm=False, job_id=job_id)
+            digitize_one_by_one(
+                db, pages, force=force, force_llm=False, engine=engine, job_id=job_id
+            )
         )
     # Local Tesseract has no multi-page batch API — always one-by-one.
-    if (not force_llm) and digitize_engine() == "tesseract":
+    if not want_llm:
         return ",".join(
-            digitize_one_by_one(db, pages, force=force, force_llm=False, job_id=job_id)
+            digitize_one_by_one(
+                db, pages, force=force, force_llm=False, engine=engine, job_id=job_id
+            )
         )
 
     payloads: list[dict] = []
@@ -1007,7 +1045,9 @@ def process_digitize_run(
         )
     if len(payloads) <= 1:
         return ",".join(
-            digitize_one_by_one(db, pages, force=force, force_llm=force_llm, job_id=job_id)
+            digitize_one_by_one(
+                db, pages, force=force, force_llm=force_llm, engine=engine, job_id=job_id
+            )
         )
 
     try:
@@ -1022,7 +1062,7 @@ def process_digitize_run(
             raise
         log.exception("batch digitize %s–%s failed; falling back per page", pages[0].page_no, pages[-1].page_no)
         notes = digitize_one_by_one(
-            db, pages, force=force, force_llm=force_llm, job_id=job_id
+            db, pages, force=force, force_llm=force_llm, engine=engine, job_id=job_id
         )
         return "batch-fail; fallback:" + ",".join(notes)
 
@@ -1067,6 +1107,7 @@ def process_digitize_run(
         pages,
         force=force,
         force_llm=force_llm,
+        engine=engine,
         job_id=job_id,
         skip_nos=done_nos,
     )
@@ -1101,7 +1142,11 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
 
     payload = job.payload or {}
     force = bool(payload.get("force"))
-    force_llm = bool(payload.get("force_llm"))
+    engine = payload.get("engine")
+    force_llm = resolve_force_llm(
+        force_llm=bool(payload.get("force_llm")),
+        engine=engine if isinstance(engine, str) else None,
+    )
     open_only = bool(payload.get("open_only"))
     proofread = bool(payload.get("proofread"))
     translate = (
@@ -1200,7 +1245,12 @@ def _run_pipeline_job_body(db: Session, job: Job) -> None:
             db.commit()
             try:
                 note = process_digitize_run(
-                    db, run, force=page_force, force_llm=force_llm, job_id=job.id
+                    db,
+                    run,
+                    force=page_force,
+                    force_llm=force_llm,
+                    engine=engine if isinstance(engine, str) else None,
+                    job_id=job.id,
                 )
                 log.info("pages %s (%s/%s): %s", label, done + len(run), total, note)
             except LlmQuotaError as exc:

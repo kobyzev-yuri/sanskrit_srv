@@ -566,12 +566,14 @@ def start_pipeline(
     force_llm: bool = False,
     open_only: bool = False,
     proofread: bool = False,
+    engine: str | None = None,
     user: User = Depends(require_roles(Role.admin, Role.expert, Role.scholar)),
     db: Session = Depends(get_db),
 ):
     """Start / restart pipeline on **unagreed** pages only.
 
-    Digitize: extract + LLM draft (admin only).
+    Digitize: extract + LLM draft (admin only). Optional ``engine=tesseract|llm``
+    (ksts vs vision); default follows DIGITIZE_ENGINE (llm).
     Translate: batch Russian translation (admin/expert/scholar).
     Transliterate: batch IAST (admin/expert/scholar).
     proofread=true (translate only): sense-check existing drafts; auto-fix high-severity holes.
@@ -629,6 +631,7 @@ def start_pipeline(
         open_only=True,
         translate=is_derived and not proofread,
         proofread=proofread,
+        engine=engine,
         user_id=user.id,
     )
     return _project_out(db, project)

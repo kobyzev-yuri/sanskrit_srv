@@ -134,22 +134,51 @@ async function loadDigitizeInfo() {
     const h = await fetch("/health").then((r) => (r.ok ? r.json() : null));
     if (!h) return;
     state.digitize = {
-      engine: String(h.digitize_engine || "tesseract").toLowerCase(),
+      engine: String(h.digitize_engine || "llm").toLowerCase(),
       lang: String(h.tesseract_lang || "ksts"),
       ready: !!h.tesseract,
     };
+    syncDigitizeEngineSelect();
   } catch {
     /* keep previous / null */
   }
 }
 
-function digitizeScanLabel() {
-  const d = state.digitize;
-  if (d && d.engine === "tesseract" && d.ready !== false) {
-    return `скан → ${d.lang || "ksts"}`;
+function selectedDigitizeEngine() {
+  const sel = $("#digitize-engine");
+  const v = sel?.value || localStorage.getItem("ss_digitize_engine") || "llm";
+  return v === "tesseract" || v === "ksts" ? "tesseract" : "llm";
+}
+
+function syncDigitizeEngineSelect() {
+  const sel = $("#digitize-engine");
+  const wrap = $("#digitize-engine-wrap");
+  if (!sel) return;
+  const saved = localStorage.getItem("ss_digitize_engine");
+  const fallback = state.digitize?.engine === "tesseract" ? "tesseract" : "llm";
+  const want = saved === "tesseract" || saved === "ksts" ? "tesseract" : saved === "llm" ? "llm" : fallback;
+  sel.value = want;
+  const kstsOpt = sel.querySelector('option[value="tesseract"]');
+  if (kstsOpt) {
+    const ready = state.digitize?.ready !== false;
+    kstsOpt.disabled = !ready;
+    kstsOpt.textContent = ready ? "ksts (локально)" : "ksts (нет на сервере)";
+    if (!ready && sel.value === "tesseract") {
+      sel.value = "llm";
+      localStorage.setItem("ss_digitize_engine", "llm");
+    }
   }
-  if (d && d.engine === "llm") return "скан → LLM";
-  return "скан → ksts";
+  if (wrap) {
+    const dig = state.project && !isDerived();
+    wrap.hidden = !dig || state.user?.role !== "admin";
+  }
+}
+
+function digitizeScanLabel() {
+  if (selectedDigitizeEngine() === "tesseract") {
+    return `скан → ${state.digitize?.lang || "ksts"}`;
+  }
+  return "скан → LLM";
 }
 
 async function bootstrap() {
@@ -324,7 +353,10 @@ async function confirmWholeBook() {
   if (!project) return;
   try {
     $("#btn-confirm-whole-book").disabled = true;
-    const q = project.source_kind === "text" ? "?open_only=true&force_llm=true" : "?open_only=true";
+    const q =
+      project.source_kind === "text"
+        ? "?open_only=true&force_llm=true"
+        : `?open_only=true&engine=${encodeURIComponent(selectedDigitizeEngine())}`;
     state.project = await api(`/projects/${project.id}/pipeline${q}`, { method: "POST" });
     $("#large-book-modal").hidden = true;
     state.pendingConfirmProject = null;
@@ -642,8 +674,8 @@ function syncTaskUi() {
       : iast
         ? "Замечание к IAST — или нажмите «Транслитерировать страницу»."
         : hasHtml
-          ? "Замечание → vision LLM. Без текста кнопка «Пересмотри» снова гоняет ksts."
-          : "Оставьте пустым и нажмите «Оцифровать страницу» (ksts). Замечание → vision LLM.";
+          ? `Замечание → vision LLM. Без текста «Пересмотри» = ${digitizeScanLabel()}.`
+          : `Пустое задание + «Оцифровать страницу» = ${digitizeScanLabel()}. Замечание → vision LLM.`;
   }
   const proof = $("#btn-proofread");
   if (proof) {
@@ -771,6 +803,7 @@ function updatePipelineBar() {
   const btn = $("#btn-start-pipeline");
   const tr = isDerived();
   const busy = p.pipeline && ["queued", "running"].includes(p.pipeline.status);
+  syncDigitizeEngineSelect();
 
   if (tr) {
     if (btn) btn.hidden = true;
@@ -2259,7 +2292,7 @@ async function reviewAgain() {
   try {
     state.page = await api(`/pages/${state.page.id}/review-again`, {
       method: "POST",
-      json: {},
+      json: { engine: selectedDigitizeEngine() },
     });
     setDraftHtml(state.page.current_html || "");
     const row = (state.pages || []).find((p) => String(p.id) === String(state.page.id));
@@ -3039,7 +3072,10 @@ async function startPipeline() {
 
   const params = new URLSearchParams();
   params.set("open_only", "true");
-  if (!tr && !iast && isDigitizeTextPdf()) params.set("force_llm", "true");
+  if (!tr && !iast) {
+    if (isDigitizeTextPdf()) params.set("force_llm", "true");
+    else params.set("engine", selectedDigitizeEngine());
+  }
   try {
     state.project = await api(`/projects/${state.project.id}/pipeline?${params}`, {
       method: "POST",
@@ -3049,7 +3085,7 @@ async function startPipeline() {
         ? "Запущен перевод несогласованных страниц"
         : iast
           ? "Запущена транслитерация несогласованных страниц"
-          : "Запущена оцифровка несогласованных страниц"
+          : `Запущена оцифровка несогласованных (${digitizeScanLabel()})`
     );
     updatePipelineBar();
     startPipelinePoll();
@@ -3632,6 +3668,15 @@ function wire() {
     };
   }
   $("#btn-start-pipeline").onclick = startPipeline;
+  const digEng = $("#digitize-engine");
+  if (digEng) {
+    digEng.onchange = () => {
+      localStorage.setItem("ss_digitize_engine", selectedDigitizeEngine());
+      updatePipelineBar();
+      syncTaskUi();
+      toast(`Движок оцифровки: ${digitizeScanLabel()}`);
+    };
+  }
   const btnTrAll = $("#btn-translate-all");
   if (btnTrAll) btnTrAll.onclick = startPipeline;
   const btnProofreadAll = $("#btn-proofread-all");

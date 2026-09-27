@@ -273,8 +273,13 @@ class PageReviseIn(BaseModel):
 
 
 class PageReviewAgainIn(BaseModel):
-    """Optional note; empty → local digitize engine (ksts); non-empty → vision LLM."""
+    """Optional note; empty → engine (llm|tesseract); non-empty → vision LLM revise."""
     directive: str | None = Field(default=None, max_length=NOTES_MAX)
+    engine: str | None = Field(
+        default=None,
+        max_length=32,
+        description="llm (vision) or tesseract/ksts; default DIGITIZE_ENGINE",
+    )
 
 
 class PageVersionOut(BaseModel):

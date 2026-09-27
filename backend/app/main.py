@@ -49,7 +49,7 @@ def health():
         "status": "ok",
         "service": "sanskrit_srv",
         "version": "0.2.0",
-        "digitize_engine": (settings.digitize_engine or "tesseract").strip().lower(),
+        "digitize_engine": (settings.digitize_engine or "llm").strip().lower(),
         "tesseract": tesseract_available(),
         "tesseract_lang": settings.tesseract_lang or "ksts",
     }
