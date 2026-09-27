@@ -74,7 +74,7 @@ GARBAGE_ANYWHERE = re.compile(
     r"Judge the scan|Address specific constraints|silently judge|"
     r"Conflict with the horizontal header|strict interpretation|"
     r"Let me analyze the source|Keep Devanagari exactly as in source|"
-    r"TEMPLATE (?:interlinear|iast_gloss|samasa_gloss|custom)|SOURCE HTML:|"
+    r"TEMPLATE (?:interlinear_iast|interlinear|iast_gloss|samasa_gloss|custom)|SOURCE HTML:|"
     r"ОРИГИНАЛ СТРАНИЦЫ|СТРОГИЕ ПРАВИЛА ФОРМАТИРОВАНИЯ|"
     r"\bpādas\b|merges pādas|the intended pattern is|"
     r"Hmm\. Let me|what's most natural for these translation|"

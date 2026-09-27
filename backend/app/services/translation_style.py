@@ -8,10 +8,17 @@ from typing import Any
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 STYLE_INTERLINEAR = "interlinear"
+STYLE_INTERLINEAR_IAST = "interlinear_iast"
 STYLE_IAST_GLOSS = "iast_gloss"
 STYLE_SAMASA = "samasa_gloss"
 STYLE_CUSTOM = "custom"
-STYLES = (STYLE_INTERLINEAR, STYLE_IAST_GLOSS, STYLE_SAMASA, STYLE_CUSTOM)
+STYLES = (
+    STYLE_INTERLINEAR,
+    STYLE_INTERLINEAR_IAST,
+    STYLE_IAST_GLOSS,
+    STYLE_SAMASA,
+    STYLE_CUSTOM,
+)
 
 ENGLISH_REPLACE = "replace"
 ENGLISH_DROP = "drop"
@@ -23,6 +30,11 @@ STYLES_CATALOG: list[dict[str, str]] = [
         "id": STYLE_INTERLINEAR,
         "label": "Шлока + строка перевода",
         "hint": "После каждой санскритской строки — следующая строка литературным русским.",
+    },
+    {
+        "id": STYLE_INTERLINEAR_IAST,
+        "label": "Шлока + IAST + перевод",
+        "hint": "После каждой санскритской строки — IAST (class=iast), затем литературный русский (class=ru tr).",
     },
     {
         "id": STYLE_IAST_GLOSS,
@@ -154,6 +166,16 @@ def _style_prompt(style: str) -> str:
 - Follow the expert notes below as the ONLY layout/style contract.
 - Still keep Devanagari source lines visible; add Russian according to those notes.
 - If notes are empty, fall back to: Sanskrit line, then Russian line."""
+    if style == STYLE_INTERLINEAR_IAST:
+        return """TEMPLATE interlinear_iast (mandatory):
+- One printed Sanskrit line (śloka pāda / sūtra / mantra / heading) → one <p class="sa shloka" lang="sa"> (or class="sa" for prose).
+- The IMMEDIATE next block is scholarly IAST of THAT same line: <p class="iast" lang="sa-Latn">.
+- The block after IAST is the literary Russian translation: <p class="ru tr" lang="ru">.
+- Order is always: Devanagari → IAST → Russian. Do not skip IAST. Do not put Russian before IAST.
+- Do not merge several pādas into one Russian/IAST paragraph unless the source is already one prose block.
+- Keep verse numbers on the Sanskrit line; repeat on IAST if they are part of the printed line.
+- Headings: Sanskrit heading, then IAST heading (class="iast"), then Russian heading (class="ru").
+- IAST: ā ī ū ṛ ṝ ḷ ḹ ṅ ñ ṭ ḍ ṇ ś ṣ ḥ ṃ; anusvāra ṃ; visarga ḥ; avagraha '."""
     return """TEMPLATE interlinear (mandatory):
 - One printed Sanskrit line (śloka pāda / sūtra / mantra / heading) → one <p class="sa shloka" lang="sa"> (or class="sa" for prose).
 - The IMMEDIATE next block is the Russian translation: <p class="ru tr" lang="ru">.

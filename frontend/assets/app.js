@@ -572,6 +572,7 @@ function fillStyleSelect() {
       ]
     : [
         ["interlinear", "Шлока + строка перевода"],
+        ["interlinear_iast", "Шлока + IAST + перевод"],
         ["iast_gloss", "Пословно: рус. (IAST)"],
         ["samasa_gloss", "Самаса в скобках"],
         ["custom", "Свой шаблон"],
