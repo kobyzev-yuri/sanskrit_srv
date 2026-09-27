@@ -827,7 +827,9 @@ def process_one_page(
             )
         page.status = PageStatus.ocr
         db.commit()
-        lang = get_settings().tesseract_lang or "ksts"
+        settings = get_settings()
+        lang = settings.tesseract_lang or "ksts"
+        psm = getattr(settings, "tesseract_psm", 6)
         html = ocr_page_html(Path(page.scan_path), page.page_no, lang=lang)
         html = finalize_page_html(
             html,
@@ -842,10 +844,10 @@ def process_one_page(
             page,
             html,
             VersionSource.ocr,
-            f"tesseract:{lang} (accepted by default)",
+            f"tesseract:{lang}:psm{psm} (accepted by default)",
             status=PageStatus.expert_review,
         )
-        actions.append(f"tesseract:{lang}")
+        actions.append(f"tesseract:{lang}:psm{psm}")
         return ",".join(actions)
 
     if not page_needs_llm_draft(db, page, force=force or force_llm):

@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     digitize_engine: str = "tesseract"
     tesseract_cmd: str = "tesseract"
     tesseract_lang: str = "ksts"
+    # Page segmentation: 6 = uniform block (keeps body+footnotes on KSTS).
+    # 4 = variable column — often dropped the main text above footnotes.
+    tesseract_psm: int = 6
     # Empty → backend/tessdata (ships ksts.traineddata).
     tessdata_dir: str = ""
     # USD per 1M tokens: {"gemini:gemini-2.5-flash":{"in":0.1,"out":0.4}, ...}

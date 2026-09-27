@@ -72,25 +72,34 @@ def _env() -> dict[str, str]:
     return env
 
 
-def ocr_page_lines(image_path: Path, *, lang: str | None = None, psm: int = 4) -> list[str]:
-    """Return non-empty text lines from a page image (TSV level-4 / word join)."""
-    settings = get_settings()
-    lang = lang or settings.tesseract_lang or "ksts"
+def _default_psm() -> int:
+    """PSM 6 (uniform text block) keeps body+footnotes on KSTS plates.
+
+    PSM 4 (variable column) often dropped the main text above footnotes.
+    """
+    raw = getattr(get_settings(), "tesseract_psm", 6)
+    try:
+        psm = int(raw)
+    except (TypeError, ValueError):
+        psm = 6
+    return psm if 0 <= psm <= 13 else 6
+
+
+def _run_tesseract(image_path: Path, lang: str, psm: int, *extra: str) -> subprocess.CompletedProcess[str]:
     cmd = tesseract_cmd()
-    proc = subprocess.run(
-        [cmd, str(image_path), "stdout", "-l", lang, "--psm", str(psm), "tsv"],
+    return subprocess.run(
+        [cmd, str(image_path), "stdout", "-l", lang, "--psm", str(psm), *extra],
         capture_output=True,
         text=True,
         env=_env(),
         check=False,
     )
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "")[-400:]
-        raise RuntimeError(f"tesseract failed: {err}")
 
+
+def _lines_from_tsv(stdout: str) -> list[str]:
     boxes: dict[tuple[int, int, int], list[str]] = {}
     order: list[tuple[int, int, int]] = []
-    for row in (proc.stdout or "").splitlines()[1:]:
+    for row in (stdout or "").splitlines()[1:]:
         parts = row.split("\t")
         if len(parts) < 12:
             continue
@@ -116,21 +125,49 @@ def ocr_page_lines(image_path: Path, *, lang: str | None = None, psm: int = 4) -
         line = _norm_line(" ".join(boxes.get(key, [])))
         if line:
             lines.append(line)
-
-    # Fallback: plain text if TSV yielded nothing
-    if not lines:
-        proc2 = subprocess.run(
-            [cmd, str(image_path), "stdout", "-l", lang, "--psm", str(psm)],
-            capture_output=True,
-            text=True,
-            env=_env(),
-            check=False,
-        )
-        for ln in (proc2.stdout or "").splitlines():
-            line = _norm_line(ln)
-            if line:
-                lines.append(line)
     return lines
+
+
+def _lines_from_plain(stdout: str) -> list[str]:
+    lines: list[str] = []
+    for ln in (stdout or "").splitlines():
+        line = _norm_line(ln)
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _density(lines: list[str]) -> int:
+    return sum(len(x) for x in lines)
+
+
+def ocr_page_lines(image_path: Path, *, lang: str | None = None, psm: int | None = None) -> list[str]:
+    """Return non-empty text lines from a page image."""
+    settings = get_settings()
+    lang = lang or settings.tesseract_lang or "ksts"
+    psm = _default_psm() if psm is None else int(psm)
+
+    proc_tsv = _run_tesseract(image_path, lang, psm, "tsv")
+    if proc_tsv.returncode != 0:
+        err = (proc_tsv.stderr or proc_tsv.stdout or "")[-400:]
+        raise RuntimeError(f"tesseract failed: {err}")
+    tsv_lines = _lines_from_tsv(proc_tsv.stdout or "")
+
+    proc_plain = _run_tesseract(image_path, lang, psm)
+    plain_lines = _lines_from_plain(proc_plain.stdout or "") if proc_plain.returncode == 0 else []
+
+    # Prefer the denser extraction — TSV line-join can drop blocks on mixed layouts.
+    if _density(plain_lines) > _density(tsv_lines):
+        if tsv_lines and _density(plain_lines) > _density(tsv_lines) * 1.15:
+            log.info(
+                "ocr %s psm=%s: plain denser (%s chars) than tsv (%s)",
+                image_path.name,
+                psm,
+                _density(plain_lines),
+                _density(tsv_lines),
+            )
+        return plain_lines
+    return tsv_lines or plain_lines
 
 
 def lines_to_html(lines: list[str], page_no: int) -> str:
