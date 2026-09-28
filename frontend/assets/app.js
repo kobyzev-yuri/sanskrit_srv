@@ -14,6 +14,8 @@ const state = {
   /** @type {""|"draft"|"source"} */
   workFocus: "",
   workFocusPinned: false,
+  /** @type {""|"draft"|"source"} */
+  editorFs: "",
   voices: null,
   /** @type {{engine:string, lang:string, ready:boolean}|null} */
   digitize: null,
@@ -111,6 +113,7 @@ async function api(path, opts = {}) {
 }
 
 function showView(name) {
+  if (name !== "editor") clearEditorFullscreen();
   $$(".view").forEach((v) => v.classList.remove("active"));
   const el = document.querySelector(`#view-${name}`);
   if (el) el.classList.add("active");
@@ -1502,10 +1505,69 @@ function setWorkFocus(mode, opts = {}) {
   }
   if (showAgent) showAgent.hidden = next !== "draft";
   if (showDraft) showDraft.hidden = next !== "source";
+  // Fullscreen only makes sense while a pane is focused; keep targets in sync.
+  if (state.editorFs && next && state.editorFs !== next) {
+    setEditorFullscreen(next);
+  } else if (!next && state.editorFs) {
+    clearEditorFullscreen();
+  } else {
+    syncEditorFullscreenUi();
+  }
 }
 
 function restoreWorkPanes() {
+  clearEditorFullscreen();
   setWorkFocus("", { user: true });
+}
+
+function syncEditorFullscreenUi() {
+  const on = Boolean(state.editorFs);
+  document.body.classList.toggle("editor-fs", on);
+  document.body.classList.toggle("editor-fs-draft", state.editorFs === "draft");
+  document.body.classList.toggle("editor-fs-source", state.editorFs === "source");
+  const draftBtn = $("#btn-draft-fullscreen");
+  const sourceBtn = $("#btn-source-fullscreen");
+  const draftEdit = draftTabIsEdit(currentPreviewTab());
+  const sourceHtml = Boolean($("#left-panel")?.classList.contains("source-tab-html"));
+  if (draftBtn) {
+    const draftOn = state.editorFs === "draft";
+    draftBtn.hidden = !draftEdit;
+    draftBtn.textContent = draftOn ? "Свернуть" : "На весь экран";
+    draftBtn.setAttribute("aria-pressed", draftOn ? "true" : "false");
+    draftBtn.title = draftOn ? "Свернуть редактор" : "Развернуть редактор на весь экран";
+  }
+  if (sourceBtn) {
+    const sourceOn = state.editorFs === "source";
+    sourceBtn.hidden = !isDerived() || !sourceHtml;
+    sourceBtn.textContent = sourceOn ? "Свернуть" : "На весь экран";
+    sourceBtn.setAttribute("aria-pressed", sourceOn ? "true" : "false");
+    sourceBtn.title = sourceOn ? "Свернуть HTML" : "Развернуть HTML на весь экран";
+  }
+}
+
+function clearEditorFullscreen() {
+  if (!state.editorFs) {
+    syncEditorFullscreenUi();
+    return;
+  }
+  state.editorFs = "";
+  syncEditorFullscreenUi();
+}
+
+function setEditorFullscreen(pane) {
+  const next = pane === "source" ? "source" : "draft";
+  state.editorFs = next;
+  if (state.workFocus !== next) setWorkFocus(next);
+  else syncEditorFullscreenUi();
+}
+
+function toggleEditorFullscreen(pane) {
+  const next = pane === "source" ? "source" : "draft";
+  if (state.editorFs === next) {
+    clearEditorFullscreen();
+    return;
+  }
+  setEditorFullscreen(next);
 }
 
 function switchSourceTab(name) {
@@ -1522,10 +1584,13 @@ function switchSourceTab(name) {
     sub.textContent = htmlOn ? "в оцифровку — новой версией" : "выверенный текст";
   }
   if (!htmlOn && isDerived()) renderLeftPane();
+  if (!htmlOn && state.editorFs === "source") clearEditorFullscreen();
   if (htmlOn) {
     if (!state.workFocusPinned) setWorkFocus("source");
+    else syncEditorFullscreenUi();
   } else if (draftTabIsEdit(currentPreviewTab())) {
     if (!state.workFocusPinned) setWorkFocus("draft");
+    else syncEditorFullscreenUi();
   } else {
     setWorkFocus("");
   }
@@ -1826,7 +1891,9 @@ function switchTab(name) {
   if (name === "wysiwyg") renderWysiwyg($("#html-editor").value);
   if (draftTabIsEdit(name)) {
     if (!state.workFocusPinned) setWorkFocus("draft");
+    else syncEditorFullscreenUi();
   } else {
+    if (state.editorFs === "draft") clearEditorFullscreen();
     state.workFocusPinned = false;
     setWorkFocus("");
   }
@@ -3714,6 +3781,10 @@ function wire() {
     const el = $(`#${id}`);
     if (el) el.onclick = restoreWorkPanes;
   }
+  const btnDraftFs = $("#btn-draft-fullscreen");
+  if (btnDraftFs) btnDraftFs.onclick = () => toggleEditorFullscreen("draft");
+  const btnSourceFs = $("#btn-source-fullscreen");
+  if (btnSourceFs) btnSourceFs.onclick = () => toggleEditorFullscreen("source");
   for (const id of ["style-select", "style-english", "voice-select"]) {
     const el = $(`#${id}`);
     if (!el || el.dataset.boundStyle) continue;
@@ -3820,6 +3891,11 @@ function wire() {
       e.preventDefault();
       if (canAgreeStyle()) saveStyleAndClose();
       else setStyleNotesOpen(false);
+      return;
+    }
+    if (e.key === "Escape" && state.editorFs) {
+      e.preventDefault();
+      clearEditorFullscreen();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {

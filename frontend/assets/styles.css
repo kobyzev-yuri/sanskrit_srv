@@ -515,6 +515,60 @@ mark.draft-hl-current {
   padding: 0.28rem 0.55rem;
   white-space: nowrap;
 }
+.pane-fs {
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.55rem;
+  white-space: nowrap;
+}
+body.editor-fs .topbar,
+body.editor-fs .llm-banner,
+body.editor-fs .thumb-rail,
+body.editor-fs .reader-toolbar,
+body.editor-fs #pipeline-bar,
+body.editor-fs #style-bar,
+body.editor-fs #usage-bar {
+  display: none !important;
+}
+body.editor-fs #view-editor.active {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  padding: 0.5rem;
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, #fff8e8 0%, transparent 55%),
+    linear-gradient(180deg, #efe7d8, var(--bg));
+}
+body.editor-fs .reader-shell {
+  grid-template-columns: 1fr;
+  height: 100%;
+  min-height: 0;
+}
+body.editor-fs .reader-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+body.editor-fs .editor-layout {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+body.editor-fs #preview-panel .preview-body,
+body.editor-fs #left-panel .source-html-editor {
+  min-height: 0;
+}
+body.editor-fs #tab-source.active textarea,
+body.editor-fs #left-source-editor {
+  min-height: 0;
+  height: 100%;
+}
 #preview-panel > header .preview-tabs {
   flex: 1;
   justify-content: center;
@@ -1333,4 +1387,25 @@ th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid va
   .scan-pane { max-height: 45vh; }
   .edit-pane textarea { min-height: 40vh; }
   .reader-toolbar { flex-wrap: wrap; }
+  body.editor-fs #view-editor.active {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  body.editor-fs .reader-shell {
+    height: 100%;
+  }
+  body.editor-fs .editor-layout,
+  body.editor-fs .editor-layout.translate,
+  body.editor-fs .editor-layout.translate.work-draft,
+  body.editor-fs .editor-layout.translate.work-source,
+  body.editor-fs .editor-layout.work-draft:not(.translate) {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+  }
+  body.editor-fs .edit-pane textarea,
+  body.editor-fs #left-source-editor {
+    min-height: 0;
+  }
 }
