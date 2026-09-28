@@ -1,8 +1,10 @@
 """Insert IAST lines from a transliteration project into a Russian translation draft.
 
 Target layout per line: Devanagari → IAST → Russian.
-Works inside nested <div class="shloka"> / <footer> (leaf <p>/<h*>), not only
-top-level article children.
+Works inside nested <div class="shloka"> / <footer> (leaf <p>/<h*>).
+
+When the Russian draft keeps several pādas in one <p class="sa"> joined by
+<br>, each pāda still gets its own IAST paragraph from the IAST project.
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ from difflib import SequenceMatcher
 
 _WS = re.compile(r"\s+")
 _PUNCT = re.compile(r"[\s\|।॥\d०-९0-9\.\,\;\:\!\?\-\—\–\'\"“”‘’\(\)\[\]\{\}]+")
+_BR_SPLIT = re.compile(r"<br\s*/?>", re.IGNORECASE)
 # Leaf text blocks — Sanskrit/IAST/RU lines are almost always these tags.
 _LEAF_RE = re.compile(
     r"<(p|h[1-6]|li)\b([^>]*)>(.*?)</\1>",
@@ -73,6 +76,23 @@ def iter_leaves(html: str) -> list[re.Match[str]]:
     return list(_LEAF_RE.finditer(html or ""))
 
 
+def sa_line_texts(leaf: re.Match[str]) -> list[str]:
+    """Devanagari lines inside one leaf (split on <br> / newlines)."""
+    inner = leaf.group(3) or ""
+    chunks = _BR_SPLIT.split(inner)
+    lines: list[str] = []
+    for chunk in chunks:
+        for part in re.split(r"[\r\n]+", chunk):
+            text = visible_text(part)
+            if text:
+                lines.append(text)
+    if not lines:
+        whole = visible_text(leaf.group(0))
+        if whole:
+            lines.append(whole)
+    return lines
+
+
 def extract_sa_iast_pairs(iast_html: str) -> list[tuple[str, str]]:
     """Ordered (normalized_sa, iast_element_html) from leaf sa→iast siblings."""
     leaves = iter_leaves(iast_html)
@@ -130,8 +150,30 @@ def pick_iast(
     return pairs[best_i][1], best_i + 1
 
 
+def _collect_iasts_for_lines(
+    lines: list[str],
+    pairs: list[tuple[str, str]],
+    used: set[int],
+    cursor: int,
+) -> tuple[list[str], int, int]:
+    """Return (iast_htmls, new_cursor, unmatched_line_count)."""
+    iasts: list[str] = []
+    unmatched = 0
+    for line in lines:
+        el, cursor = pick_iast(normalize_sa(line), pairs, used, cursor=cursor)
+        if el:
+            iasts.append(el)
+        else:
+            unmatched += 1
+    return iasts, cursor, unmatched
+
+
 def merge_iast_into_translation(ru_html: str, iast_html: str) -> tuple[str, dict[str, int]]:
-    """Insert missing IAST leaves after each Sanskrit leaf in the Russian draft."""
+    """Insert / complete IAST leaves after each Sanskrit leaf in the Russian draft.
+
+    Multi-line <p class="sa"> (pādas joined by <br>) get one IAST <p> per pāda.
+    Incomplete prior merges (only the first/last IAST) are replaced with the full set.
+    """
     pairs = extract_sa_iast_pairs(iast_html)
     src = ru_html or ""
     leaves = iter_leaves(src)
@@ -142,6 +184,7 @@ def merge_iast_into_translation(ru_html: str, iast_html: str) -> tuple[str, dict
             "unmatched_sa": 0,
             "pairs": len(pairs),
             "used_pairs": 0,
+            "replaced": 0,
         }
 
     used: set[int] = set()
@@ -149,39 +192,68 @@ def merge_iast_into_translation(ru_html: str, iast_html: str) -> tuple[str, dict
     inserted = 0
     skipped = 0
     unmatched = 0
-    # (insert_at_offset, html) — apply from the end so offsets stay valid
-    insertions: list[tuple[int, str]] = []
+    replaced = 0
+    # (start, end, replacement) — apply from the end
+    edits: list[tuple[int, int, str]] = []
 
     for idx, leaf in enumerate(leaves):
         if not is_sa_leaf(leaf):
             continue
-        nxt = leaves[idx + 1] if idx + 1 < len(leaves) else None
-        if nxt is not None and is_iast_leaf(nxt):
+
+        lines = sa_line_texts(leaf)
+        # How many consecutive IAST leaves already follow this sa?
+        j = idx + 1
+        while j < len(leaves) and is_iast_leaf(leaves[j]):
+            j += 1
+        existing = j - (idx + 1)
+        span_start = leaf.end()
+        span_end = leaves[idx + 1].start() if existing else leaf.end()
+        if existing:
+            span_end = leaves[j - 1].end()
+
+        # Already complete for this sa block.
+        if existing >= max(1, len(lines)) and len(lines) <= 1:
             skipped += 1
             continue
-        sa_norm = normalize_sa(visible_text(leaf.group(0)))
-        iast_el, cursor = pick_iast(sa_norm, pairs, used, cursor=cursor)
-        if iast_el:
-            insertions.append((leaf.end(), "\n" + iast_el))
-            inserted += 1
-        else:
-            unmatched += 1
+        if existing >= len(lines) and len(lines) > 1:
+            skipped += 1
+            continue
 
-    if not insertions:
+        iasts, cursor, miss = _collect_iasts_for_lines(lines, pairs, used, cursor)
+        unmatched += miss
+        if not iasts:
+            if existing:
+                skipped += 1
+            else:
+                unmatched += max(1, len(lines))
+            continue
+
+        chunk = "\n" + "\n".join(iasts)
+        if existing:
+            # Replace incomplete IAST run with the full set.
+            edits.append((span_start, span_end, chunk))
+            replaced += 1
+            inserted += max(0, len(iasts) - existing)
+        else:
+            edits.append((span_start, span_start, chunk))
+            inserted += len(iasts)
+
+    if not edits:
         return src, {
             "inserted": inserted,
             "skipped_existing": skipped,
             "unmatched_sa": unmatched,
             "pairs": len(pairs),
             "used_pairs": len(used),
+            "replaced": replaced,
         }
 
     parts: list[str] = []
     pos = len(src)
-    for offset, chunk in sorted(insertions, key=lambda x: x[0], reverse=True):
-        parts.append(src[offset:pos])
+    for start, end, chunk in sorted(edits, key=lambda x: x[0], reverse=True):
+        parts.append(src[end:pos])
         parts.append(chunk)
-        pos = offset
+        pos = start
     parts.append(src[:pos])
     parts.reverse()
     return "".join(parts), {
@@ -190,6 +262,7 @@ def merge_iast_into_translation(ru_html: str, iast_html: str) -> tuple[str, dict
         "unmatched_sa": unmatched,
         "pairs": len(pairs),
         "used_pairs": len(used),
+        "replaced": replaced,
     }
 
 

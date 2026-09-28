@@ -115,3 +115,30 @@ def test_merge_skips_existing_iast():
     assert stats["skipped_existing"] == 1
     assert stats["inserted"] == 0
     assert "OTHER" not in out
+
+
+def test_merge_completes_br_joined_shloka():
+    ru = """
+    <article lang="ru">
+      <div class="shloka">
+        <p class="sa">आ<br>ई<br>उ<br>ए ॥ १ ॥</p>
+        <p class="iast" lang="sa-Latn">ā</p>
+        <p class="ru tr">перевод</p>
+      </div>
+    </article>
+    """
+    iast = """
+    <article>
+      <div class="shloka sa">
+        <p>आ</p><p class="iast" lang="sa-Latn">ā</p>
+        <p>ई</p><p class="iast" lang="sa-Latn">ī</p>
+        <p>उ</p><p class="iast" lang="sa-Latn">u</p>
+        <p>ए ॥ १ ॥</p><p class="iast" lang="sa-Latn">e || 1 ||</p>
+      </div>
+    </article>
+    """
+    out, stats = merge_iast_into_translation(ru, iast)
+    assert stats["replaced"] == 1
+    assert out.count("lang=\"sa-Latn\"") == 4
+    assert "ī" in out and "u" in out and "e || 1 ||" in out
+    assert out.index("ā") < out.index("ī") < out.index("u") < out.index("перевод")
