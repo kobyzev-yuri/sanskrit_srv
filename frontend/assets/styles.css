@@ -521,53 +521,87 @@ mark.draft-hl-current {
   padding: 0.28rem 0.55rem;
   white-space: nowrap;
 }
+/* True fullscreen: lift the active edit panel out of the layout onto the viewport. */
+body.editor-fs {
+  overflow: hidden;
+}
 body.editor-fs .topbar,
 body.editor-fs .llm-banner,
 body.editor-fs .thumb-rail,
 body.editor-fs .reader-toolbar,
 body.editor-fs #pipeline-bar,
 body.editor-fs #style-bar,
-body.editor-fs #usage-bar {
+body.editor-fs #usage-bar,
+body.editor-fs #agent-panel,
+body.editor-fs .pane-restore {
   display: none !important;
 }
-body.editor-fs #view-editor.active {
+body.editor-fs-draft #left-panel,
+body.editor-fs-source #preview-panel {
+  display: none !important;
+}
+body.editor-fs-draft #preview-panel,
+body.editor-fs-source #left-panel {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 60;
+  width: 100vw;
   height: 100vh;
   height: 100dvh;
-  max-height: 100vh;
-  max-height: 100dvh;
-  padding: 0.5rem;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--panel);
+  grid-column: unset !important;
+  grid-row: unset !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
   overflow: hidden;
-  background:
-    radial-gradient(1200px 500px at 10% -10%, #fff8e8 0%, transparent 55%),
-    linear-gradient(180deg, #efe7d8, var(--bg));
 }
-body.editor-fs .reader-shell {
-  grid-template-columns: 1fr;
-  height: 100%;
-  min-height: 0;
+body.editor-fs-draft #preview-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
-body.editor-fs .reader-main {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
+body.editor-fs-source #left-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
-body.editor-fs .editor-layout {
-  flex: 1 1 0;
-  min-height: 0;
-  height: auto;
+body.editor-fs #preview-panel > header,
+body.editor-fs #left-panel > header {
+  border-radius: 0;
+  padding: 0.45rem 0.75rem;
 }
 body.editor-fs #preview-panel .preview-body,
 body.editor-fs #left-panel .source-html-editor {
   min-height: 0;
+  height: 100%;
+}
+body.editor-fs #tab-source.active,
+body.editor-fs #tab-wysiwyg.active {
+  height: 100%;
+  min-height: 0;
 }
 body.editor-fs #tab-source.active textarea,
 body.editor-fs #left-source-editor {
+  min-height: 0 !important;
+  height: 100%;
+  border-radius: 0;
+  font-size: 1rem;
+  line-height: 1.5;
+  padding: 1rem 1.25rem;
+}
+body.editor-fs #tab-wysiwyg .wysiwyg-preview {
   min-height: 0;
   height: 100%;
+  overflow: auto;
+}
+body.editor-fs #tab-wysiwyg .wy-hint {
+  display: none;
+}
+body.editor-fs .preview-footer {
+  border-radius: 0;
 }
 #preview-panel > header .preview-tabs {
   flex: 1;
@@ -1387,25 +1421,20 @@ th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid va
   .scan-pane { max-height: 45vh; }
   .edit-pane textarea { min-height: 40vh; }
   .reader-toolbar { flex-wrap: wrap; }
-  body.editor-fs #view-editor.active {
+  body.editor-fs-draft #preview-panel,
+  body.editor-fs-source #left-panel {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
     height: 100vh;
     height: 100dvh;
-    overflow: hidden;
-  }
-  body.editor-fs .reader-shell {
-    height: 100%;
-  }
-  body.editor-fs .editor-layout,
-  body.editor-fs .editor-layout.translate,
-  body.editor-fs .editor-layout.translate.work-draft,
-  body.editor-fs .editor-layout.translate.work-source,
-  body.editor-fs .editor-layout.work-draft:not(.translate) {
-    flex: 1 1 0;
-    height: auto;
-    min-height: 0;
+    max-height: none;
+    border-radius: 0;
+    visibility: visible !important;
+    pointer-events: auto !important;
   }
   body.editor-fs .edit-pane textarea,
   body.editor-fs #left-source-editor {
-    min-height: 0;
+    min-height: 0 !important;
   }
 }
