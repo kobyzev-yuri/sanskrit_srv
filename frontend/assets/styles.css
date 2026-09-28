@@ -1239,6 +1239,9 @@ body.editor-fs .preview-footer {
 }
 .toast.show { opacity: 1; transform: none; }
 .toast.err { background: var(--danger); }
+body.editor-fs .toast {
+  z-index: 70;
+}
 
 .modal {
   position: fixed;
